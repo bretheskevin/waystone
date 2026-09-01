@@ -1,0 +1,9 @@
+/target
+**/*.rs.bk
+.DS_Store
+*.swp
+.env
+.ideas
+
+# Serena MCP tooling
+.serena/
