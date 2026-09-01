@@ -32,18 +32,29 @@ enum FileKind {
 }
 
 impl Adapter for MgbaAdapter {
-    fn id(&self) -> &str { "mgba" }
+    fn id(&self) -> &str {
+        "mgba"
+    }
 
-    fn systems(&self) -> &[SystemId] { std::slice::from_ref(&self.system) }
+    fn systems(&self) -> &[SystemId] {
+        std::slice::from_ref(&self.system)
+    }
 
     fn normalize(&self, raw: &RawTree) -> Vec<NormalizedSave> {
         let mut saves = Vec::new();
 
         for file in &raw.files {
-            let Some((stem, file_kind)) = Self::parse_filename(&file.path) else { continue };
+            let Some((stem, file_kind)) = Self::parse_filename(&file.path) else {
+                continue;
+            };
 
             let (kind, slot, portable, ext) = match file_kind {
-                FileKind::Battery => (SaveKind::Battery, "battery".to_string(), true, "sav".to_string()),
+                FileKind::Battery => (
+                    SaveKind::Battery,
+                    "battery".to_string(),
+                    true,
+                    "sav".to_string(),
+                ),
                 FileKind::SaveState(n) => {
                     let ext = format!("ss{}", n);
                     (SaveKind::SaveState, format!("state-{}", n), false, ext)
@@ -85,12 +96,14 @@ impl Adapter for MgbaAdapter {
             SaveKind::Native => "bin".to_string(),
         };
         RawTree {
-            files: save.files.iter().map(|(_rel, content)| {
-                RawFile {
+            files: save
+                .files
+                .iter()
+                .map(|(_rel, content)| RawFile {
                     path: format!("{}.{}", save.id.game.display_name, ext),
                     content: content.clone(),
-                }
-            }).collect(),
+                })
+                .collect(),
         }
     }
 }
@@ -123,7 +136,10 @@ mod tests {
     fn mgba_normalizes_battery_saves() {
         let adapter = MgbaAdapter::new(SystemId::Gba);
         let saves = adapter.normalize(&make_mgba_tree());
-        let batteries: Vec<_> = saves.iter().filter(|s| s.id.kind == SaveKind::Battery).collect();
+        let batteries: Vec<_> = saves
+            .iter()
+            .filter(|s| s.id.kind == SaveKind::Battery)
+            .collect();
         assert_eq!(batteries.len(), 2);
     }
 
@@ -131,7 +147,10 @@ mod tests {
     fn mgba_normalizes_save_states() {
         let adapter = MgbaAdapter::new(SystemId::Gba);
         let saves = adapter.normalize(&make_mgba_tree());
-        let states: Vec<_> = saves.iter().filter(|s| s.id.kind == SaveKind::SaveState).collect();
+        let states: Vec<_> = saves
+            .iter()
+            .filter(|s| s.id.kind == SaveKind::SaveState)
+            .collect();
         assert_eq!(states.len(), 1);
     }
 
@@ -139,7 +158,10 @@ mod tests {
     fn mgba_battery_is_portable() {
         let adapter = MgbaAdapter::new(SystemId::Gba);
         let saves = adapter.normalize(&make_mgba_tree());
-        let battery = saves.iter().find(|s| s.id.kind == SaveKind::Battery && s.id.game.display_name == "Pokemon Emerald").unwrap();
+        let battery = saves
+            .iter()
+            .find(|s| s.id.kind == SaveKind::Battery && s.id.game.display_name == "Pokemon Emerald")
+            .unwrap();
         assert!(battery.portable);
     }
 
@@ -147,7 +169,10 @@ mod tests {
     fn mgba_savestate_is_not_portable() {
         let adapter = MgbaAdapter::new(SystemId::Gba);
         let saves = adapter.normalize(&make_mgba_tree());
-        let state = saves.iter().find(|s| s.id.kind == SaveKind::SaveState).unwrap();
+        let state = saves
+            .iter()
+            .find(|s| s.id.kind == SaveKind::SaveState)
+            .unwrap();
         assert!(!state.portable);
     }
 
@@ -155,7 +180,10 @@ mod tests {
     fn mgba_game_key_from_filename() {
         let adapter = MgbaAdapter::new(SystemId::Gba);
         let saves = adapter.normalize(&make_mgba_tree());
-        let emerald = saves.iter().find(|s| s.id.game.display_name == "Pokemon Emerald" && s.id.kind == SaveKind::Battery).unwrap();
+        let emerald = saves
+            .iter()
+            .find(|s| s.id.game.display_name == "Pokemon Emerald" && s.id.kind == SaveKind::Battery)
+            .unwrap();
         assert_eq!(emerald.id.game.key, "Pokemon Emerald");
         assert_eq!(emerald.id.game.confidence, Confidence::Weak);
     }
@@ -164,7 +192,10 @@ mod tests {
     fn mgba_to_native_round_trips_battery() {
         let adapter = MgbaAdapter::new(SystemId::Gba);
         let saves = adapter.normalize(&make_mgba_tree());
-        let battery = saves.iter().find(|s| s.id.kind == SaveKind::Battery && s.id.game.display_name == "Pokemon Emerald").unwrap();
+        let battery = saves
+            .iter()
+            .find(|s| s.id.kind == SaveKind::Battery && s.id.game.display_name == "Pokemon Emerald")
+            .unwrap();
         let native = adapter.to_native(battery);
         assert_eq!(native.files.len(), 1);
         assert_eq!(native.files[0].path, "Pokemon Emerald.sav");

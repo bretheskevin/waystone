@@ -24,9 +24,13 @@ impl JksvAdapter {
 }
 
 impl Adapter for JksvAdapter {
-    fn id(&self) -> &str { "jksv" }
+    fn id(&self) -> &str {
+        "jksv"
+    }
 
-    fn systems(&self) -> &[SystemId] { std::slice::from_ref(&self.system) }
+    fn systems(&self) -> &[SystemId] {
+        std::slice::from_ref(&self.system)
+    }
 
     fn normalize(&self, raw: &RawTree) -> Vec<NormalizedSave> {
         type SaveFiles = Vec<(String, Vec<u8>)>;
@@ -34,41 +38,51 @@ impl Adapter for JksvAdapter {
 
         for file in &raw.files {
             let parts: Vec<&str> = file.path.splitn(3, '/').collect();
-            if parts.len() < 3 { continue; }
+            if parts.len() < 3 {
+                continue;
+            }
             let title_dir = parts[0].to_string();
             let slot_dir = parts[1].to_string();
             let rel_path = parts[2].to_string();
-            groups.entry((title_dir, slot_dir))
+            groups
+                .entry((title_dir, slot_dir))
                 .or_default()
                 .push((rel_path, file.content.clone()));
         }
 
-        groups.into_iter().map(|((title_dir, slot), files)| {
-            let (display_name, title_id) = Self::parse_title_dir(&title_dir);
-            let key = title_id.clone().unwrap_or_else(|| display_name.clone());
-            let confidence = if title_id.is_some() { Confidence::Strong } else { Confidence::Weak };
+        groups
+            .into_iter()
+            .map(|((title_dir, slot), files)| {
+                let (display_name, title_id) = Self::parse_title_dir(&title_dir);
+                let key = title_id.clone().unwrap_or_else(|| display_name.clone());
+                let confidence = if title_id.is_some() {
+                    Confidence::Strong
+                } else {
+                    Confidence::Weak
+                };
 
-            NormalizedSave {
-                id: SaveId {
-                    source: "jksv".into(),
-                    system: self.system,
-                    game: GameRef {
-                        key: key.clone(),
-                        display_name,
-                        confidence,
-                        title_id,
-                        serial: None,
-                        rom_crc: None,
+                NormalizedSave {
+                    id: SaveId {
+                        source: "jksv".into(),
+                        system: self.system,
+                        game: GameRef {
+                            key: key.clone(),
+                            display_name,
+                            confidence,
+                            title_id,
+                            serial: None,
+                            rom_crc: None,
+                        },
+                        slot: slot.clone(),
+                        kind: SaveKind::Native,
                     },
-                    slot: slot.clone(),
-                    kind: SaveKind::Native,
-                },
-                group_key: build_group_key(self.system, &key, &slot),
-                portable: true,
-                mtime: String::new(),
-                files,
-            }
-        }).collect()
+                    group_key: build_group_key(self.system, &key, &slot),
+                    portable: true,
+                    mtime: String::new(),
+                    files,
+                }
+            })
+            .collect()
     }
 
     fn to_native(&self, save: &NormalizedSave) -> RawTree {
@@ -77,12 +91,14 @@ impl Adapter for JksvAdapter {
             None => save.id.game.display_name.clone(),
         };
         RawTree {
-            files: save.files.iter().map(|(rel, content)| {
-                RawFile {
+            files: save
+                .files
+                .iter()
+                .map(|(rel, content)| RawFile {
                     path: format!("{}/{}/{}", title_dir, save.id.slot, rel),
                     content: content.clone(),
-                }
-            }).collect(),
+                })
+                .collect(),
         }
     }
 }
@@ -122,7 +138,10 @@ mod tests {
     fn jksv_extracts_title_id() {
         let adapter = JksvAdapter::new(SystemId::Switch);
         let saves = adapter.normalize(&make_jksv_tree());
-        let smo = saves.iter().find(|s| s.id.game.key == "0100000000010000").unwrap();
+        let smo = saves
+            .iter()
+            .find(|s| s.id.game.key == "0100000000010000")
+            .unwrap();
         assert_eq!(smo.id.game.display_name, "Super Mario Odyssey");
         assert_eq!(smo.id.game.title_id, Some("0100000000010000".into()));
         assert_eq!(smo.id.game.confidence, Confidence::Strong);
@@ -132,7 +151,10 @@ mod tests {
     fn jksv_groups_by_title_and_slot() {
         let adapter = JksvAdapter::new(SystemId::Switch);
         let saves = adapter.normalize(&make_jksv_tree());
-        let smo = saves.iter().find(|s| s.id.game.key == "0100000000010000").unwrap();
+        let smo = saves
+            .iter()
+            .find(|s| s.id.game.key == "0100000000010000")
+            .unwrap();
         assert_eq!(smo.id.slot, "main");
         assert_eq!(smo.files.len(), 2);
         assert_eq!(smo.group_key, "switch/0100000000010000/main");
@@ -151,10 +173,17 @@ mod tests {
     fn jksv_to_native_round_trips() {
         let adapter = JksvAdapter::new(SystemId::Switch);
         let saves = adapter.normalize(&make_jksv_tree());
-        let smo = saves.iter().find(|s| s.id.game.key == "0100000000010000").unwrap();
+        let smo = saves
+            .iter()
+            .find(|s| s.id.game.key == "0100000000010000")
+            .unwrap();
         let native = adapter.to_native(smo);
         assert_eq!(native.files.len(), 2);
-        let save_dat = native.files.iter().find(|f| f.path.ends_with("save.dat")).unwrap();
+        let save_dat = native
+            .files
+            .iter()
+            .find(|f| f.path.ends_with("save.dat"))
+            .unwrap();
         assert_eq!(save_dat.content, vec![0xDE, 0xAD]);
     }
 }

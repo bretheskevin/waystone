@@ -51,7 +51,9 @@ and simultaneous updates to all shell test suites.
   failing test.
 - The `core` crate must stay I/O-free. No filesystem, no networking, no `std::fs`,
   no `tokio`. Bytes in, decisions out.
-- Use `cargo fmt` before committing.
+- Use `cargo fmt` before committing. A pre-commit hook enforces this: enable it
+  once per clone with `git config core.hooksPath .githooks` and it will block any
+  commit that is not `cargo fmt --all --check` clean.
 
 ## Console and mobile toolchains
 

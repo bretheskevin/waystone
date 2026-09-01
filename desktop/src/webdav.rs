@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use reqwest::Client;
 
 pub struct WebDavClient {
@@ -35,9 +35,11 @@ impl WebDavClient {
     }
 
     pub async fn put(&self, path: &str, body: Vec<u8>) -> Result<()> {
-        let resp = self.request(reqwest::Method::PUT, path)
+        let resp = self
+            .request(reqwest::Method::PUT, path)
             .body(body)
-            .send().await
+            .send()
+            .await
             .context("WebDAV PUT failed")?;
         if !resp.status().is_success() {
             bail!("PUT {} returned {}", path, resp.status());
@@ -46,8 +48,10 @@ impl WebDavClient {
     }
 
     pub async fn get(&self, path: &str) -> Result<Option<Vec<u8>>> {
-        let resp = self.request(reqwest::Method::GET, path)
-            .send().await
+        let resp = self
+            .request(reqwest::Method::GET, path)
+            .send()
+            .await
             .context("WebDAV GET failed")?;
         if resp.status().as_u16() == 404 {
             return Ok(None);
@@ -59,8 +63,10 @@ impl WebDavClient {
     }
 
     pub async fn mkcol(&self, path: &str) -> Result<()> {
-        let resp = self.request(reqwest::Method::from_bytes(b"MKCOL").unwrap(), path)
-            .send().await
+        let resp = self
+            .request(reqwest::Method::from_bytes(b"MKCOL").unwrap(), path)
+            .send()
+            .await
             .context("WebDAV MKCOL failed")?;
         let status = resp.status().as_u16();
         if status != 201 && status != 405 && !resp.status().is_success() {
@@ -70,8 +76,10 @@ impl WebDavClient {
     }
 
     pub async fn exists(&self, path: &str) -> Result<bool> {
-        let resp = self.request(reqwest::Method::HEAD, path)
-            .send().await
+        let resp = self
+            .request(reqwest::Method::HEAD, path)
+            .send()
+            .await
             .context("WebDAV HEAD failed")?;
         Ok(resp.status().is_success())
     }
@@ -158,7 +166,10 @@ mod tests {
     async fn webdav_put_get_round_trip() {
         let client = WebDavClient::new("http://localhost:5000", None, None);
         client.mkdir_p("/test").await.unwrap();
-        client.put("/test/hello.txt", b"world".to_vec()).await.unwrap();
+        client
+            .put("/test/hello.txt", b"world".to_vec())
+            .await
+            .unwrap();
         let data = client.get("/test/hello.txt").await.unwrap().unwrap();
         assert_eq!(data, b"world");
     }
@@ -176,8 +187,14 @@ mod tests {
     async fn webdav_propfind_lists_children() {
         let client = WebDavClient::new("http://localhost:5000", None, None);
         client.mkdir_p("/proptest/col").await.unwrap();
-        client.put("/proptest/col/a.txt", b"a".to_vec()).await.unwrap();
-        client.put("/proptest/col/b.txt", b"b".to_vec()).await.unwrap();
+        client
+            .put("/proptest/col/a.txt", b"a".to_vec())
+            .await
+            .unwrap();
+        client
+            .put("/proptest/col/b.txt", b"b".to_vec())
+            .await
+            .unwrap();
         let hrefs = client.propfind("/proptest/col").await.unwrap();
         assert!(hrefs.iter().any(|h| h.ends_with("/a.txt")));
         assert!(hrefs.iter().any(|h| h.ends_with("/b.txt")));

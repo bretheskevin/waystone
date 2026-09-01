@@ -1,6 +1,6 @@
 use chacha20poly1305::{
-    aead::{Aead, KeyInit},
     Key, XChaCha20Poly1305, XNonce,
+    aead::{Aead, KeyInit},
 };
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
@@ -59,7 +59,9 @@ fn wrap_mdk(kek: &[u8; 32], mdk: &[u8; 32]) -> Result<Vec<u8>, CryptoError> {
     let mut nonce_bytes = [0u8; 24];
     rand::rng().fill_bytes(&mut nonce_bytes);
     let nonce = XNonce::from_slice(&nonce_bytes);
-    let ct = cipher.encrypt(nonce, mdk.as_ref()).map_err(|_| CryptoError::EncryptionFailed)?;
+    let ct = cipher
+        .encrypt(nonce, mdk.as_ref())
+        .map_err(|_| CryptoError::EncryptionFailed)?;
     let mut out = nonce_bytes.to_vec();
     out.extend(ct);
     Ok(out)
@@ -94,7 +96,9 @@ fn xchacha_encrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, CryptoError> 
     let mut nonce_bytes = [0u8; 24];
     rand::rng().fill_bytes(&mut nonce_bytes);
     let nonce = XNonce::from_slice(&nonce_bytes);
-    let ct = cipher.encrypt(nonce, data).map_err(|_| CryptoError::EncryptionFailed)?;
+    let ct = cipher
+        .encrypt(nonce, data)
+        .map_err(|_| CryptoError::EncryptionFailed)?;
     let mut out = nonce_bytes.to_vec();
     out.extend(ct);
     Ok(out)
@@ -106,7 +110,9 @@ fn xchacha_decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, CryptoError> 
     }
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
     let nonce = XNonce::from_slice(&data[..24]);
-    cipher.decrypt(nonce, &data[24..]).map_err(|_| CryptoError::DecryptionFailed)
+    cipher
+        .decrypt(nonce, &data[24..])
+        .map_err(|_| CryptoError::DecryptionFailed)
 }
 
 fn hmac_name(mdk: &[u8; 32], purpose: &[u8], input: &str) -> String {
@@ -146,7 +152,10 @@ impl Vault {
         Ok(serde_json::to_vec(&self.keys_file)?)
     }
 
-    pub fn unlock_with_passphrase(passphrase: &str, keys_json: &[u8]) -> Result<Vault, CryptoError> {
+    pub fn unlock_with_passphrase(
+        passphrase: &str,
+        keys_json: &[u8],
+    ) -> Result<Vault, CryptoError> {
         let keys_file: KeysFile = serde_json::from_slice(keys_json)?;
         let salt = hex::decode(&keys_file.salt)?;
         let wrapped = hex::decode(&keys_file.wrapped_mdk_pass)?;
@@ -155,7 +164,10 @@ impl Vault {
         Ok(Vault { mdk, keys_file })
     }
 
-    pub fn unlock_with_recovery(recovery_key: &str, keys_json: &[u8]) -> Result<Vault, CryptoError> {
+    pub fn unlock_with_recovery(
+        recovery_key: &str,
+        keys_json: &[u8],
+    ) -> Result<Vault, CryptoError> {
         let keys_file: KeysFile = serde_json::from_slice(keys_json)?;
         let salt = hex::decode(&keys_file.salt)?;
         let wrapped = hex::decode(&keys_file.wrapped_mdk_rec)?;

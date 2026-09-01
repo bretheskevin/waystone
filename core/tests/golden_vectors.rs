@@ -1,6 +1,6 @@
+use waystone_core::adapters::Adapter;
 use waystone_core::adapters::jksv::JksvAdapter;
 use waystone_core::adapters::mgba::MgbaAdapter;
-use waystone_core::adapters::Adapter;
 use waystone_core::crypto::Vault;
 use waystone_core::model::*;
 use waystone_core::packaging::{canonical_zip, content_hash, package, unzip};
@@ -18,7 +18,10 @@ fn golden_single_file_zip_and_hash() {
     let zip_bytes_2 = canonical_zip(&files);
     assert_eq!(zip_bytes, zip_bytes_2);
 
-    assert_eq!(hash, "66dc6c1281582edd83ee325e37f45d235c7e60d859f8117dd5d3a978117ee318");
+    assert_eq!(
+        hash,
+        "66dc6c1281582edd83ee325e37f45d235c7e60d859f8117dd5d3a978117ee318"
+    );
 }
 
 /// Vector 2: multi-file zip, order independence

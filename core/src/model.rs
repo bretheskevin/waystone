@@ -193,8 +193,14 @@ mod tests {
     fn raw_tree_preserves_files() {
         let tree = RawTree {
             files: vec![
-                RawFile { path: "save.dat".into(), content: vec![1, 2, 3] },
-                RawFile { path: "extra.bin".into(), content: vec![4, 5] },
+                RawFile {
+                    path: "save.dat".into(),
+                    content: vec![1, 2, 3],
+                },
+                RawFile {
+                    path: "extra.bin".into(),
+                    content: vec![4, 5],
+                },
             ],
         };
         assert_eq!(tree.files.len(), 2);

@@ -106,8 +106,8 @@ pub enum PackagingError {
 
 pub fn unzip(zip_bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, PackagingError> {
     let reader = Cursor::new(zip_bytes);
-    let mut archive = zip::ZipArchive::new(reader)
-        .map_err(|e| PackagingError::InvalidZip(e.to_string()))?;
+    let mut archive =
+        zip::ZipArchive::new(reader).map_err(|e| PackagingError::InvalidZip(e.to_string()))?;
 
     let mut entries = Vec::new();
     for i in 0..archive.len() {

@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use waystone_core::conflict::ConflictPolicy;
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use waystone_core::conflict::ConflictPolicy;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaystoneConfig {
@@ -38,8 +38,8 @@ impl WaystoneConfig {
         }
         let data = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
-        let cfg: Self = serde_json::from_str(&data)
-            .with_context(|| format!("parsing {}", path.display()))?;
+        let cfg: Self =
+            serde_json::from_str(&data).with_context(|| format!("parsing {}", path.display()))?;
         Ok(cfg)
     }
 
@@ -61,7 +61,10 @@ mod tests {
     fn default_config_has_sane_values() {
         let cfg = WaystoneConfig::default();
         assert!(!cfg.device_id.is_empty());
-        assert_eq!(cfg.conflict_policy, waystone_core::conflict::ConflictPolicy::NewestWins);
+        assert_eq!(
+            cfg.conflict_policy,
+            waystone_core::conflict::ConflictPolicy::NewestWins
+        );
         assert!(cfg.username.is_none());
     }
 

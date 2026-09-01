@@ -1,0 +1,13 @@
+#!/bin/sh
+# Waystone pre-commit hook: block commits that are not rustfmt-clean.
+#
+# Enable once per clone:
+#   git config core.hooksPath .githooks
+#
+# Bypass for a single commit (not recommended): git commit --no-verify
+
+if ! cargo fmt --all --check; then
+	echo >&2
+	echo "✗ rustfmt check failed — run 'cargo fmt --all', re-stage, and commit again." >&2
+	exit 1
+fi
