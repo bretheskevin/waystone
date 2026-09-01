@@ -1,9 +1,9 @@
+use crate::webdav::WebDavClient;
 use anyhow::{Context, Result};
-use waystone_core::conflict::{fold_heads, three_way_sync, ConflictPolicy, DeviceHead, SyncDecision};
+use waystone_core::conflict::{ConflictPolicy, DeviceHead};
 use waystone_core::crypto::Vault;
 use waystone_core::model::NormalizedSave;
 use waystone_core::packaging;
-use crate::webdav::WebDavClient;
 
 pub struct SyncPipeline<'a> {
     pub vault: &'a Vault,
@@ -59,14 +59,21 @@ impl<'a> SyncPipeline<'a> {
         let base_path = self.remote_path(save);
         let blob_path = format!("{}/blobs/{}.bin", base_path, blob_name);
 
-        let encrypted = self.dav.get(&blob_path).await?
+        let encrypted = self
+            .dav
+            .get(&blob_path)
+            .await?
             .context("blob not found on server")?;
         let zip_bytes = self.vault.decrypt_blob(&encrypted)?;
         Ok(zip_bytes)
     }
 
     #[allow(dead_code)]
-    pub async fn read_remote_head(&self, save: &NormalizedSave, device_id: &str) -> Result<Option<DeviceHead>> {
+    pub async fn read_remote_head(
+        &self,
+        save: &NormalizedSave,
+        device_id: &str,
+    ) -> Result<Option<DeviceHead>> {
         let base_path = self.remote_path(save);
         let head_path = format!("{}/heads/{}.json", base_path, device_id);
 
@@ -106,110 +113,9 @@ impl<'a> SyncPipeline<'a> {
     }
 }
 
-/// Compute the sync decision for a pull given all remote heads for a save.
-///
-/// `base` is this device's own last-pushed head (if any); `merged` is the fold of all
-/// remote heads.  Passing them into `three_way_sync` produces the correct Pull/Push/InSync
-/// decision without the base==head bug that makes Pull impossible.
-pub fn decide_pull(
-    local_hash: Option<&str>,
-    local_mtime: &str,
-    all_remote_heads: &[DeviceHead],
-    this_device_id: &str,
-    policy: ConflictPolicy,
-) -> SyncDecision {
-    let Some(merged) = fold_heads(all_remote_heads) else {
-        return if local_hash.is_some() { SyncDecision::Push } else { SyncDecision::InSync };
-    };
-    let base = all_remote_heads
-        .iter()
-        .find(|h| h.device_id == this_device_id)
-        .map(|h| h.hash.as_str());
-    three_way_sync(
-        local_hash,
-        base,
-        Some(merged.hash.as_str()),
-        local_mtime,
-        &merged.mtime,
-        policy,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn decide_pull_yields_pull_when_remote_newer() {
-        let all_heads = vec![
-            DeviceHead {
-                device_id: "dev1".into(),
-                hash: "hash_a".into(),
-                mtime: "2026-01-01T00:00:00Z".into(),
-            },
-            DeviceHead {
-                device_id: "dev2".into(),
-                hash: "hash_b".into(),
-                mtime: "2026-01-02T00:00:00Z".into(),
-            },
-        ];
-        let decision = decide_pull(
-            Some("hash_a"),
-            "2026-01-01T00:00:00Z",
-            &all_heads,
-            "dev1",
-            ConflictPolicy::NewestWins,
-        );
-        assert_eq!(decision, SyncDecision::Pull { head_hash: "hash_b".into() });
-    }
-
-    #[test]
-    fn decide_pull_in_sync_when_already_have_newest() {
-        let all_heads = vec![
-            DeviceHead {
-                device_id: "dev1".into(),
-                hash: "hash_b".into(),
-                mtime: "2026-01-02T00:00:00Z".into(),
-            },
-            DeviceHead {
-                device_id: "dev2".into(),
-                hash: "hash_b".into(),
-                mtime: "2026-01-02T00:00:00Z".into(),
-            },
-        ];
-        let decision = decide_pull(
-            Some("hash_b"),
-            "2026-01-02T00:00:00Z",
-            &all_heads,
-            "dev1",
-            ConflictPolicy::NewestWins,
-        );
-        assert_eq!(decision, SyncDecision::InSync);
-    }
-
-    #[test]
-    fn decide_pull_no_remote_heads_yields_push_when_local_exists() {
-        let decision = decide_pull(
-            Some("hash_a"),
-            "2026-01-01T00:00:00Z",
-            &[],
-            "dev1",
-            ConflictPolicy::NewestWins,
-        );
-        assert_eq!(decision, SyncDecision::Push);
-    }
-
-    #[test]
-    fn decide_pull_new_device_no_local_yields_pull() {
-        let all_heads = vec![DeviceHead {
-            device_id: "dev1".into(),
-            hash: "hash_a".into(),
-            mtime: "2026-01-01T00:00:00Z".into(),
-        }];
-        // dev2 is brand-new: no local save, not in heads yet
-        let decision = decide_pull(None, "", &all_heads, "dev2", ConflictPolicy::NewestWins);
-        assert_eq!(decision, SyncDecision::Pull { head_hash: "hash_a".into() });
-    }
 
     /// Live two-device round-trip against a real dufs instance.
     ///
@@ -221,10 +127,10 @@ mod tests {
     #[ignore]
     async fn two_device_push_pull_round_trip() {
         use crate::webdav::WebDavClient;
-        use waystone_core::conflict::{ConflictPolicy, ConflictWinner, SyncDecision};
+        use waystone_core::conflict::{ConflictPolicy, ConflictWinner, SyncDecision, fold_heads};
         use waystone_core::crypto::Vault;
         use waystone_core::model::{
-            build_group_key, Confidence, GameRef, NormalizedSave, SaveId, SaveKind, SystemId,
+            Confidence, GameRef, NormalizedSave, SaveId, SaveKind, SystemId, build_group_key,
         };
 
         let server = "http://localhost:5099";
@@ -293,7 +199,7 @@ mod tests {
         assert_eq!(all_heads.len(), 2, "should find both device heads");
 
         let (entry2_old, _) = waystone_core::packaging::package(&save_old);
-        let decision = decide_pull(
+        let decision = waystone_core::conflict::decide_pull(
             Some(&entry2_old.content.hash),
             &entry2_old.mtime,
             &all_heads,
@@ -304,18 +210,21 @@ mod tests {
         // local == base (device-2 hasn't changed since last push) → clean Pull
         let head_hash = match &decision {
             SyncDecision::Pull { head_hash } => head_hash.clone(),
-            SyncDecision::ConflictResolved { winner: ConflictWinner::Remote, .. } => {
-                fold_heads(&all_heads).unwrap().hash
-            }
+            SyncDecision::ConflictResolved {
+                winner: ConflictWinner::Remote,
+                ..
+            } => fold_heads(&all_heads).unwrap().hash,
             other => panic!("expected Pull or ConflictResolved(Remote), got {:?}", other),
         };
 
         let zip_bytes = pipe2.pull_blob(&save_old, &head_hash).await.unwrap();
         let files = waystone_core::packaging::unzip(&zip_bytes).unwrap();
-        let save_file = files.iter().find(|(p, _)| p == "save.dat").expect("save.dat");
+        let save_file = files
+            .iter()
+            .find(|(p, _)| p == "save.dat")
+            .expect("save.dat");
         assert_eq!(
-            save_file.1,
-            b"device1-progress-content",
+            save_file.1, b"device1-progress-content",
             "device-2 should have received device-1's updated save"
         );
     }

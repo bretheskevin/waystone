@@ -1,9 +1,9 @@
 mod config;
-mod webdav;
 mod pipeline;
+mod webdav;
 
-use clap::{Parser, Subcommand};
 use anyhow::Result;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use waystone_core::conflict::SyncDecision;
 
@@ -84,10 +84,17 @@ fn parse_system(s: &str) -> Result<waystone_core::model::SystemId> {
     }
 }
 
-fn make_adapter(name: &str, system: waystone_core::model::SystemId) -> Result<Box<dyn waystone_core::adapters::Adapter>> {
+fn make_adapter(
+    name: &str,
+    system: waystone_core::model::SystemId,
+) -> Result<Box<dyn waystone_core::adapters::Adapter>> {
     match name {
-        "jksv" => Ok(Box::new(waystone_core::adapters::jksv::JksvAdapter::new(system))),
-        "mgba" => Ok(Box::new(waystone_core::adapters::mgba::MgbaAdapter::new(system))),
+        "jksv" => Ok(Box::new(waystone_core::adapters::jksv::JksvAdapter::new(
+            system,
+        ))),
+        "mgba" => Ok(Box::new(waystone_core::adapters::mgba::MgbaAdapter::new(
+            system,
+        ))),
         other => anyhow::bail!("unknown adapter: {}", other),
     }
 }
@@ -145,7 +152,7 @@ async fn do_pull_save(
     let all_heads = pipe.read_all_remote_heads(save).await?;
     let (entry, _) = waystone_core::packaging::package(save);
 
-    let decision = pipeline::decide_pull(
+    let decision = waystone_core::conflict::decide_pull(
         Some(&entry.content.hash),
         &entry.mtime,
         &all_heads,
@@ -179,8 +186,13 @@ async fn do_pull_save(
             }
         }
         None => match decision {
-            SyncDecision::InSync => println!("In sync: {} / {}", save.id.game.display_name, save.id.slot),
-            _ => println!("Skipping (needs manual resolve): {} / {}", save.id.game.display_name, save.id.slot),
+            SyncDecision::InSync => {
+                println!("In sync: {} / {}", save.id.game.display_name, save.id.slot)
+            }
+            _ => println!(
+                "Skipping (needs manual resolve): {} / {}",
+                save.id.game.display_name, save.id.slot
+            ),
         },
     }
     Ok(())
@@ -201,7 +213,11 @@ async fn main() -> Result<()> {
             let (vault, recovery_key) = waystone_core::crypto::Vault::init(&passphrase)?;
             let keys_json = vault.keys_json()?;
 
-            let cfg = config::WaystoneConfig { server_url: server.clone(), username: username.clone(), ..Default::default() };
+            let cfg = config::WaystoneConfig {
+                server_url: server.clone(),
+                username: username.clone(),
+                ..Default::default()
+            };
 
             let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
             let dav = webdav::WebDavClient::new(&server, wdav_user, wdav_pass);
@@ -219,7 +235,12 @@ async fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::Push { source, adapter, system, username } => {
+        Commands::Push {
+            source,
+            adapter,
+            system,
+            username,
+        } => {
             let cfg = config::WaystoneConfig::load()?;
             let system = parse_system(&system)?;
             let adapter = make_adapter(&adapter, system)?;
@@ -227,9 +248,11 @@ async fn main() -> Result<()> {
             let passphrase = rpassword::prompt_password("Passphrase: ")?;
             let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
             let dav = webdav::WebDavClient::new(&cfg.server_url, wdav_user, wdav_pass);
-            let keys_data = dav.get("/keys.json").await?
-                .ok_or_else(|| anyhow::anyhow!("no keys.json on server — run `waystone init` first"))?;
-            let vault = waystone_core::crypto::Vault::unlock_with_passphrase(&passphrase, &keys_data)?;
+            let keys_data = dav.get("/keys.json").await?.ok_or_else(|| {
+                anyhow::anyhow!("no keys.json on server — run `waystone init` first")
+            })?;
+            let vault =
+                waystone_core::crypto::Vault::unlock_with_passphrase(&passphrase, &keys_data)?;
 
             let raw = read_source_tree(&source)?;
             let saves = adapter.normalize(&raw);
@@ -250,7 +273,12 @@ async fn main() -> Result<()> {
             Ok(())
         }
 
-        Commands::Pull { dest, adapter, system, username } => {
+        Commands::Pull {
+            dest,
+            adapter,
+            system,
+            username,
+        } => {
             let cfg = config::WaystoneConfig::load()?;
             let system = parse_system(&system)?;
             let adapter = make_adapter(&adapter, system)?;
@@ -258,9 +286,12 @@ async fn main() -> Result<()> {
             let passphrase = rpassword::prompt_password("Passphrase: ")?;
             let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
             let dav = webdav::WebDavClient::new(&cfg.server_url, wdav_user, wdav_pass);
-            let keys_data = dav.get("/keys.json").await?
+            let keys_data = dav
+                .get("/keys.json")
+                .await?
                 .ok_or_else(|| anyhow::anyhow!("no keys.json on server"))?;
-            let vault = waystone_core::crypto::Vault::unlock_with_passphrase(&passphrase, &keys_data)?;
+            let vault =
+                waystone_core::crypto::Vault::unlock_with_passphrase(&passphrase, &keys_data)?;
 
             let raw = if dest.exists() {
                 read_source_tree(&dest)?
@@ -277,14 +308,27 @@ async fn main() -> Result<()> {
             };
 
             for save in &local_saves {
-                do_pull_save(&pipe, save, &dest, adapter.as_ref(), &cfg.device_id, cfg.conflict_policy).await?;
+                do_pull_save(
+                    &pipe,
+                    save,
+                    &dest,
+                    adapter.as_ref(),
+                    &cfg.device_id,
+                    cfg.conflict_policy,
+                )
+                .await?;
             }
 
             println!("Pull complete.");
             Ok(())
         }
 
-        Commands::Status { source, adapter, system, username: _ } => {
+        Commands::Status {
+            source,
+            adapter,
+            system,
+            username: _,
+        } => {
             let cfg = config::WaystoneConfig::load()?;
             let system = parse_system(&system)?;
             let adapter = make_adapter(&adapter, system)?;
@@ -296,7 +340,8 @@ async fn main() -> Result<()> {
             println!("Found {} local save(s):", saves.len());
             for save in &saves {
                 let (entry, _) = waystone_core::packaging::package(save);
-                println!("  {} / {} [{}] hash={}...",
+                println!(
+                    "  {} / {} [{}] hash={}...",
                     save.id.game.display_name,
                     save.id.slot,
                     match save.id.kind {
