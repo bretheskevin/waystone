@@ -1,4 +1,5 @@
 use std::ffi::{CStr, CString};
+use std::sync::Mutex;
 
 use waystone_ffi::adapter_abi::*;
 use waystone_ffi::buffer::{WsBuf, ws_buf_free, ws_string_free};
@@ -26,6 +27,11 @@ fn string_free_does_not_panic_on_null() {
 
 // ── Error tests ──────────────────────────────────────────────────────────────
 
+// LAST_ERROR is now a process-global `spin::Mutex` (no longer thread_local!),
+// so tests that write then read it race with each other under cargo test's
+// default parallel execution. This mutex serialises all such tests.
+static ERROR_TEST_LOCK: Mutex<()> = Mutex::new(());
+
 #[test]
 fn last_error_returns_null_initially() {
     let err = unsafe { ws_last_error() };
@@ -34,6 +40,7 @@ fn last_error_returns_null_initially() {
 
 #[test]
 fn set_and_retrieve_error() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
     set_last_error("test error message");
     let err = unsafe { ws_last_error() };
     assert!(!err.is_null());
@@ -43,6 +50,7 @@ fn set_and_retrieve_error() {
 
 #[test]
 fn catch_and_set_error_captures_err() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
     let result: Option<i32> = catch_and_set_error(|| Err("something broke".into()));
     assert!(result.is_none());
     let err = unsafe { ws_last_error() };
@@ -279,6 +287,7 @@ fn vault_init_and_unlock_with_recovery() {
 
 #[test]
 fn vault_wrong_passphrase_returns_null() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
     let pass = CString::new("correct").unwrap();
     let mut recovery_buf = WsBuf::null();
     let mut keys_buf = WsBuf::null();
@@ -360,6 +369,7 @@ fn vault_blob_name_and_path_segment() {
 
 #[test]
 fn vault_null_input_returns_null() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
     let encrypted = unsafe { ws_vault_encrypt_blob(std::ptr::null(), b"data".as_ptr(), 4) };
     assert!(encrypted.ptr.is_null());
     let err = unsafe { waystone_ffi::error::ws_last_error() };
@@ -474,6 +484,7 @@ fn package_through_ffi() {
 
 #[test]
 fn canonical_zip_null_input_returns_null() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
     let zip_buf = unsafe { ws_canonical_zip(std::ptr::null()) };
     assert!(zip_buf.ptr.is_null());
 }
@@ -733,6 +744,7 @@ fn mgba_to_native_through_ffi() {
 
 #[test]
 fn adapter_null_input_returns_null() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
     let system = CString::new("switch").unwrap();
     let result = unsafe { ws_jksv_normalize(system.as_ptr(), std::ptr::null()) };
     assert!(result.is_null());

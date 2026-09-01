@@ -34,6 +34,17 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
 - **Integration tests**: golden-vector parity through the JSON/base64 FFI
   round-trip, crypto round-trips, adapter round-trips, null-safety.
 
+### Milestone 2 (de-risk) — no_std + Switch target cross-compilation
+- **`core/` + `ffi/` are genuinely `no_std + alloc`**: removed `zip`/`rand`/`thiserror`
+  dependencies; STORED-zip reader inline; `getrandom` for entropy; manual error impls;
+  `spin::Mutex` global error slot; `catch_unwind` removed (moot under `panic=abort`).
+- **Switch target cross-compilation verified**: `cargo +nightly build -Zbuild-std=core,alloc
+  --target aarch64-nintendo-switch-freestanding --features switch -p waystone-ffi` produces
+  `target/aarch64-nintendo-switch-freestanding/debug/libwaystone_ffi.a` (32 MB).
+  Unresolved symbols (`memalign`, `free`, `nx_getrandom`) are intentional — they
+  resolve at the C++ libnx link step.
+- **All host tests green**: 92 tests pass, golden vectors byte-identical, C header unchanged.
+
 **Quality:** 92 tests pass, clippy clean.
 
 ## Deferred (minor, non-blocking)
@@ -41,9 +52,9 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
 - Remove or wire up the dead-code `read_remote_head` scaffolding in `desktop/src/pipeline.rs`.
 
 ## Next
-- **M2 (remaining) — Switch shell UI**: C++/libnx + borealis homebrew app that
-  `#include`s `waystone.h`, extracts saves via `svcQueryMemory`/`account.h`, and
-  calls the FFI surface for sync. Needs devkitPro.
+- **M2 (remaining) — Switch shell UI**: C++/libnx + borealis homebrew app in Docker
+  (devkitPro). Link `libwaystone_ffi.a` via the Makefile, provide `memalign`/`free`/
+  `nx_getrandom` symbols from newlib/libnx. Build the `.nro`.
 - **M3 — Android shell**: Kotlin/Compose UI, core via **UniFFI** (SAF + OkHttp).
 - **M4 — 3DS shell**: C++/libctru + citro2d.
 

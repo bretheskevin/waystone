@@ -1,7 +1,11 @@
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
 use waystone_core::model::{NormalizedSave, RawFile, RawTree, SaveId};
+
+use crate::error::StringError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntryDto {
@@ -17,8 +21,9 @@ impl FileEntryDto {
         }
     }
 
-    pub fn decode_data(&self) -> Result<Vec<u8>, base64::DecodeError> {
+    pub fn decode_data(&self) -> Result<Vec<u8>, StringError> {
         B64.decode(&self.data_b64)
+            .map_err(|e| StringError(e.to_string()))
     }
 }
 
@@ -38,7 +43,7 @@ impl RawTreeDto {
         }
     }
 
-    pub fn to_core(&self) -> Result<RawTree, base64::DecodeError> {
+    pub fn to_core(&self) -> Result<RawTree, StringError> {
         let files = self
             .files
             .iter()
@@ -49,7 +54,7 @@ impl RawTreeDto {
                     content,
                 })
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, StringError>>()?;
         Ok(RawTree { files })
     }
 }
@@ -78,7 +83,7 @@ impl NormalizedSaveDto {
         }
     }
 
-    pub fn to_core(&self) -> Result<NormalizedSave, base64::DecodeError> {
+    pub fn to_core(&self) -> Result<NormalizedSave, StringError> {
         let files = self
             .files
             .iter()
@@ -86,7 +91,7 @@ impl NormalizedSaveDto {
                 let data = f.decode_data()?;
                 Ok((f.path.clone(), data))
             })
-            .collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, StringError>>()?;
         Ok(NormalizedSave {
             id: self.id.clone(),
             group_key: self.group_key.clone(),

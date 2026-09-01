@@ -1,4 +1,7 @@
-use std::ffi::CString;
+use alloc::boxed::Box;
+use alloc::ffi::CString;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 #[repr(C)]
 pub struct WsBuf {
@@ -13,13 +16,13 @@ impl WsBuf {
             ptr: boxed.as_mut_ptr(),
             len: boxed.len(),
         };
-        std::mem::forget(boxed);
+        core::mem::forget(boxed);
         buf
     }
 
     pub fn null() -> Self {
         WsBuf {
-            ptr: std::ptr::null_mut(),
+            ptr: core::ptr::null_mut(),
             len: 0,
         }
     }
@@ -30,15 +33,15 @@ impl WsBuf {
         if self.ptr.is_null() || self.len == 0 {
             &[]
         } else {
-            unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
+            unsafe { core::slice::from_raw_parts(self.ptr, self.len) }
         }
     }
 }
 
-pub fn owned_c_string(s: String) -> *mut std::ffi::c_char {
+pub fn owned_c_string(s: String) -> *mut core::ffi::c_char {
     match CString::new(s) {
         Ok(cs) => cs.into_raw(),
-        Err(_) => std::ptr::null_mut(),
+        Err(_) => core::ptr::null_mut(),
     }
 }
 
@@ -48,7 +51,7 @@ pub fn owned_c_string(s: String) -> *mut std::ffi::c_char {
 pub unsafe extern "C" fn ws_buf_free(buf: WsBuf) {
     if !buf.ptr.is_null() && buf.len > 0 {
         unsafe {
-            drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
+            drop(Box::from_raw(core::ptr::slice_from_raw_parts_mut(
                 buf.ptr, buf.len,
             )));
         }
@@ -58,7 +61,7 @@ pub unsafe extern "C" fn ws_buf_free(buf: WsBuf) {
 /// # Safety
 /// `s` must have been returned by `owned_c_string` or be null.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ws_string_free(s: *mut std::ffi::c_char) {
+pub unsafe extern "C" fn ws_string_free(s: *mut core::ffi::c_char) {
     if !s.is_null() {
         unsafe {
             drop(CString::from_raw(s));

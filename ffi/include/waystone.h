@@ -77,7 +77,9 @@ WsVault *ws_vault_init(const char *passphrase,
 
 /**
  * # Safety
- * The returned pointer is valid until the next call that modifies `LAST_ERROR` on this thread.
+ * The returned pointer is valid until the next call that modifies `LAST_ERROR`
+ * (process-global since the `thread_local!` -> `spin::Mutex` migration).
+ * Callers must copy the string before any subsequent FFI call that could set an error.
  */
  const char *ws_last_error(void);
 
