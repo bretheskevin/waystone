@@ -23,15 +23,27 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
 - **WebDAV auth**: `--username` + `WAYSTONE_WEBDAV_PASSWORD` (env) or interactive prompt.
 - ✅ **Verified live**: two-device push→pull against a real `dufs` container.
 
-**Quality:** 55 tests pass, clippy clean.
+### Milestone 2 (foundation) — Switch FFI
+- **`ffi/`** (`waystone-ffi` crate): stable C ABI exposing core's packaging,
+  hashing, E2EE, conflict resolution, and adapter logic over JSON strings +
+  `{ptr,len}` byte buffers. Opaque `WsVault*` handle (zeroized on free).
+- **`decide_pull` promoted to `core::conflict`**: single source of truth for the
+  three-way pull decision, shared by desktop and FFI.
+- **cbindgen-generated `include/waystone.h`**: committed header with freshness
+  test — the C++ shell `#include`s this directly.
+- **Integration tests**: golden-vector parity through the JSON/base64 FFI
+  round-trip, crypto round-trips, adapter round-trips, null-safety.
+
+**Quality:** 92 tests pass, clippy clean.
 
 ## Deferred (minor, non-blocking)
 - Zeroize the WebDAV password on drop (the Vault master key already is).
 - Remove or wire up the dead-code `read_remote_head` scaffolding in `desktop/src/pipeline.rs`.
 
 ## Next
-- **M2 — Switch shell**: C++/libnx UI + save extraction, calling the Rust `core`
-  over a **C ABI** (`cbindgen` + a `waystone-ffi` crate). Needs devkitPro.
+- **M2 (remaining) — Switch shell UI**: C++/libnx + borealis homebrew app that
+  `#include`s `waystone.h`, extracts saves via `svcQueryMemory`/`account.h`, and
+  calls the FFI surface for sync. Needs devkitPro.
 - **M3 — Android shell**: Kotlin/Compose UI, core via **UniFFI** (SAF + OkHttp).
 - **M4 — 3DS shell**: C++/libctru + citro2d.
 

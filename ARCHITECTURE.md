@@ -46,9 +46,9 @@
    ┌──────────────┐ ┌──────────┐ ┌────────────┐ ┌─────────────┐
    │ switch/      │ │ 3ds/     │ │ android/   │ │ desktop/    │
    │ C++/libnx    │ │ C++/     │ │ Kotlin +   │ │ Rust CLI/TUI│
-   │ save-mount,  │ │ libctru  │ │ Compose,   │ │ (uses core  │
-   │ sockets+TLS, │ │          │ │ SAF+OkHttp │ │  directly,  │
-   │ borealis UI  │ │ citro2d  │ │ →core via  │ │  no FFI)    │
+   │ calls ffi/   │ │ libctru  │ │ Compose,   │ │ (uses core  │
+   │ via waystone │ │ calls    │ │ SAF+OkHttp │ │  directly,  │
+   │ .h C ABI     │ │ ffi/ too │ │ →core via  │ │  no FFI)    │
    │              │ │          │ │ UniFFI     │ │             │
    └──────────────┘ └──────────┘ └────────────┘ └─────────────┘
                      │ WiFi / HTTPS
@@ -66,6 +66,13 @@ to every target (no networking / no_std headaches). Everything with I/O
 (networking, filesystem, save extraction, UI) lives in the platform-native shell.
 
 The FFI boundary passes **byte buffers and decisions**, never sockets or handles.
+
+**FFI crate (`ffi/`):** `waystone-ffi` wraps `core` in a stable C ABI surface.
+Every correctness-critical function is exposed as `extern "C"`, with JSON
+strings for structured data, `{ptr,len}` byte buffers for binary, and an opaque
+`WsVault*` handle. A cbindgen-generated header (`ffi/include/waystone.h`) is
+committed and tested for freshness. The Switch and 3DS C++ shells link against
+this staticlib.
 
 ---
 
