@@ -1,0 +1,29 @@
+# deploy/docker-compose.yml
+services:
+  webdav:
+    image: sigoden/dufs:latest
+    container_name: waystone-webdav
+    restart: unless-stopped
+    command: /data --allow-all --enable-cors
+    volumes:
+      - waystone-data:/data
+    ports:
+      - "${WAYSTONE_PORT:-5000}:5000"
+    environment:
+      - DUFS_AUTH=${WAYSTONE_AUTH:-}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:5000/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      # Traefik reverse proxy (Dokploy)
+      - "traefik.enable=true"
+      - "traefik.http.routers.waystone.rule=Host(`${WAYSTONE_DOMAIN:-waystone.localhost}`)"
+      - "traefik.http.routers.waystone.entrypoints=websecure"
+      - "traefik.http.routers.waystone.tls.certresolver=letsencrypt"
+      - "traefik.http.services.waystone.loadbalancer.server.port=5000"
+
+volumes:
+  waystone-data:
