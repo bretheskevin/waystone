@@ -1,4 +1,6 @@
-use std::collections::BTreeMap;
+use alloc::collections::BTreeMap;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 
 use crate::adapters::Adapter;
 use crate::model::*;
@@ -29,7 +31,7 @@ impl Adapter for JksvAdapter {
     }
 
     fn systems(&self) -> &[SystemId] {
-        std::slice::from_ref(&self.system)
+        core::slice::from_ref(&self.system)
     }
 
     fn normalize(&self, raw: &RawTree) -> Vec<NormalizedSave> {

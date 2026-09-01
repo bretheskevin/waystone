@@ -1,4 +1,5 @@
-use std::io::{Cursor, Read as _};
+use alloc::string::String;
+use alloc::vec::Vec;
 
 use sha2::{Digest, Sha256};
 
@@ -98,28 +99,83 @@ pub fn canonical_zip(files: &[(String, Vec<u8>)]) -> Vec<u8> {
     buf
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum PackagingError {
-    #[error("invalid zip: {0}")]
     InvalidZip(String),
 }
 
-pub fn unzip(zip_bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, PackagingError> {
-    let reader = Cursor::new(zip_bytes);
-    let mut archive =
-        zip::ZipArchive::new(reader).map_err(|e| PackagingError::InvalidZip(e.to_string()))?;
-
-    let mut entries = Vec::new();
-    for i in 0..archive.len() {
-        let mut file = archive
-            .by_index(i)
-            .map_err(|e| PackagingError::InvalidZip(e.to_string()))?;
-        let name = file.name().to_string();
-        let mut content = Vec::new();
-        file.read_to_end(&mut content)
-            .map_err(|e| PackagingError::InvalidZip(e.to_string()))?;
-        entries.push((name, content));
+impl core::fmt::Display for PackagingError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::InvalidZip(msg) => write!(f, "invalid zip: {msg}"),
+        }
     }
+}
+
+impl core::error::Error for PackagingError {}
+
+fn read_u16_le(buf: &[u8], offset: usize) -> Result<u16, PackagingError> {
+    let bytes: [u8; 2] = buf
+        .get(offset..offset + 2)
+        .and_then(|s| s.try_into().ok())
+        .ok_or_else(|| PackagingError::InvalidZip("truncated field".into()))?;
+    Ok(u16::from_le_bytes(bytes))
+}
+
+fn read_u32_le(buf: &[u8], offset: usize) -> Result<u32, PackagingError> {
+    let bytes: [u8; 4] = buf
+        .get(offset..offset + 4)
+        .and_then(|s| s.try_into().ok())
+        .ok_or_else(|| PackagingError::InvalidZip("truncated field".into()))?;
+    Ok(u32::from_le_bytes(bytes))
+}
+
+pub fn unzip(zip_bytes: &[u8]) -> Result<Vec<(String, Vec<u8>)>, PackagingError> {
+    let mut entries = Vec::new();
+    let mut pos = 0;
+    let len = zip_bytes.len();
+
+    while pos + 4 <= len {
+        let sig = read_u32_le(zip_bytes, pos)?;
+        if sig != 0x04034b50 {
+            break;
+        }
+        if pos + 30 > len {
+            return Err(PackagingError::InvalidZip("truncated local header".into()));
+        }
+        let method = read_u16_le(zip_bytes, pos + 8)?;
+        if method != 0 {
+            return Err(PackagingError::InvalidZip(
+                "only STORE (method 0) supported".into(),
+            ));
+        }
+        let comp_size = read_u32_le(zip_bytes, pos + 18)? as usize;
+        let name_len = read_u16_le(zip_bytes, pos + 26)? as usize;
+        let extra_len = read_u16_le(zip_bytes, pos + 28)? as usize;
+
+        let name_start = pos + 30;
+        let name_end = name_start + name_len;
+        if name_end > len {
+            return Err(PackagingError::InvalidZip("truncated file name".into()));
+        }
+        let name = String::from_utf8(zip_bytes[name_start..name_end].to_vec())
+            .map_err(|_| PackagingError::InvalidZip("invalid utf-8 file name".into()))?;
+
+        let data_start = name_end
+            .checked_add(extra_len)
+            .ok_or_else(|| PackagingError::InvalidZip("offset overflow".into()))?;
+        let data_end = data_start
+            .checked_add(comp_size)
+            .ok_or_else(|| PackagingError::InvalidZip("offset overflow".into()))?;
+        if data_end > len {
+            return Err(PackagingError::InvalidZip("truncated file data".into()));
+        }
+        let content = zip_bytes[data_start..data_end].to_vec();
+
+        entries.push((name, content));
+        pos = data_end;
+    }
+
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     Ok(entries)
 }
@@ -170,6 +226,7 @@ pub fn package(save: &NormalizedSave) -> (SaveEntry, Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn canonical_zip_is_deterministic() {
