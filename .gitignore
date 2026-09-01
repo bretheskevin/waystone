@@ -3,7 +3,7 @@
 .DS_Store
 *.swp
 .env
-.ideas
+.idea/
 
 # Serena MCP tooling
 .serena/
