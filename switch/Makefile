@@ -15,6 +15,7 @@ BUILD		:=	build
 SOURCES		:=	source
 DATA		:=	data
 INCLUDES	:=	../ffi/include
+ROMFS		:=	romfs
 
 # WAYSTONE_TARGET selects which cross-compiled libwaystone_ffi.a to link.
 # build.sh overrides it to aarch64-none-elf for the custom-target fallback.
@@ -96,6 +97,10 @@ endif
 
 ifeq ($(strip $(NO_NACP)),)
 	export NROFLAGS += --nacp=$(CURDIR)/$(TARGET).nacp
+endif
+
+ifneq ($(strip $(ROMFS)),)
+	export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
 endif
 
 .PHONY: $(BUILD) clean all

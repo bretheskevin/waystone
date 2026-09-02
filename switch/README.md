@@ -28,17 +28,25 @@ spikes once the foundation is confirmed.
 
 **Compile + link verified. Not yet run on hardware.**
 
-## Plain HTTP security note
+## HTTPS/TLS support
 
-This spike uses **plain HTTP** (`http://`) to a public VPS IP. This means the WebDAV
-basic-auth password is sent **in cleartext** over the internet.
+This build uses **verified HTTPS** (`https://`). TLS is enabled via the libnx TLS
+backend (Switch system SSL service), with the bundled `romfs:/cacert.pem` (Mozilla
+CA bundle, ISRG Root X1 / Let's Encrypt) loaded on top of the system CA store.
 
-The save data itself is unaffected: Waystone's mandatory client-side E2EE means blobs
-are ciphertext before upload, and paths are HMAC-obfuscated.
+`CURLOPT_SSL_VERIFYPEER` and `CURLOPT_SSL_VERIFYHOST` are both enforced — the
+connection is rejected if the server certificate cannot be verified.
 
-**Upgrade path (later, optional):** acquire a domain or use a Tailscale MagicDNS name,
-then the existing Traefik deploy auto-provisions a Let's Encrypt cert, enabling strict
-verified HTTPS. switch-curl supports HTTPS via the libnx TLS backend.
+The save data itself is additionally protected by Waystone's mandatory client-side
+E2EE: blobs are ciphertext before upload, and paths are HMAC-obfuscated.
+
+**Known runtime gotcha:** The Switch clock must be set correctly, or certificate
+date validation will fail. Make sure the console is connected to the internet and
+has synchronized its clock before running.
+
+**Plain HTTP** (`http://`) URLs still work — the TLS options are harmless for
+unencrypted connections — but are not recommended as basic-auth credentials are
+sent in cleartext.
 
 ## Build
 
@@ -75,9 +83,9 @@ docker run --rm -v "$PWD":/work -w /work waystone-switch bash -c "
   cargo +nightly build -Zbuild-std=core,alloc \
     --target aarch64-nintendo-switch-freestanding \
     --release --features switch -p waystone-ffi && \
-  make -C switch 'DEFINES=-DWAYSTONE_WEBDAV_URL=\"http://YOUR_IP:5005\" \
-    -DWAYSTONE_WEBDAV_USER=\"your_user\" \
-    -DWAYSTONE_WEBDAV_PASS=\"your_pass\"'"
+  make -C switch 'DEFINES=-DWAYSTONE_WEBDAV_URL=\\\"https://your.domain\\\" \
+    -DWAYSTONE_WEBDAV_USER=\\\"your_user\\\" \
+    -DWAYSTONE_WEBDAV_PASS=\\\"your_pass\\\"'"
 ```
 
 The `DEFINES` variable feeds into `CFLAGS` (see `switch/Makefile` line 29). The

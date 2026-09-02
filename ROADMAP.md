@@ -77,6 +77,12 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   (NewestWins) → GET blob → `ws_vault_decrypt_blob` → `ws_unzip` → base64-decode → write back to the
   `fsdevMountSaveData` mount + `fsdevCommitDevice`. Added `base64_decode` and a `make_base_path`
   helper shared with push. **Compile+link verified into the `.nro`; not yet run on hardware.**
+- **Switch TLS/HTTPS (compile+link)**: verified HTTPS for the WebDAV client — `curl_apply_tls`
+  (`SSL_VERIFYPEER=1`, `SSL_VERIFYHOST=2`, `CAINFO=romfs:/cacert.pem`) on every handle. switch-curl's
+  libnx TLS backend uses the Switch system CA store (ISRG Root X1 / Let's Encrypt on fw ≥10.1.0),
+  augmented by a Mozilla CA bundle embedded via romfs (`ROMFS := romfs`, `--romfsdir`). CA bundle
+  bytes confirmed present in the `.nro`. **Compile+link verified; not yet run on hardware (clock
+  must be correct for cert date validation).**
 
 **Quality:** 103 tests pass (11 new checkpoint core tests + 3 checkpoint FFI tests), clippy clean.
 
@@ -88,9 +94,9 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
 - **Checkpoint**: https://github.com/FlagBrew/Checkpoint
 
 ## Next
-- **M2 (remaining) — Switch shell: borealis UI + TLS + first on-hardware run**: the two-way save
-  engine (push + pull/restore) is built and compile+link-verified end-to-end. Remaining: borealis
-  UI (game list + config/credential entry, replacing the console driver), HTTPS/TLS for WebDAV, and
+- **M2 (remaining) — Switch shell: borealis UI + first on-hardware run**: the two-way save engine
+  (push + pull/restore) and verified HTTPS are built and compile+link-verified end-to-end.
+  Remaining: borealis UI (game list + config/credential entry, replacing the console driver) and
   running it on Switch hardware for the first time.
 - **M3 — Android shell**: Kotlin/Compose UI, core via **UniFFI** (SAF + OkHttp).
 - **M4 — 3DS shell**: C++/libctru + citro2d.

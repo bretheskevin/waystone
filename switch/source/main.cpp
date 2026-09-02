@@ -15,7 +15,7 @@ extern "C" {
 #include "sync.h"
 
 #ifndef WAYSTONE_WEBDAV_URL
-#define WAYSTONE_WEBDAV_URL "http://CHANGEME:5005"
+#define WAYSTONE_WEBDAV_URL "https://CHANGEME"
 #endif
 #ifndef WAYSTONE_WEBDAV_USER
 #define WAYSTONE_WEBDAV_USER "changeme"
@@ -104,8 +104,10 @@ int main(int argc, char* argv[]) {
 
             // -- Network --
             socketInitializeDefault();
+            romfsInit();
             if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
                 printf("FATAL: curl_global_init failed\n");
+                romfsExit();
                 socketExit();
                 goto cleanup;
             }
@@ -153,6 +155,7 @@ int main(int argc, char* argv[]) {
             }
 
             curl_global_cleanup();
+            romfsExit();
             socketExit();
         }
     }
