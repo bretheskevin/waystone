@@ -65,6 +65,13 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   over plain HTTP, mirroring `desktop/src/webdav.rs` verb shapes. The `.nro` links with
   `-lcurl` resolved alongside `-lwaystone_ffi` and `-lnx`. **Compile+link verified — plain
   HTTP only (no TLS this spike); not yet run on hardware.**
+- **Switch save-engine (push) slice (compile+link)**: the real save-extraction + push pipeline in
+  `switch/source/` — libnx `ns` title enumeration + `account`/`fsdevMountSaveData` save-mount →
+  `RawTreeDto` (base64 + JSON via vendored jsmn) → `ws_jksv_normalize` → `ws_package` →
+  `ws_vault_encrypt_blob` → WebDAV PUT of blob + encrypted heads/history, mirroring
+  `desktop/src/pipeline.rs`. `net.cpp` refactored into reusable
+  `webdav_put/get/exists/mkcol/mkdir_p/propfind` verbs. Console-driven (borealis deferred).
+  **Compile+link verified into the `.nro`; not yet run on hardware.**
 
 **Quality:** 103 tests pass (11 new checkpoint core tests + 3 checkpoint FFI tests), clippy clean.
 
@@ -76,11 +83,11 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
 - **Checkpoint**: https://github.com/FlagBrew/Checkpoint
 
 ## Next
-- **M2 (remaining) — Switch shell UI + first on-hardware run**: C++/libnx + borealis homebrew
-  app in Docker (devkitPro). The FFI foundation is fully de-risked end-to-end (Rust core+ffi
-  are no_std, cross-compile to the Switch target, and link into a real libnx `.nro`). Next:
-  build the real app — save-mount + WiFi→WebDAV — and run it on Switch hardware for the first
-  time.
+- **M2 (remaining) — Switch shell: borealis UI + pull/restore + first on-hardware run**: the
+  save-engine push slice is built and compile+link-verified end-to-end. Remaining: borealis UI
+  (game list + config/credential entry), the pull/restore path (PROPFIND → `ws_decide_pull` →
+  decrypt → `ws_unzip` → `ws_jksv_to_native` → write back → `fsdevCommitDevice`), TLS, and running
+  on Switch hardware for the first time.
 - **M3 — Android shell**: Kotlin/Compose UI, core via **UniFFI** (SAF + OkHttp).
 - **M4 — 3DS shell**: C++/libctru + citro2d.
 
