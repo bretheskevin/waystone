@@ -5,6 +5,17 @@ struct Vault;
 extern "C" {
 #include "waystone.h"
 }
+#include "net.h"
+
+#ifndef WAYSTONE_WEBDAV_URL
+#define WAYSTONE_WEBDAV_URL "http://CHANGEME:5005"
+#endif
+#ifndef WAYSTONE_WEBDAV_USER
+#define WAYSTONE_WEBDAV_USER "changeme"
+#endif
+#ifndef WAYSTONE_WEBDAV_PASS
+#define WAYSTONE_WEBDAV_PASS "changeme"
+#endif
 
 int main(int argc, char* argv[]) {
     consoleInit(NULL);
@@ -64,6 +75,16 @@ int main(int argc, char* argv[]) {
                files ? files : "(null)",
                err ? err : "none");
     }
+
+    printf("\n--- WebDAV net spike ---\n");
+    socketInitializeDefault();
+    {
+        int rc = net_webdav_probe(WAYSTONE_WEBDAV_URL,
+                                   WAYSTONE_WEBDAV_USER,
+                                   WAYSTONE_WEBDAV_PASS);
+        printf("net_webdav_probe returned %d\n", rc);
+    }
+    socketExit();
 
 cleanup:
     ws_string_free(files);

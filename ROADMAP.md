@@ -1,6 +1,6 @@
 # Waystone — Status & Roadmap
 
-_Last updated: 2026-09-01_
+_Last updated: 2026-09-02_
 
 Cross-platform game-save sync (backup **and** cross-device sync) spanning emulator
 saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
@@ -52,6 +52,12 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   → `ws_unzip`); `nx_getrandom` wired to `randomGet`. **Compile+link verified — not yet run
   on hardware.**
 - **All host tests green**: 92 tests pass, golden vectors byte-identical, C header unchanged.
+- **WebDAV networking spike (compile+link)**: switch-curl (`dkp-pacman -S switch-curl`)
+  installs into the `waystone-switch` Docker image. `net_webdav_probe()` in
+  `switch/source/net.cpp` issues PUT, GET, PROPFIND(Depth:1) via libcurl with basic auth
+  over plain HTTP, mirroring `desktop/src/webdav.rs` verb shapes. The `.nro` links with
+  `-lcurl` resolved alongside `-lwaystone_ffi` and `-lnx`. **Compile+link verified — plain
+  HTTP only (no TLS this spike); not yet run on hardware.**
 
 **Quality:** 92 tests pass, clippy clean.
 

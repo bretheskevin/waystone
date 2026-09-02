@@ -8,14 +8,21 @@ RUN apt-get update -y \
 
 # Optional: inject local CA certs (gitignored switch/certs/*.pem) so HTTPS works
 # behind an SSL-inspecting proxy (e.g. Zscaler). No-op when no certs are present.
+# dkp-pacman uses its OWN cert bundle, so the CA must be added there too.
 COPY certs/ /tmp/extra-certs/
 RUN set -eux; \
     for f in /tmp/extra-certs/*.pem /tmp/extra-certs/*.crt; do \
         [ -e "$f" ] || continue; \
         cat "$f" >> /etc/ssl/certs/ca-certificates.crt; \
+        if [ -f /opt/devkitpro/pacman/etc/ssl/certs/cacert.pem ]; then \
+            cat "$f" >> /opt/devkitpro/pacman/etc/ssl/certs/cacert.pem; \
+        fi; \
     done
 ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+
+# switch-curl: libcurl for Switch homebrew (WebDAV HTTP client)
+RUN dkp-pacman -Syu --noconfirm && dkp-pacman -S --noconfirm switch-curl
 
 # Nightly toolchain + rust-src (for -Zbuild-std). Fail loudly on a broken download.
 RUN set -eux; \

@@ -2,26 +2,43 @@
 
 ## What this is
 
-This directory contains the M2 FFI link spike: a minimal devkitPro/libnx C++ homebrew
-(`switch/source/main.cpp`) whose sole purpose is to prove that `libwaystone_ffi.a` links
-cleanly into a real Switch `.nro`. It is a de-risk exercise, not the final app.
+This directory contains M2 spikes for the Switch homebrew:
 
-The final Switch shell (borealis UI + save-mount + WiFi→WebDAV) will live here once
-the link foundation is confirmed. It is.
+1. **FFI link spike** — `libwaystone_ffi.a` (Rust, no_std) links cleanly into a real
+   Switch `.nro`. Full C-ABI round-trip verified (vault init, zip, hash, encrypt,
+   decrypt, unzip).
+
+2. **WebDAV networking spike** — switch-curl (libcurl for Switch) compiles and links
+   into the same `.nro`. The demo issues PUT, GET, and PROPFIND(Depth:1) against a
+   WebDAV server, mirroring the desktop client's verb shapes. Compile+link verified;
+   not yet run on hardware.
+
+The final Switch shell (borealis UI + save-mount + WiFi/WebDAV) will replace these
+spikes once the foundation is confirmed.
 
 ## Verified result
 
-`libwaystone_ffi.a` (Rust, release, `no_std + alloc`, `aarch64-nintendo-switch-freestanding`
-built-in Tier-3 target, `switch` feature) links cleanly into a devkitPro/libnx C++ homebrew
-with no custom-target fallback. Output: `switch/waystone-spike.nro` (~215 KB).
+`waystone-spike.nro` links both `libwaystone_ffi.a` and `libcurl` (switch-curl).
 
-The demo drives a full C-ABI round-trip:
-`ws_vault_init` → `ws_canonical_zip` / `ws_content_hash` → `ws_vault_encrypt_blob`
-→ `ws_vault_decrypt_blob` → `ws_unzip`, printing results to the libnx console.
-`nx_getrandom` is wired to libnx entropy (`randomGet`).
+- FFI: `ws_vault_init` -> `ws_canonical_zip` / `ws_content_hash` ->
+  `ws_vault_encrypt_blob` -> `ws_vault_decrypt_blob` -> `ws_unzip`
+- Net: `net_webdav_probe` issues PUT (upload probe blob) -> GET (download and compare)
+  -> PROPFIND Depth:1 (list collection), printing HTTP status codes and response
+  bodies to the libnx console.
 
-**Compile + link verified. Not yet run on hardware.** Runtime verification on real
-Switch hardware is the remaining open item for M2.
+**Compile + link verified. Not yet run on hardware.**
+
+## Plain HTTP security note
+
+This spike uses **plain HTTP** (`http://`) to a public VPS IP. This means the WebDAV
+basic-auth password is sent **in cleartext** over the internet.
+
+The save data itself is unaffected: Waystone's mandatory client-side E2EE means blobs
+are ciphertext before upload, and paths are HMAC-obfuscated.
+
+**Upgrade path (later, optional):** acquire a domain or use a Tailscale MagicDNS name,
+then the existing Traefik deploy auto-provisions a Let's Encrypt cert, enabling strict
+verified HTTPS. switch-curl supports HTTPS via the libnx TLS backend.
 
 ## Build
 
@@ -31,16 +48,14 @@ Switch hardware is the remaining open item for M2.
 ./switch/build.sh
 ```
 
-This runs the `waystone-switch` Docker image (devkitpro/devkita64 + rustup nightly +
-rust-src), cross-compiles `libwaystone_ffi.a`, and links the `.nro`.
+This runs the `waystone-switch` Docker image (devkitpro/devkita64 + switch-curl +
+rustup nightly + rust-src), cross-compiles `libwaystone_ffi.a`, and links the `.nro`.
 
 ### Manual Docker steps
 
 ```sh
-# Build the Docker image (once)
 docker build -t waystone-switch ./switch
 
-# Cross-compile the Rust FFI lib and link the .nro
 docker run --rm -v "$PWD":/work -w /work waystone-switch bash -c "
   cargo +nightly build -Zbuild-std=core,alloc \
     --target aarch64-nintendo-switch-freestanding \
@@ -50,13 +65,31 @@ docker run --rm -v "$PWD":/work -w /work waystone-switch bash -c "
 
 Output is `switch/waystone-spike.nro`.
 
+### Setting the WebDAV server URL and credentials
+
+The server URL and credentials default to placeholders (`CHANGEME`). To point at a
+real server, override them at build time via the Makefile's `DEFINES` variable:
+
+```sh
+docker run --rm -v "$PWD":/work -w /work waystone-switch bash -c "
+  cargo +nightly build -Zbuild-std=core,alloc \
+    --target aarch64-nintendo-switch-freestanding \
+    --release --features switch -p waystone-ffi && \
+  make -C switch 'DEFINES=-DWAYSTONE_WEBDAV_URL=\"http://YOUR_IP:5005\" \
+    -DWAYSTONE_WEBDAV_USER=\"your_user\" \
+    -DWAYSTONE_WEBDAV_PASS=\"your_pass\"'"
+```
+
+The `DEFINES` variable feeds into `CFLAGS` (see `switch/Makefile` line 29). The
+`#ifndef` guards in `main.cpp` skip the placeholder defaults when these `-D` flags
+are present.
+
+**Never commit real IPs or credentials.** The defaults are safe placeholders.
+
 ## Corporate proxy / Zscaler CA
 
 If your network performs SSL inspection (e.g. Zscaler), the Docker build will fail when
 downloading devkitPro or rustup packages over HTTPS.
 
 Fix: drop your corporate CA certificate(s) (`.pem`) into `switch/certs/`. The Dockerfile
-injects any certs it finds there into the image's trust store. This directory is gitignored
-— do not commit certificates.
-
-Contributors on a normal (non-intercepting) network need no certs and can ignore this.
+injects any certs it finds there into the image's trust store. This directory is gitignored.
