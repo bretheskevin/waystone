@@ -6,6 +6,7 @@ use alloc::string::ToString;
 use alloc::vec::Vec;
 use core::ffi::{CStr, c_char};
 use waystone_core::adapters::Adapter;
+use waystone_core::adapters::checkpoint::CheckpointAdapter;
 use waystone_core::adapters::jksv::JksvAdapter;
 use waystone_core::adapters::mgba::MgbaAdapter;
 use waystone_core::adapters::twilight::TwilightAdapter;
@@ -81,6 +82,26 @@ where
         Ok(owned_c_string(json))
     })
     .unwrap_or(core::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_checkpoint_normalize(
+    system: *const c_char,
+    raw_tree_json: *const c_char,
+) -> *mut c_char {
+    let Some(sys) = parse_system_ptr(system) else {
+        return core::ptr::null_mut();
+    };
+    normalize_via(raw_tree_json, |t| CheckpointAdapter::new(sys).normalize(t))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_checkpoint_to_native(
+    normalized_save_json: *const c_char,
+) -> *mut c_char {
+    to_native_via(normalized_save_json, |s| {
+        CheckpointAdapter::new(s.id.system).to_native(s)
+    })
 }
 
 #[unsafe(no_mangle)]

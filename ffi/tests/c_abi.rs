@@ -807,3 +807,72 @@ fn twilight_null_input_returns_null() {
     let result = unsafe { ws_twilight_to_native(std::ptr::null()) };
     assert!(result.is_null());
 }
+
+#[test]
+fn checkpoint_normalize_through_ffi() {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as B64;
+
+    let raw_tree = serde_json::json!({
+        "files": [{
+            "path": "0x01006A800016E000 Super Smash Bros. Ultimate/20230715-143052/data.bin",
+            "data_b64": B64.encode([0xDEu8, 0xAD])
+        }]
+    });
+    let system = CString::new("switch").unwrap();
+    let json_str = CString::new(serde_json::to_string(&raw_tree).unwrap()).unwrap();
+    let result_ptr = unsafe { ws_checkpoint_normalize(system.as_ptr(), json_str.as_ptr()) };
+    assert!(!result_ptr.is_null());
+
+    let result_json = unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap();
+    let saves: Vec<NormalizedSaveDto> = serde_json::from_str(result_json).unwrap();
+    assert_eq!(saves.len(), 1);
+    assert_eq!(saves[0].id.game.key, "01006A800016E000");
+    assert_eq!(saves[0].id.game.display_name, "Super Smash Bros. Ultimate");
+    assert_eq!(saves[0].id.slot, "20230715-143052");
+    assert_eq!(saves[0].files[0].path, "data.bin");
+
+    unsafe { ws_string_free(result_ptr) };
+}
+
+#[test]
+fn checkpoint_to_native_through_ffi() {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD as B64;
+
+    let raw_tree = serde_json::json!({
+        "files": [{
+            "path": "0x01006A800016E000 Super Smash Bros. Ultimate/20230715-143052/data.bin",
+            "data_b64": B64.encode([0xDEu8, 0xAD])
+        }]
+    });
+    let system = CString::new("switch").unwrap();
+    let json_str = CString::new(serde_json::to_string(&raw_tree).unwrap()).unwrap();
+    let norm_ptr = unsafe { ws_checkpoint_normalize(system.as_ptr(), json_str.as_ptr()) };
+    let norm_json = unsafe { CStr::from_ptr(norm_ptr) }.to_str().unwrap();
+    let saves: Vec<serde_json::Value> = serde_json::from_str(norm_json).unwrap();
+    let save_cstr = CString::new(serde_json::to_string(&saves[0]).unwrap()).unwrap();
+
+    let native_ptr = unsafe { ws_checkpoint_to_native(save_cstr.as_ptr()) };
+    assert!(!native_ptr.is_null());
+    let native_json = unsafe { CStr::from_ptr(native_ptr) }.to_str().unwrap();
+    let tree: RawTreeDto = serde_json::from_str(native_json).unwrap();
+    assert_eq!(tree.files.len(), 1);
+    assert!(tree.files[0].path.contains("01006A800016E000"));
+    assert!(tree.files[0].path.contains("data.bin"));
+
+    unsafe {
+        ws_string_free(norm_ptr);
+        ws_string_free(native_ptr);
+    }
+}
+
+#[test]
+fn checkpoint_null_input_returns_null() {
+    let _guard = ERROR_TEST_LOCK.lock().expect("ERROR_TEST_LOCK poisoned");
+    let system = CString::new("switch").unwrap();
+    let result = unsafe { ws_checkpoint_normalize(system.as_ptr(), std::ptr::null()) };
+    assert!(result.is_null());
+    let result = unsafe { ws_checkpoint_to_native(std::ptr::null()) };
+    assert!(result.is_null());
+}

@@ -15,6 +15,10 @@ typedef struct WsBuf {
 
 typedef Vault WsVault;
 
+ char *ws_checkpoint_normalize(const char *system, const char *raw_tree_json);
+
+ char *ws_checkpoint_to_native(const char *normalized_save_json);
+
  char *ws_jksv_normalize(const char *system, const char *raw_tree_json);
 
  char *ws_jksv_to_native(const char *normalized_save_json);

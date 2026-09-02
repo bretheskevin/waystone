@@ -228,8 +228,18 @@ v1 adapters:
   serial/CRC (or weak filename), kind = battery/savestate.
 - **twilight** — TWiLight++/nds-bootstrap `.sav`, `.pub`/`.prv` (DSiWare), and
   numbered slot saves; system = nds, kind = battery. Core + FFI complete.
+- **checkpoint** ([FlagBrew/Checkpoint](https://github.com/FlagBrew/Checkpoint)) —
+  Switch folder: `0x<16 UPPERCASE hex titleID> <Name>`; 3DS folder: `0x<5 UPPERCASE hex uniqueID> <Name>`;
+  backup subfolder = slot (default `YYYYMMDD-HHMMSS`, or any user-chosen name);
+  system = switch/3ds, key = titleID hex (Strong) or folder name (Weak), kind = native.
+  Core + FFI complete.
 
-Later: **checkpoint** (different layout).
+### Adapter source references
+- **JKSV**: https://github.com/J-D-K/JKSV
+- **mGBA**: https://github.com/mgba-emu/mgba
+- **TWiLight Menu++**: https://github.com/DS-Homebrew/TWiLightMenu
+- **nds-bootstrap**: https://github.com/DS-Homebrew/nds-bootstrap
+- **Checkpoint**: https://github.com/FlagBrew/Checkpoint
 
 ---
 

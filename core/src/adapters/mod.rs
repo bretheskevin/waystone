@@ -1,5 +1,6 @@
 use alloc::vec::Vec;
 
+pub mod checkpoint;
 pub mod jksv;
 pub mod mgba;
 pub mod twilight;

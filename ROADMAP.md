@@ -12,8 +12,9 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
 - **`core/`** (Rust, no-I/O engine): normalized model, byte-exact **deterministic ZIP**
   + sha256, mandatory client-side **E2EE** (Argon2id + XChaCha20-Poly1305 + HKDF +
   HMAC metadata obfuscation; master key zeroized on drop), **three-way conflict**
-  resolution, and **jksv + mgba + twilight (NDS) adapters**. Golden vectors lock cross-platform
-  determinism.
+  resolution, and **jksv + mgba + twilight (NDS) + checkpoint (Switch/3DS) adapters**
+  ([FlagBrew/Checkpoint](https://github.com/FlagBrew/Checkpoint)). Golden vectors lock
+  cross-platform determinism.
 - **`desktop/`** CLI: config, WebDAV client, sync pipeline, `init/push/pull/status`.
 - **`deploy/`**: `dufs` WebDAV backend for Dokploy (Traefik auto-HTTPS).
 
@@ -35,6 +36,10 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   round-trip, crypto round-trips, adapter round-trips, null-safety.
 - **twilight (NDS) FFI**: `ws_twilight_normalize` + `ws_twilight_to_native` exposed
   over the C ABI; `ffi/include/waystone.h` regenerated and header-freshness test green.
+- **checkpoint (Switch/3DS) adapter**: `ws_checkpoint_normalize` + `ws_checkpoint_to_native`
+  exposed over the C ABI; Switch `0x<16-hex> <Name>` and 3DS `0x<5-hex> <Name>` folder
+  layouts parsed; title ID extracted as convergence key (Strong) with no-prefix fallback (Weak).
+  Source: [FlagBrew/Checkpoint](https://github.com/FlagBrew/Checkpoint).
 
 ### Milestone 2 (de-risk) — no_std + Switch target + libnx link spike
 - **`core/` + `ffi/` are genuinely `no_std + alloc`**: removed `zip`/`rand`/`thiserror`
@@ -61,7 +66,14 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   `-lcurl` resolved alongside `-lwaystone_ffi` and `-lnx`. **Compile+link verified — plain
   HTTP only (no TLS this spike); not yet run on hardware.**
 
-**Quality:** 92 tests pass, clippy clean.
+**Quality:** 103 tests pass (11 new checkpoint core tests + 3 checkpoint FFI tests), clippy clean.
+
+### Adapter source references
+- **JKSV**: https://github.com/J-D-K/JKSV
+- **mGBA**: https://github.com/mgba-emu/mgba
+- **TWiLight Menu++**: https://github.com/DS-Homebrew/TWiLightMenu
+- **nds-bootstrap**: https://github.com/DS-Homebrew/nds-bootstrap
+- **Checkpoint**: https://github.com/FlagBrew/Checkpoint
 
 ## Deferred (minor, non-blocking)
 - Zeroize the WebDAV password on drop (the Vault master key already is).
