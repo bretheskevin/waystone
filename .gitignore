@@ -7,3 +7,17 @@
 
 # Serena MCP tooling
 .serena/
+# Local corporate CA certs for the Docker build (not committed)
+switch/certs/*.pem
+switch/certs/*.crt
+
+# Switch homebrew build artifacts
+switch/build/
+switch/*.nro
+switch/*.elf
+switch/*.nacp
+switch/*.map
+switch/build.log
+
+# Generated knowledge-graph cache
+graphify-out/

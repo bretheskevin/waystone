@@ -34,7 +34,7 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
 - **Integration tests**: golden-vector parity through the JSON/base64 FFI
   round-trip, crypto round-trips, adapter round-trips, null-safety.
 
-### Milestone 2 (de-risk) — no_std + Switch target cross-compilation
+### Milestone 2 (de-risk) — no_std + Switch target + libnx link spike
 - **`core/` + `ffi/` are genuinely `no_std + alloc`**: removed `zip`/`rand`/`thiserror`
   dependencies; STORED-zip reader inline; `getrandom` for entropy; manual error impls;
   `spin::Mutex` global error slot; `catch_unwind` removed (moot under `panic=abort`).
@@ -43,6 +43,14 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   `target/aarch64-nintendo-switch-freestanding/debug/libwaystone_ffi.a` (32 MB).
   Unresolved symbols (`memalign`, `free`, `nx_getrandom`) are intentional — they
   resolve at the C++ libnx link step.
+- **libnx link spike verified (compile+link)**: `libwaystone_ffi.a` (release,
+  `aarch64-nintendo-switch-freestanding`, no custom-target fallback needed) links cleanly
+  into a devkitPro/libnx C++ homebrew. Output: `switch/waystone-spike.nro` (~215 KB), built
+  via `switch/build.sh` inside the `waystone-switch` Docker image (devkitpro/devkita64 +
+  rustup nightly + rust-src). The demo drives a full C-ABI round-trip (`ws_vault_init` →
+  `ws_canonical_zip`/`ws_content_hash` → `ws_vault_encrypt_blob` → `ws_vault_decrypt_blob`
+  → `ws_unzip`); `nx_getrandom` wired to `randomGet`. **Compile+link verified — not yet run
+  on hardware.**
 - **All host tests green**: 92 tests pass, golden vectors byte-identical, C header unchanged.
 
 **Quality:** 92 tests pass, clippy clean.
@@ -52,9 +60,11 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
 - Remove or wire up the dead-code `read_remote_head` scaffolding in `desktop/src/pipeline.rs`.
 
 ## Next
-- **M2 (remaining) — Switch shell UI**: C++/libnx + borealis homebrew app in Docker
-  (devkitPro). Link `libwaystone_ffi.a` via the Makefile, provide `memalign`/`free`/
-  `nx_getrandom` symbols from newlib/libnx. Build the `.nro`.
+- **M2 (remaining) — Switch shell UI + first on-hardware run**: C++/libnx + borealis homebrew
+  app in Docker (devkitPro). The FFI foundation is fully de-risked end-to-end (Rust core+ffi
+  are no_std, cross-compile to the Switch target, and link into a real libnx `.nro`). Next:
+  build the real app — save-mount + WiFi→WebDAV — and run it on Switch hardware for the first
+  time.
 - **M3 — Android shell**: Kotlin/Compose UI, core via **UniFFI** (SAF + OkHttp).
 - **M4 — 3DS shell**: C++/libctru + citro2d.
 
