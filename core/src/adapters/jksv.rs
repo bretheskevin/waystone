@@ -1,8 +1,8 @@
-use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::adapters::Adapter;
+use crate::adapters::folder_layout::{folder_layout_to_native, normalize_folder_layout};
 use crate::model::*;
 
 pub struct JksvAdapter {
@@ -35,73 +35,14 @@ impl Adapter for JksvAdapter {
     }
 
     fn normalize(&self, raw: &RawTree) -> Vec<NormalizedSave> {
-        type SaveFiles = Vec<(String, Vec<u8>)>;
-        let mut groups: BTreeMap<(String, String), SaveFiles> = BTreeMap::new();
-
-        for file in &raw.files {
-            let parts: Vec<&str> = file.path.splitn(3, '/').collect();
-            if parts.len() < 3 {
-                continue;
-            }
-            let title_dir = parts[0].to_string();
-            let slot_dir = parts[1].to_string();
-            let rel_path = parts[2].to_string();
-            groups
-                .entry((title_dir, slot_dir))
-                .or_default()
-                .push((rel_path, file.content.clone()));
-        }
-
-        groups
-            .into_iter()
-            .map(|((title_dir, slot), files)| {
-                let (display_name, title_id) = Self::parse_title_dir(&title_dir);
-                let key = title_id.clone().unwrap_or_else(|| display_name.clone());
-                let confidence = if title_id.is_some() {
-                    Confidence::Strong
-                } else {
-                    Confidence::Weak
-                };
-
-                NormalizedSave {
-                    id: SaveId {
-                        source: "jksv".into(),
-                        system: self.system,
-                        game: GameRef {
-                            key: key.clone(),
-                            display_name,
-                            confidence,
-                            title_id,
-                            serial: None,
-                            rom_crc: None,
-                        },
-                        slot: slot.clone(),
-                        kind: SaveKind::Native,
-                    },
-                    group_key: build_group_key(self.system, &key, &slot),
-                    portable: true,
-                    mtime: String::new(),
-                    files,
-                }
-            })
-            .collect()
+        normalize_folder_layout(raw, self.system, "jksv", Self::parse_title_dir)
     }
 
     fn to_native(&self, save: &NormalizedSave) -> RawTree {
-        let title_dir = match &save.id.game.title_id {
-            Some(tid) => format!("{} - {}", save.id.game.display_name, tid),
-            None => save.id.game.display_name.clone(),
-        };
-        RawTree {
-            files: save
-                .files
-                .iter()
-                .map(|(rel, content)| RawFile {
-                    path: format!("{}/{}/{}", title_dir, save.id.slot, rel),
-                    content: content.clone(),
-                })
-                .collect(),
-        }
+        folder_layout_to_native(save, |name, tid| match tid {
+            Some(tid) => format!("{} - {}", name, tid),
+            None => name.to_string(),
+        })
     }
 }
 
