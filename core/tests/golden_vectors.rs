@@ -1,6 +1,7 @@
 use waystone_core::adapters::Adapter;
 use waystone_core::adapters::jksv::JksvAdapter;
 use waystone_core::adapters::mgba::MgbaAdapter;
+use waystone_core::adapters::twilight::TwilightAdapter;
 use waystone_core::crypto::Vault;
 use waystone_core::model::*;
 use waystone_core::packaging::{canonical_zip, content_hash, package, unzip};
@@ -109,6 +110,54 @@ fn golden_mgba_round_trip() {
     assert_eq!(entry.content.hash, hash);
 
     let (entry2, zip_bytes2) = package(&normalized[0]);
+    assert_eq!(zip_bytes, zip_bytes2);
+    assert_eq!(entry.content.hash, entry2.content.hash);
+}
+
+/// Vector 6: twilight adapter round-trip (battery + slot + DSiWare)
+#[test]
+fn golden_twilight_round_trip() {
+    let raw = RawTree {
+        files: vec![
+            RawFile {
+                path: "saves/Diamond.sav".into(),
+                content: vec![0xFF; 64],
+            },
+            RawFile {
+                path: "saves/Diamond.nds.2.sav".into(),
+                content: vec![0xBB; 32],
+            },
+            RawFile {
+                path: "saves/DSiApp.pub".into(),
+                content: vec![0x01; 16],
+            },
+            RawFile {
+                path: "saves/DSiApp.prv".into(),
+                content: vec![0x02; 16],
+            },
+        ],
+    };
+
+    let adapter = TwilightAdapter::new();
+    let normalized = adapter.normalize(&raw);
+    assert_eq!(normalized.len(), 3);
+
+    let battery = normalized.iter().find(|s| s.id.slot == "battery").unwrap();
+    assert_eq!(battery.id.game.key, "Diamond");
+    assert_eq!(battery.id.kind, SaveKind::Battery);
+
+    let slot = normalized.iter().find(|s| s.id.slot == "slot-2").unwrap();
+    assert_eq!(slot.id.game.key, "Diamond");
+
+    let dsiware = normalized.iter().find(|s| s.id.slot == "dsiware").unwrap();
+    assert_eq!(dsiware.id.game.key, "DSiApp");
+    assert_eq!(dsiware.files.len(), 2);
+
+    let (entry, zip_bytes) = package(battery);
+    let hash = content_hash(&zip_bytes);
+    assert_eq!(entry.content.hash, hash);
+
+    let (entry2, zip_bytes2) = package(battery);
     assert_eq!(zip_bytes, zip_bytes2);
     assert_eq!(entry.content.hash, entry2.content.hash);
 }
