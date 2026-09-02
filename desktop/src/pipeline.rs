@@ -68,23 +68,6 @@ impl<'a> SyncPipeline<'a> {
         Ok(zip_bytes)
     }
 
-    #[allow(dead_code)]
-    pub async fn read_remote_head(
-        &self,
-        save: &NormalizedSave,
-        device_id: &str,
-    ) -> Result<Option<DeviceHead>> {
-        let base_path = self.remote_path(save);
-        let head_path = format!("{}/heads/{}.json", base_path, device_id);
-
-        let Some(encrypted) = self.dav.get(&head_path).await? else {
-            return Ok(None);
-        };
-        let json = self.vault.decrypt_heads(&encrypted)?;
-        let head: DeviceHead = serde_json::from_slice(&json)?;
-        Ok(Some(head))
-    }
-
     /// PROPFIND the heads/ collection and return all device heads found there.
     pub async fn read_all_remote_heads(&self, save: &NormalizedSave) -> Result<Vec<DeviceHead>> {
         let base_path = self.remote_path(save);

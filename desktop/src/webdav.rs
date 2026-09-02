@@ -1,5 +1,6 @@
 use anyhow::{Context, Result, bail};
 use reqwest::Client;
+use zeroize::Zeroize;
 
 pub struct WebDavClient {
     client: Client,
@@ -115,6 +116,12 @@ impl WebDavClient {
         }
         let text = resp.text().await?;
         Ok(parse_propfind_hrefs(&text))
+    }
+}
+
+impl Drop for WebDavClient {
+    fn drop(&mut self) {
+        self.password.zeroize();
     }
 }
 

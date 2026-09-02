@@ -75,10 +75,6 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
 - **nds-bootstrap**: https://github.com/DS-Homebrew/nds-bootstrap
 - **Checkpoint**: https://github.com/FlagBrew/Checkpoint
 
-## Deferred (minor, non-blocking)
-- Zeroize the WebDAV password on drop (the Vault master key already is).
-- Remove or wire up the dead-code `read_remote_head` scaffolding in `desktop/src/pipeline.rs`.
-
 ## Next
 - **M2 (remaining) — Switch shell UI + first on-hardware run**: C++/libnx + borealis homebrew
   app in Docker (devkitPro). The FFI foundation is fully de-risked end-to-end (Rust core+ffi
