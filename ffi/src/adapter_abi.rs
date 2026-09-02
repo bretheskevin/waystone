@@ -8,6 +8,7 @@ use core::ffi::{CStr, c_char};
 use waystone_core::adapters::Adapter;
 use waystone_core::adapters::jksv::JksvAdapter;
 use waystone_core::adapters::mgba::MgbaAdapter;
+use waystone_core::adapters::twilight::TwilightAdapter;
 use waystone_core::model::SystemId;
 
 fn parse_system_id(s: &str) -> Result<SystemId, Box<dyn core::error::Error>> {
@@ -113,6 +114,56 @@ pub unsafe extern "C" fn ws_mgba_to_native(normalized_save_json: *const c_char) 
             .to_core()
             .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)?;
         let adapter = MgbaAdapter::new(save.id.system);
+        let tree = adapter.to_native(&save);
+        let result = RawTreeDto::from_core(&tree);
+        let json = serde_json::to_string(&result)?;
+        Ok(owned_c_string(json))
+    })
+    .unwrap_or(core::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_twilight_normalize(raw_tree_json: *const c_char) -> *mut c_char {
+    if raw_tree_json.is_null() {
+        set_last_error("null pointer argument");
+        return core::ptr::null_mut();
+    }
+    catch_and_set_error(|| {
+        // SAFETY: `raw_tree_json` is non-null (checked above) and must point to a
+        // valid NUL-terminated C string per the FFI contract.
+        let json_str = unsafe { CStr::from_ptr(raw_tree_json) }
+            .to_str()
+            .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)?;
+        let dto: RawTreeDto = serde_json::from_str(json_str)?;
+        let tree = dto
+            .to_core()
+            .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)?;
+        let adapter = TwilightAdapter::new();
+        let saves = adapter.normalize(&tree);
+        let dtos: Vec<NormalizedSaveDto> = saves.iter().map(NormalizedSaveDto::from_core).collect();
+        let json = serde_json::to_string(&dtos)?;
+        Ok(owned_c_string(json))
+    })
+    .unwrap_or(core::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_twilight_to_native(normalized_save_json: *const c_char) -> *mut c_char {
+    if normalized_save_json.is_null() {
+        set_last_error("null pointer argument");
+        return core::ptr::null_mut();
+    }
+    catch_and_set_error(|| {
+        // SAFETY: `normalized_save_json` is non-null (checked above) and must point
+        // to a valid NUL-terminated C string per the FFI contract.
+        let json_str = unsafe { CStr::from_ptr(normalized_save_json) }
+            .to_str()
+            .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)?;
+        let dto: NormalizedSaveDto = serde_json::from_str(json_str)?;
+        let save = dto
+            .to_core()
+            .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)?;
+        let adapter = TwilightAdapter::new();
         let tree = adapter.to_native(&save);
         let result = RawTreeDto::from_core(&tree);
         let json = serde_json::to_string(&result)?;

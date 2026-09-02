@@ -749,3 +749,61 @@ fn adapter_null_input_returns_null() {
     let result = unsafe { ws_jksv_normalize(system.as_ptr(), std::ptr::null()) };
     assert!(result.is_null());
 }
+
+#[test]
+fn twilight_normalize_through_ffi() {
+    let raw_tree = serde_json::json!({
+        "files": [{
+            "path": "saves/Metroid.sav",
+            "data_b64": "//8="
+        }]
+    });
+    let json_str = CString::new(serde_json::to_string(&raw_tree).unwrap()).unwrap();
+    let result_ptr = unsafe { ws_twilight_normalize(json_str.as_ptr()) };
+    assert!(!result_ptr.is_null());
+
+    let result_json = unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap();
+    let saves: Vec<NormalizedSaveDto> = serde_json::from_str(result_json).unwrap();
+    assert_eq!(saves.len(), 1);
+    assert_eq!(saves[0].id.game.key, "Metroid");
+    assert_eq!(saves[0].id.slot, "battery");
+    assert_eq!(saves[0].files[0].path, "Metroid.sav");
+
+    unsafe { ws_string_free(result_ptr) };
+}
+
+#[test]
+fn twilight_to_native_through_ffi() {
+    let raw_tree = serde_json::json!({
+        "files": [{
+            "path": "saves/Metroid.sav",
+            "data_b64": "//8="
+        }]
+    });
+    let json_str = CString::new(serde_json::to_string(&raw_tree).unwrap()).unwrap();
+    let norm_ptr = unsafe { ws_twilight_normalize(json_str.as_ptr()) };
+    let norm_json = unsafe { CStr::from_ptr(norm_ptr) }.to_str().unwrap();
+    let saves: Vec<serde_json::Value> = serde_json::from_str(norm_json).unwrap();
+    let save_cstr = CString::new(serde_json::to_string(&saves[0]).unwrap()).unwrap();
+
+    let native_ptr = unsafe { ws_twilight_to_native(save_cstr.as_ptr()) };
+    assert!(!native_ptr.is_null());
+    let native_json = unsafe { CStr::from_ptr(native_ptr) }.to_str().unwrap();
+    let tree: RawTreeDto = serde_json::from_str(native_json).unwrap();
+    assert_eq!(tree.files.len(), 1);
+    assert_eq!(tree.files[0].path, "saves/Metroid.sav");
+
+    unsafe {
+        ws_string_free(norm_ptr);
+        ws_string_free(native_ptr);
+    }
+}
+
+#[test]
+fn twilight_null_input_returns_null() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
+    let result = unsafe { ws_twilight_normalize(std::ptr::null()) };
+    assert!(result.is_null());
+    let result = unsafe { ws_twilight_to_native(std::ptr::null()) };
+    assert!(result.is_null());
+}

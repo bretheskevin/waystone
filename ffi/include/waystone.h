@@ -23,6 +23,10 @@ typedef Vault WsVault;
 
  char *ws_mgba_to_native(const char *normalized_save_json);
 
+ char *ws_twilight_normalize(const char *raw_tree_json);
+
+ char *ws_twilight_to_native(const char *normalized_save_json);
+
 /**
  * # Safety
  * `buf.ptr` must have been allocated by `WsBuf::from_vec` or be null.

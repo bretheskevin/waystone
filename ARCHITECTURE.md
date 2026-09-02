@@ -226,8 +226,10 @@ v1 adapters:
   system = switch/3ds, key = titleId, kind = native.
 - **mgba** — one `.sav` battery per ROM; system = gba/gbc/gb, key = ROM
   serial/CRC (or weak filename), kind = battery/savestate.
+- **twilight** — TWiLight++/nds-bootstrap `.sav`, `.pub`/`.prv` (DSiWare), and
+  numbered slot saves; system = nds, kind = battery. Core + FFI complete.
 
-Later: **twilight** (TWiLight++/nds-bootstrap), **checkpoint** (different layout).
+Later: **checkpoint** (different layout).
 
 ---
 

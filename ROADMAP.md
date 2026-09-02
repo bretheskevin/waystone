@@ -12,7 +12,7 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
 - **`core/`** (Rust, no-I/O engine): normalized model, byte-exact **deterministic ZIP**
   + sha256, mandatory client-side **E2EE** (Argon2id + XChaCha20-Poly1305 + HKDF +
   HMAC metadata obfuscation; master key zeroized on drop), **three-way conflict**
-  resolution, and **jksv + mgba adapters**. Golden vectors lock cross-platform
+  resolution, and **jksv + mgba + twilight (NDS) adapters**. Golden vectors lock cross-platform
   determinism.
 - **`desktop/`** CLI: config, WebDAV client, sync pipeline, `init/push/pull/status`.
 - **`deploy/`**: `dufs` WebDAV backend for Dokploy (Traefik auto-HTTPS).
@@ -33,6 +33,8 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   test — the C++ shell `#include`s this directly.
 - **Integration tests**: golden-vector parity through the JSON/base64 FFI
   round-trip, crypto round-trips, adapter round-trips, null-safety.
+- **twilight (NDS) FFI**: `ws_twilight_normalize` + `ws_twilight_to_native` exposed
+  over the C ABI; `ffi/include/waystone.h` regenerated and header-freshness test green.
 
 ### Milestone 2 (de-risk) — no_std + Switch target + libnx link spike
 - **`core/` + `ffi/` are genuinely `no_std + alloc`**: removed `zip`/`rand`/`thiserror`
