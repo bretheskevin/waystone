@@ -36,4 +36,12 @@ std::string current_utc_time();
 // Returns empty string on failure.
 std::string get_device_id();
 
+// Restore save files from a flat FileEntryDto JSON array produced by ws_unzip.
+// files_json: JSON array of {"path":"...","data_b64":"..."} — paths are
+//   save-relative (written directly under save:/).
+// Mounts save data (read-write), writes each file, commits with
+// fsdevCommitDevice (REQUIRED or writes are lost), then unmounts.
+// Returns 0 on success, -1 if mount fails.
+int write_save_files(u64 title_id, AccountUid uid, const char* files_json);
+
 #endif

@@ -72,6 +72,11 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   `desktop/src/pipeline.rs`. `net.cpp` refactored into reusable
   `webdav_put/get/exists/mkcol/mkdir_p/propfind` verbs. Console-driven (borealis deferred).
   **Compile+link verified into the `.nro`; not yet run on hardware.**
+- **Switch pull/restore slice (compile+link)**: the reverse (two-way sync) path in `switch/source/`,
+  mirroring desktop `do_pull_save` — PROPFIND `heads/` → `ws_vault_decrypt_heads` → `ws_decide_pull`
+  (NewestWins) → GET blob → `ws_vault_decrypt_blob` → `ws_unzip` → base64-decode → write back to the
+  `fsdevMountSaveData` mount + `fsdevCommitDevice`. Added `base64_decode` and a `make_base_path`
+  helper shared with push. **Compile+link verified into the `.nro`; not yet run on hardware.**
 
 **Quality:** 103 tests pass (11 new checkpoint core tests + 3 checkpoint FFI tests), clippy clean.
 
@@ -83,11 +88,10 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
 - **Checkpoint**: https://github.com/FlagBrew/Checkpoint
 
 ## Next
-- **M2 (remaining) — Switch shell: borealis UI + pull/restore + first on-hardware run**: the
-  save-engine push slice is built and compile+link-verified end-to-end. Remaining: borealis UI
-  (game list + config/credential entry), the pull/restore path (PROPFIND → `ws_decide_pull` →
-  decrypt → `ws_unzip` → `ws_jksv_to_native` → write back → `fsdevCommitDevice`), TLS, and running
-  on Switch hardware for the first time.
+- **M2 (remaining) — Switch shell: borealis UI + TLS + first on-hardware run**: the two-way save
+  engine (push + pull/restore) is built and compile+link-verified end-to-end. Remaining: borealis
+  UI (game list + config/credential entry, replacing the console driver), HTTPS/TLS for WebDAV, and
+  running it on Switch hardware for the first time.
 - **M3 — Android shell**: Kotlin/Compose UI, core via **UniFFI** (SAF + OkHttp).
 - **M4 — 3DS shell**: C++/libctru + citro2d.
 

@@ -8,6 +8,7 @@
 #include <ctime>
 #include <dirent.h>
 #include <sys/stat.h>
+#include <sys/types.h>
 #include <switch.h>
 
 std::vector<TitleInfo> list_titles() {
@@ -201,4 +202,78 @@ std::string get_device_id() {
     }
 
     return std::string(hex, 32);
+}
+
+int write_save_files(u64 title_id, AccountUid uid, const char* files_json) {
+    Result rc = fsdevMountSaveData("save", title_id, uid);
+    if (R_FAILED(rc)) {
+        printf("  write_save_files: fsdevMountSaveData failed: 0x%X\n", rc);
+        return -1;
+    }
+
+    std::vector<std::string> entries = json_split_array(files_json);
+    int ret = 0;
+
+    for (const auto& entry_str : entries) {
+        std::string path     = json_get_string(entry_str.c_str(), "path");
+        std::string data_b64 = json_get_string(entry_str.c_str(), "data_b64");
+
+        if (path.empty()) {
+            printf("  write_save_files: missing path in file entry\n");
+            ret = -1;
+            continue;
+        }
+
+        // Decode file content (empty data_b64 → 0-byte file, which is valid).
+        std::vector<uint8_t> bytes;
+        if (!data_b64.empty()) {
+            bytes = base64_decode(data_b64);
+            if (bytes.empty()) {
+                // base64_decode returned empty for non-empty input → invalid encoding.
+                printf("  write_save_files: base64_decode failed for %s\n", path.c_str());
+                ret = -1;
+                continue;
+            }
+        }
+
+        // Create parent directories under save:/ (split path on '/').
+        size_t last_slash = path.rfind('/');
+        if (last_slash != std::string::npos && last_slash > 0) {
+            std::string dir_part = path.substr(0, last_slash);
+            std::string accumulated = "save:";
+            size_t start = 0;
+            while (start < dir_part.size()) {
+                size_t end = dir_part.find('/', start);
+                if (end == std::string::npos) end = dir_part.size();
+                if (end > start) {
+                    accumulated += "/" + dir_part.substr(start, end - start);
+                    mkdir(accumulated.c_str(), 0755); // ignore if already exists
+                }
+                start = end + 1;
+            }
+        }
+
+        std::string full_path = "save:/" + path;
+        FILE* f = fopen(full_path.c_str(), "wb");
+        if (!f) {
+            printf("  write_save_files: fopen failed for %s\n", path.c_str());
+            ret = -1;
+            continue;
+        }
+        if (!bytes.empty()) {
+            size_t written = fwrite(bytes.data(), 1, bytes.size(), f);
+            if (written != bytes.size()) {
+                printf("  write_save_files: fwrite short write for %s\n", path.c_str());
+                fclose(f);
+                ret = -1;
+                continue;
+            }
+        }
+        fclose(f);
+    }
+
+    // REQUIRED: flush pending writes to the underlying FsFileSystem.
+    fsdevCommitDevice("save");
+    fsdevUnmountDevice("save");
+    return ret;
 }

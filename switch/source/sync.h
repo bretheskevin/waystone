@@ -22,4 +22,17 @@ int push_title(const WsVault* vault,
                const char* device_id,
                const WebDavCfg& dav);
 
+// Pull/restore saves for a single title from the WebDAV backend.
+// Mirrors desktop do_pull_save pipeline, per normalized local save:
+//   1. Package local save -> local_hash + group_key -> base_path
+//   2. PROPFIND {base_path}/heads -> decrypt each .json -> heads array
+//   3. ws_decide_pull -> determine pull_hash (or skip)
+//   4. If pull: GET+decrypt blob -> ws_unzip -> write_save_files
+// Returns number of saves restored (0 = nothing to do, -1 = error).
+int pull_title(const WsVault* vault,
+               const TitleInfo& title,
+               AccountUid uid,
+               const char* device_id,
+               const WebDavCfg& dav);
+
 #endif

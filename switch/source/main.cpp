@@ -33,7 +33,7 @@ int main(int argc, char* argv[]) {
     PadState pad;
     padInitializeDefault(&pad);
 
-    printf("=== Waystone Switch Push Engine ===\n\n");
+    printf("=== Waystone Switch Save Engine ===\n\n");
 
     // -- Vault init --
     WsBuf recovery = {nullptr, 0};
@@ -122,6 +122,7 @@ int main(int argc, char* argv[]) {
             printf("Found %zu titles\n\n", titles.size());
 
             // -- Push each title --
+            printf("--- Push phase ---\n");
             int total_pushed = 0;
             for (size_t i = 0; i < titles.size(); i++) {
                 printf("[%zu/%zu] %s (TID %016lX)\n",
@@ -131,8 +132,25 @@ int main(int argc, char* argv[]) {
                                     device_id.c_str(), dav);
                 if (rc > 0) total_pushed += rc;
             }
+            printf("\n=== Push done: %d saves pushed ===\n", total_pushed);
 
-            printf("\n=== Done: %d saves pushed ===\n", total_pushed);
+            // -- Pull first title (restore demo) --
+            // Pulls the first title only to keep this a thin console driver.
+            // A future UI pass will iterate all titles like push does.
+            printf("\n--- Pull phase (first title) ---\n");
+            if (!titles.empty()) {
+                printf("[1/%zu] %s (TID %016lX)\n",
+                       titles.size(),
+                       titles[0].name.c_str(), titles[0].title_id);
+                int prc = pull_title(vault, titles[0], uid,
+                                     device_id.c_str(), dav);
+                if (prc >= 0)
+                    printf("Pull result: %d save(s) restored.\n", prc);
+                else
+                    printf("Pull failed (see messages above).\n");
+            } else {
+                printf("No titles found — nothing to pull.\n");
+            }
 
             curl_global_cleanup();
             socketExit();
