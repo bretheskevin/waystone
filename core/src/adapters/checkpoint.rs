@@ -60,6 +60,7 @@ impl Adapter for CheckpointAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::jksv::JksvAdapter;
     use crate::model::{Confidence, RawFile, RawTree, SaveKind, SystemId};
 
     fn make_checkpoint_tree() -> RawTree {
@@ -96,7 +97,7 @@ mod tests {
         let saves = adapter.normalize(&make_checkpoint_tree());
         let smash = saves
             .iter()
-            .find(|s| s.id.game.key == "01006A800016E000")
+            .find(|s| s.id.game.key == "supersmashbrosultimate")
             .unwrap();
         assert_eq!(smash.id.game.display_name, "Super Smash Bros. Ultimate");
         assert_eq!(smash.id.game.title_id, Some("01006A800016E000".into()));
@@ -109,10 +110,13 @@ mod tests {
         let saves = adapter.normalize(&make_checkpoint_tree());
         let smash = saves
             .iter()
-            .find(|s| s.id.game.key == "01006A800016E000")
+            .find(|s| s.id.game.key == "supersmashbrosultimate")
             .unwrap();
         assert_eq!(smash.id.slot, "20230715-143052");
-        assert_eq!(smash.group_key, "switch/01006A800016E000/20230715-143052");
+        assert_eq!(
+            smash.group_key,
+            "switch/supersmashbrosultimate/20230715-143052"
+        );
     }
 
     #[test]
@@ -121,7 +125,7 @@ mod tests {
         let saves = adapter.normalize(&make_checkpoint_tree());
         let smash = saves
             .iter()
-            .find(|s| s.id.game.key == "01006A800016E000")
+            .find(|s| s.id.game.key == "supersmashbrosultimate")
             .unwrap();
         assert_eq!(smash.files.len(), 2);
     }
@@ -147,12 +151,12 @@ mod tests {
         let saves = adapter.normalize(&raw);
         assert_eq!(saves.len(), 1);
         let save = &saves[0];
-        assert_eq!(save.id.game.key, "0055D");
+        assert_eq!(save.id.game.key, "pokemonx");
         assert_eq!(save.id.game.display_name, "Pokemon X");
         assert_eq!(save.id.game.title_id, Some("0055D".into()));
         assert_eq!(save.id.game.confidence, Confidence::Strong);
         assert_eq!(save.id.system, SystemId::ThreeDS);
-        assert_eq!(save.group_key, "3ds/0055D/20230715-143052");
+        assert_eq!(save.group_key, "3ds/pokemonx/20230715-143052");
     }
 
     #[test]
@@ -167,7 +171,7 @@ mod tests {
         let saves = adapter.normalize(&raw);
         assert_eq!(saves.len(), 1);
         let save = &saves[0];
-        assert_eq!(save.id.game.key, "My Custom Backup");
+        assert_eq!(save.id.game.key, "mycustombackup");
         assert_eq!(save.id.game.display_name, "My Custom Backup");
         assert!(save.id.game.title_id.is_none());
         assert_eq!(save.id.game.confidence, Confidence::Weak);
@@ -210,7 +214,7 @@ mod tests {
         let save = &saves[0];
         assert_eq!(save.id.game.title_id, Some("DEADBEEF".into()));
         assert_eq!(save.id.game.display_name, "DEADBEEF");
-        assert_eq!(save.id.game.key, "DEADBEEF");
+        assert_eq!(save.id.game.key, "deadbeef");
     }
 
     #[test]
@@ -228,6 +232,7 @@ mod tests {
         assert!(save.id.game.title_id.is_none());
         assert_eq!(save.id.game.confidence, Confidence::Weak);
         assert_eq!(save.id.game.display_name, "0x Something");
+        assert_eq!(save.id.game.key, "0xsomething");
     }
 
     #[test]
@@ -253,7 +258,7 @@ mod tests {
         let saves = adapter.normalize(&make_checkpoint_tree());
         let smash = saves
             .iter()
-            .find(|s| s.id.game.key == "01006A800016E000")
+            .find(|s| s.id.game.key == "supersmashbrosultimate")
             .unwrap();
         let native = adapter.to_native(smash);
         assert_eq!(native.files.len(), 2);
@@ -286,5 +291,29 @@ mod tests {
             "0x0055D Pokemon X/20230715-143052/main"
         );
         assert_eq!(native.files[0].content, vec![0xFF; 64]);
+    }
+
+    #[test]
+    fn jksv_checkpoint_same_game_converge() {
+        let jksv_raw = RawTree {
+            files: vec![RawFile {
+                path: "Super Mario Odyssey/slot1/save.dat".into(),
+                content: vec![1, 2, 3],
+            }],
+        };
+        let checkpoint_raw = RawTree {
+            files: vec![RawFile {
+                path: "0x0100000000010000 Super Mario Odyssey/slot1/save.dat".into(),
+                content: vec![1, 2, 3],
+            }],
+        };
+
+        let jksv_saves = JksvAdapter::new(SystemId::Switch).normalize(&jksv_raw);
+        let checkpoint_saves = CheckpointAdapter::new(SystemId::Switch).normalize(&checkpoint_raw);
+
+        assert_eq!(jksv_saves.len(), 1);
+        assert_eq!(checkpoint_saves.len(), 1);
+        assert_eq!(jksv_saves[0].id.game.key, checkpoint_saves[0].id.game.key);
+        assert_eq!(jksv_saves[0].group_key, checkpoint_saves[0].group_key);
     }
 }

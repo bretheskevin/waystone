@@ -18,8 +18,7 @@ impl Default for TwilightAdapter {
 type DsiWarePair = (Option<(String, Vec<u8>)>, Option<(String, Vec<u8>)>);
 
 enum FileKind {
-    DsiWarePub,
-    DsiWarePrv,
+    DsiWare { slot: String, is_pub: bool },
     Slot(String),
     Battery,
 }
@@ -33,31 +32,85 @@ impl TwilightAdapter {
 
     fn parse_filename(path: &str) -> Option<(String, FileKind)> {
         let filename = path.rsplit('/').next().unwrap_or(path);
+        let bytes = filename.as_bytes();
 
+        // DSiWare numbered: .puN / .prN (digit 1-9)
+        if bytes.len() >= 4 {
+            let last = bytes[bytes.len() - 1];
+            if (b'1'..=b'9').contains(&last) {
+                let without_digit = &filename[..filename.len() - 1];
+                if let Some(stem) = without_digit.strip_suffix(".pu")
+                    && !stem.is_empty()
+                {
+                    let n = char::from(last).to_string();
+                    return Some((
+                        stem.to_string(),
+                        FileKind::DsiWare {
+                            slot: format!("dsiware-{}", n),
+                            is_pub: true,
+                        },
+                    ));
+                }
+                if let Some(stem) = without_digit.strip_suffix(".pr")
+                    && !stem.is_empty()
+                {
+                    let n = char::from(last).to_string();
+                    return Some((
+                        stem.to_string(),
+                        FileKind::DsiWare {
+                            slot: format!("dsiware-{}", n),
+                            is_pub: false,
+                        },
+                    ));
+                }
+            }
+        }
+
+        // DSiWare base: .pub / .prv
         if let Some(stem) = filename.strip_suffix(".pub")
             && !stem.is_empty()
         {
-            return Some((stem.to_string(), FileKind::DsiWarePub));
+            return Some((
+                stem.to_string(),
+                FileKind::DsiWare {
+                    slot: "dsiware".to_string(),
+                    is_pub: true,
+                },
+            ));
         }
         if let Some(stem) = filename.strip_suffix(".prv")
             && !stem.is_empty()
         {
-            return Some((stem.to_string(), FileKind::DsiWarePrv));
+            return Some((
+                stem.to_string(),
+                FileKind::DsiWare {
+                    slot: "dsiware".to_string(),
+                    is_pub: false,
+                },
+            ));
         }
 
-        if let Some(rest) = filename.strip_suffix(".sav") {
-            if let Some(nds_pos) = rest.rfind(".nds.") {
-                let after_nds = &rest[nds_pos + 5..];
-                if !after_nds.is_empty() && after_nds.chars().all(|c| c.is_ascii_digit()) {
-                    let stem = &rest[..nds_pos];
-                    if !stem.is_empty() {
-                        return Some((stem.to_string(), FileKind::Slot(after_nds.to_string())));
-                    }
+        // Numbered slot: .savN (digit 1-9)
+        if bytes.len() >= 5 {
+            let last = bytes[bytes.len() - 1];
+            if (b'1'..=b'9').contains(&last) {
+                let without_digit = &filename[..filename.len() - 1];
+                if let Some(stem) = without_digit.strip_suffix(".sav")
+                    && !stem.is_empty()
+                {
+                    return Some((
+                        stem.to_string(),
+                        FileKind::Slot(char::from(last).to_string()),
+                    ));
                 }
             }
-            if !rest.is_empty() {
-                return Some((rest.to_string(), FileKind::Battery));
-            }
+        }
+
+        // Battery: .sav
+        if let Some(stem) = filename.strip_suffix(".sav")
+            && !stem.is_empty()
+        {
+            return Some((stem.to_string(), FileKind::Battery));
         }
 
         None
@@ -103,7 +156,7 @@ impl Adapter for TwilightAdapter {
 
     fn normalize(&self, raw: &RawTree) -> Vec<NormalizedSave> {
         let mut saves = Vec::new();
-        let mut dsiware: BTreeMap<String, DsiWarePair> = BTreeMap::new();
+        let mut dsiware: BTreeMap<(String, String), DsiWarePair> = BTreeMap::new();
 
         for file in &raw.files {
             let Some((stem, file_kind)) = Self::parse_filename(&file.path) else {
@@ -112,17 +165,17 @@ impl Adapter for TwilightAdapter {
             let filename = file.path.rsplit('/').next().unwrap_or(&file.path);
 
             match file_kind {
-                FileKind::DsiWarePub => {
-                    let entry = dsiware.entry(stem).or_insert((None, None));
-                    entry.0 = Some((filename.to_string(), file.content.clone()));
-                }
-                FileKind::DsiWarePrv => {
-                    let entry = dsiware.entry(stem).or_insert((None, None));
-                    entry.1 = Some((filename.to_string(), file.content.clone()));
+                FileKind::DsiWare { slot, is_pub } => {
+                    let entry = dsiware.entry((stem, slot)).or_insert((None, None));
+                    if is_pub {
+                        entry.0 = Some((filename.to_string(), file.content.clone()));
+                    } else {
+                        entry.1 = Some((filename.to_string(), file.content.clone()));
+                    }
                 }
                 FileKind::Slot(n) => {
                     let slot = format!("slot-{}", n);
-                    let rel_name = format!("{}.nds.{}.sav", stem, n);
+                    let rel_name = format!("{}.sav{}", stem, n);
                     saves.push(self.make_save(stem, slot, vec![(rel_name, file.content.clone())]));
                 }
                 FileKind::Battery => {
@@ -136,7 +189,7 @@ impl Adapter for TwilightAdapter {
             }
         }
 
-        for (stem, (pub_opt, prv_opt)) in dsiware {
+        for ((stem, slot), (pub_opt, prv_opt)) in dsiware {
             let mut files = Vec::new();
             if let Some(f) = pub_opt {
                 files.push(f);
@@ -145,7 +198,7 @@ impl Adapter for TwilightAdapter {
                 files.push(f);
             }
             if !files.is_empty() {
-                saves.push(self.make_save(stem, "dsiware".to_string(), files));
+                saves.push(self.make_save(stem, slot, files));
             }
         }
 
@@ -156,7 +209,7 @@ impl Adapter for TwilightAdapter {
         let name = &save.id.game.display_name;
         let slot = &save.id.slot;
 
-        if slot == "dsiware" {
+        if slot.starts_with("dsiware") {
             return RawTree {
                 files: save
                     .files
@@ -172,7 +225,7 @@ impl Adapter for TwilightAdapter {
         let native_name = if slot == "battery" {
             format!("{}.sav", name)
         } else if let Some(n) = slot.strip_prefix("slot-") {
-            format!("{}.nds.{}.sav", name, n)
+            format!("{}.sav{}", name, n)
         } else {
             format!("{}.sav", name)
         };
@@ -203,7 +256,7 @@ mod tests {
                     content: vec![0xFF; 512],
                 },
                 RawFile {
-                    path: "saves/Pokemon Diamond.nds.1.sav".into(),
+                    path: "saves/Pokemon Diamond.sav1".into(),
                     content: vec![0xAA; 256],
                 },
                 RawFile {
@@ -251,7 +304,7 @@ mod tests {
         assert_eq!(slot.id.system, SystemId::Nds);
         assert!(slot.portable);
         assert_eq!(slot.files.len(), 1);
-        assert_eq!(slot.files[0].0, "Pokemon Diamond.nds.1.sav");
+        assert_eq!(slot.files[0].0, "Pokemon Diamond.sav1");
         assert_eq!(slot.files[0].1, vec![0xAA; 256]);
     }
 
@@ -347,7 +400,7 @@ mod tests {
             .unwrap();
         let native = adapter.to_native(slot);
         assert_eq!(native.files.len(), 1);
-        assert_eq!(native.files[0].path, "saves/Pokemon Diamond.nds.1.sav");
+        assert_eq!(native.files[0].path, "saves/Pokemon Diamond.sav1");
         assert_eq!(native.files[0].content, vec![0xAA; 256]);
     }
 
@@ -390,5 +443,53 @@ mod tests {
         assert!(prv_file.is_some(), "native must include .prv");
         assert_eq!(pub_file.unwrap().content, vec![0x01; 64]);
         assert_eq!(prv_file.unwrap().content, vec![0x02; 128]);
+    }
+
+    #[test]
+    fn twilight_normalizes_dsiware_numbered_slot() {
+        let adapter = TwilightAdapter::new();
+        let raw = RawTree {
+            files: vec![
+                RawFile {
+                    path: "saves/App.pu1".into(),
+                    content: vec![0x01; 8],
+                },
+                RawFile {
+                    path: "saves/App.pr1".into(),
+                    content: vec![0x02; 8],
+                },
+            ],
+        };
+        let saves = adapter.normalize(&raw);
+        assert_eq!(saves.len(), 1);
+        let s = &saves[0];
+        assert_eq!(s.id.slot, "dsiware-1");
+        assert_eq!(s.id.game.key, "App");
+        assert_eq!(s.files.len(), 2);
+        assert!(s.files.iter().any(|(name, _)| name == "App.pu1"));
+        assert!(s.files.iter().any(|(name, _)| name == "App.pr1"));
+    }
+
+    #[test]
+    fn twilight_to_native_round_trips_dsiware_numbered() {
+        let adapter = TwilightAdapter::new();
+        let raw = RawTree {
+            files: vec![
+                RawFile {
+                    path: "saves/App.pu1".into(),
+                    content: vec![0x01; 8],
+                },
+                RawFile {
+                    path: "saves/App.pr1".into(),
+                    content: vec![0x02; 8],
+                },
+            ],
+        };
+        let saves = adapter.normalize(&raw);
+        let s = saves.iter().find(|s| s.id.slot == "dsiware-1").unwrap();
+        let native = adapter.to_native(s);
+        assert_eq!(native.files.len(), 2);
+        assert!(native.files.iter().any(|f| f.path == "saves/App.pu1"));
+        assert!(native.files.iter().any(|f| f.path == "saves/App.pr1"));
     }
 }

@@ -117,6 +117,13 @@ pub fn build_group_key(system: SystemId, game_key: &str, slot: &str) -> String {
     format!("{}/{}/{}", system, game_key, slot)
 }
 
+pub fn normalize_game_name(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +214,13 @@ mod tests {
         };
         assert_eq!(tree.files.len(), 2);
         assert_eq!(tree.files[0].content, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn normalize_game_name_strips_non_alphanumeric() {
+        assert_eq!(
+            normalize_game_name("Super Smash Bros. Ultimate\u{2122}"),
+            "supersmashbrosultimate"
+        );
     }
 }

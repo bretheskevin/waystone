@@ -18,6 +18,15 @@ impl MgbaAdapter {
         if let Some(stem) = filename.strip_suffix(".sav") {
             return Some((stem.to_string(), FileKind::Battery));
         }
+        if let Some(pos) = filename.rfind(".sa") {
+            let after = &filename[pos + 3..];
+            if !after.is_empty() && after.chars().all(|c| c.is_ascii_digit()) {
+                let stem = &filename[..pos];
+                if !stem.is_empty() {
+                    return Some((stem.to_string(), FileKind::BatteryPlayer(after.to_string())));
+                }
+            }
+        }
         if let Some(pos) = filename.rfind(".ss") {
             let after = &filename[pos + 3..];
             if !after.is_empty() && after.chars().all(|c| c.is_ascii_digit()) {
@@ -31,6 +40,7 @@ impl MgbaAdapter {
 
 enum FileKind {
     Battery,
+    BatteryPlayer(String),
     SaveState(String),
 }
 
@@ -58,7 +68,13 @@ impl Adapter for MgbaAdapter {
                     true,
                     "sav".to_string(),
                 ),
-                FileKind::SaveState(n) => {
+                FileKind::BatteryPlayer(ref n) => (
+                    SaveKind::Battery,
+                    format!("battery-{}", n),
+                    true,
+                    format!("sa{}", n),
+                ),
+                FileKind::SaveState(ref n) => {
                     let ext = format!("ss{}", n);
                     (SaveKind::SaveState, format!("state-{}", n), false, ext)
                 }
@@ -91,7 +107,13 @@ impl Adapter for MgbaAdapter {
 
     fn to_native(&self, save: &NormalizedSave) -> RawTree {
         let ext = match save.id.kind {
-            SaveKind::Battery => "sav".to_string(),
+            SaveKind::Battery => {
+                if let Some(n) = save.id.slot.strip_prefix("battery-") {
+                    format!("sa{}", n)
+                } else {
+                    "sav".to_string()
+                }
+            }
             SaveKind::SaveState => {
                 let n = save.id.slot.strip_prefix("state-").unwrap_or("0");
                 format!("ss{}", n)
@@ -203,5 +225,40 @@ mod tests {
         assert_eq!(native.files.len(), 1);
         assert_eq!(native.files[0].path, "Pokemon Emerald.sav");
         assert_eq!(native.files[0].content, vec![0xFF; 128]);
+    }
+
+    #[test]
+    fn mgba_normalizes_battery_player() {
+        let adapter = MgbaAdapter::new(SystemId::Gba);
+        let raw = RawTree {
+            files: vec![RawFile {
+                path: "Game.sa2".into(),
+                content: vec![0xAB; 32],
+            }],
+        };
+        let saves = adapter.normalize(&raw);
+        assert_eq!(saves.len(), 1);
+        let save = &saves[0];
+        assert_eq!(save.id.kind, SaveKind::Battery);
+        assert_eq!(save.id.slot, "battery-2");
+        assert!(save.portable);
+        assert_eq!(save.id.game.key, "Game");
+    }
+
+    #[test]
+    fn mgba_to_native_round_trips_battery_player() {
+        let adapter = MgbaAdapter::new(SystemId::Gba);
+        let raw = RawTree {
+            files: vec![RawFile {
+                path: "Game.sa2".into(),
+                content: vec![0xAB; 32],
+            }],
+        };
+        let saves = adapter.normalize(&raw);
+        let save = &saves[0];
+        let native = adapter.to_native(save);
+        assert_eq!(native.files.len(), 1);
+        assert_eq!(native.files[0].path, "Game.sa2");
+        assert_eq!(native.files[0].content, vec![0xAB; 32]);
     }
 }

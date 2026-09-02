@@ -31,7 +31,7 @@ pub(crate) fn normalize_folder_layout(
         .into_iter()
         .map(|((title_dir, slot), files)| {
             let (display_name, title_id) = parse_title_dir(&title_dir);
-            let key = title_id.clone().unwrap_or_else(|| display_name.clone());
+            let key = normalize_game_name(&display_name);
             let confidence = if title_id.is_some() {
                 Confidence::Strong
             } else {

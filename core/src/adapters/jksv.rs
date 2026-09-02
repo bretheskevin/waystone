@@ -15,10 +15,8 @@ impl JksvAdapter {
     }
 
     fn parse_title_dir(dir_name: &str) -> (String, Option<String>) {
-        if let Some(idx) = dir_name.rfind(" - ") {
-            let name = dir_name[..idx].to_string();
-            let tid = dir_name[idx + 3..].to_string();
-            (name, Some(tid))
+        if dir_name.len() == 16 && dir_name.chars().all(|c| c.is_ascii_hexdigit()) {
+            (dir_name.to_string(), Some(dir_name.to_ascii_uppercase()))
         } else {
             (dir_name.to_string(), None)
         }
@@ -39,10 +37,7 @@ impl Adapter for JksvAdapter {
     }
 
     fn to_native(&self, save: &NormalizedSave) -> RawTree {
-        folder_layout_to_native(save, |name, tid| match tid {
-            Some(tid) => format!("{} - {}", name, tid),
-            None => name.to_string(),
-        })
+        folder_layout_to_native(save, |name, _tid| name.to_string())
     }
 }
 
@@ -55,15 +50,15 @@ mod tests {
         RawTree {
             files: vec![
                 RawFile {
-                    path: "Super Mario Odyssey - 0100000000010000/main/save.dat".into(),
+                    path: "Super Mario Odyssey/main/save.dat".into(),
                     content: vec![0xDE, 0xAD],
                 },
                 RawFile {
-                    path: "Super Mario Odyssey - 0100000000010000/main/extra.bin".into(),
+                    path: "Super Mario Odyssey/main/extra.bin".into(),
                     content: vec![0xBE, 0xEF],
                 },
                 RawFile {
-                    path: "Zelda BOTW - 01007EF00011E000/slot1/game_data.sav".into(),
+                    path: "0100000000010000/slot1/game_data.sav".into(),
                     content: vec![1, 2, 3],
                 },
             ],
@@ -78,16 +73,29 @@ mod tests {
     }
 
     #[test]
-    fn jksv_extracts_title_id() {
+    fn jksv_name_only_is_weak_confidence() {
         let adapter = JksvAdapter::new(SystemId::Switch);
         let saves = adapter.normalize(&make_jksv_tree());
         let smo = saves
             .iter()
-            .find(|s| s.id.game.key == "0100000000010000")
+            .find(|s| s.id.game.key == "supermarioodyssey")
             .unwrap();
         assert_eq!(smo.id.game.display_name, "Super Mario Odyssey");
-        assert_eq!(smo.id.game.title_id, Some("0100000000010000".into()));
-        assert_eq!(smo.id.game.confidence, Confidence::Strong);
+        assert_eq!(smo.id.game.title_id, None);
+        assert_eq!(smo.id.game.confidence, Confidence::Weak);
+    }
+
+    #[test]
+    fn jksv_hex_dir_extracts_title_id() {
+        let adapter = JksvAdapter::new(SystemId::Switch);
+        let saves = adapter.normalize(&make_jksv_tree());
+        let hex_save = saves
+            .iter()
+            .find(|s| s.id.game.key == "0100000000010000")
+            .unwrap();
+        assert_eq!(hex_save.id.game.display_name, "0100000000010000");
+        assert_eq!(hex_save.id.game.title_id, Some("0100000000010000".into()));
+        assert_eq!(hex_save.id.game.confidence, Confidence::Strong);
     }
 
     #[test]
@@ -96,11 +104,11 @@ mod tests {
         let saves = adapter.normalize(&make_jksv_tree());
         let smo = saves
             .iter()
-            .find(|s| s.id.game.key == "0100000000010000")
+            .find(|s| s.id.game.key == "supermarioodyssey")
             .unwrap();
         assert_eq!(smo.id.slot, "main");
         assert_eq!(smo.files.len(), 2);
-        assert_eq!(smo.group_key, "switch/0100000000010000/main");
+        assert_eq!(smo.group_key, "switch/supermarioodyssey/main");
     }
 
     #[test]
@@ -118,7 +126,7 @@ mod tests {
         let saves = adapter.normalize(&make_jksv_tree());
         let smo = saves
             .iter()
-            .find(|s| s.id.game.key == "0100000000010000")
+            .find(|s| s.id.game.key == "supermarioodyssey")
             .unwrap();
         let native = adapter.to_native(smo);
         assert_eq!(native.files.len(), 2);
@@ -127,6 +135,7 @@ mod tests {
             .iter()
             .find(|f| f.path.ends_with("save.dat"))
             .unwrap();
+        assert_eq!(save_dat.path, "Super Mario Odyssey/main/save.dat");
         assert_eq!(save_dat.content, vec![0xDE, 0xAD]);
     }
 }

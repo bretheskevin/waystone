@@ -657,7 +657,7 @@ fn jksv_normalize_through_ffi() {
     let result_json = unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap();
     let saves: Vec<NormalizedSaveDto> = serde_json::from_str(result_json).unwrap();
     assert_eq!(saves.len(), 1);
-    assert_eq!(saves[0].id.game.key, "0100AAAA00001000");
+    assert_eq!(saves[0].id.game.key, "testgame0100aaaa00001000");
     assert_eq!(saves[0].files[0].path, "data.sav");
 
     unsafe { ws_string_free(result_ptr) };
@@ -827,7 +827,7 @@ fn checkpoint_normalize_through_ffi() {
     let result_json = unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap();
     let saves: Vec<NormalizedSaveDto> = serde_json::from_str(result_json).unwrap();
     assert_eq!(saves.len(), 1);
-    assert_eq!(saves[0].id.game.key, "01006A800016E000");
+    assert_eq!(saves[0].id.game.key, "supersmashbrosultimate");
     assert_eq!(saves[0].id.game.display_name, "Super Smash Bros. Ultimate");
     assert_eq!(saves[0].id.slot, "20230715-143052");
     assert_eq!(saves[0].files[0].path, "data.bin");

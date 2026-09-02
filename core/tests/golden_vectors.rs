@@ -124,7 +124,7 @@ fn golden_twilight_round_trip() {
                 content: vec![0xFF; 64],
             },
             RawFile {
-                path: "saves/Diamond.nds.2.sav".into(),
+                path: "saves/Diamond.sav2".into(),
                 content: vec![0xBB; 32],
             },
             RawFile {
