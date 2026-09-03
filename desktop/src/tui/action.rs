@@ -1,7 +1,9 @@
 use crate::config::{SyncTarget, WaystoneConfig};
 use crate::helpers;
 use crate::pipeline::SyncPipeline;
-use crate::tui::app::{ActionResult, ConflictEntry, HeadInfo, Msg, SessionCreds, TargetStatus};
+use crate::tui::app::{
+    ActionResult, ConflictEntry, HeadInfo, Msg, SessionCreds, SetupOk, TargetStatus,
+};
 use crate::webdav::WebDavClient;
 use anyhow::Result;
 use std::sync::Arc;
@@ -427,6 +429,89 @@ async fn try_unlock(
         .ok_or_else(|| anyhow::anyhow!("no keys.json on server -- run `waystone init` first"))?;
     let vault = Vault::unlock_with_passphrase(passphrase, &keys_data)?;
     Ok((vault, dav))
+}
+
+pub async fn run_setup(
+    server_url: String,
+    username: String,
+    mut password: String,
+    mut passphrase: String,
+    tx: mpsc::Sender<Msg>,
+) {
+    let result = try_setup(&server_url, &username, &password, &passphrase).await;
+    passphrase.zeroize();
+    password.zeroize();
+
+    match result {
+        Ok((vault, dav, recovery_key)) => {
+            let _ = tx
+                .send(Msg::SetupResult(Ok(SetupOk {
+                    recovery_key,
+                    vault: Arc::new(vault),
+                    dav: Arc::new(dav),
+                })))
+                .await;
+        }
+        Err(e) => {
+            let _ = tx.send(Msg::SetupResult(Err(e.to_string()))).await;
+        }
+    }
+}
+
+async fn try_setup(
+    server_url: &str,
+    username: &str,
+    password: &str,
+    passphrase: &str,
+) -> Result<(Vault, WebDavClient, String)> {
+    let user = if username.is_empty() {
+        None
+    } else {
+        Some(username.to_owned())
+    };
+    let pass = if password.is_empty() {
+        None
+    } else {
+        Some(password.to_owned())
+    };
+    let dav = WebDavClient::new(server_url, user, pass);
+
+    // Overwrite guard: refuse if keys.json already exists
+    let existing = dav.get("/keys.json").await?;
+    if existing.is_some() {
+        anyhow::bail!("A vault already exists on this server. Use Unlock instead of Setup.");
+    }
+
+    let (vault, recovery_key) = Vault::init(passphrase)?;
+    let keys_json = vault.keys_json()?;
+
+    dav.mkdir_p("/").await?;
+    dav.put("/keys.json", keys_json).await?;
+
+    Ok((vault, dav, recovery_key))
+}
+
+pub fn save_recovery_file(key: &str, device_id: &str) -> Result<std::path::PathBuf> {
+    let dir = crate::config::WaystoneConfig::config_dir()?;
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(format!("recovery-{}.txt", device_id));
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)?;
+        file.write_all(key.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&path, key)?;
+    }
+    Ok(path)
 }
 
 #[cfg(test)]

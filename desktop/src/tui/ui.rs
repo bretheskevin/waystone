@@ -12,6 +12,8 @@ pub fn ui(frame: &mut Frame, app: &App) {
     match app.screen {
         Screen::Dashboard => render_dashboard(frame, app),
         Screen::Conflicts => render_conflicts_screen(frame, app),
+        Screen::Setup => render_setup(frame, app),
+        Screen::Settings => render_settings(frame, app),
     }
 
     match &app.overlay {
@@ -20,6 +22,7 @@ pub fn ui(frame: &mut Frame, app: &App) {
         Overlay::Unlock { .. } => render_unlock_overlay(frame, app),
         Overlay::TargetForm { .. } => render_form_overlay(frame, app),
         Overlay::Confirm { message, .. } => render_confirm_overlay(frame, message),
+        Overlay::RecoveryKey { .. } => render_recovery_key_overlay(frame, app),
     }
 }
 
@@ -274,6 +277,7 @@ fn render_help_overlay(frame: &mut Frame) {
         Line::raw("P              Pull selected"),
         Line::raw("r              Refresh status"),
         Line::raw("C              Conflicts inbox"),
+        Line::raw("S              Settings"),
         Line::raw("a              Add target"),
         Line::raw("e              Edit target"),
         Line::raw("d              Delete target"),
@@ -457,5 +461,249 @@ fn render_confirm_overlay(frame: &mut Frame, message: &str) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::WARNING))
         .title(" Confirm ");
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+fn render_setup(frame: &mut Frame, app: &App) {
+    let Some(ref form) = app.setup else {
+        return;
+    };
+    let area = frame.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(2),
+        ])
+        .split(area);
+
+    let header = Line::from(vec![
+        Span::styled(
+            " waystone ",
+            Style::default()
+                .fg(theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Setup",
+            Style::default()
+                .fg(theme::SYNC)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" | First-run vault initialization"),
+    ]);
+    frame.render_widget(Paragraph::new(header), chunks[0]);
+
+    let fields = [
+        ("Server URL", form.server_url.as_str(), false),
+        ("Username", form.username.as_str(), false),
+        ("WebDAV Password", form.password.as_str(), true),
+        ("Passphrase", form.passphrase.as_str(), true),
+        ("Confirm Passphrase", form.confirm.as_str(), true),
+    ];
+
+    let mut lines = vec![
+        Line::styled(
+            "Initialize Vault",
+            Style::default()
+                .fg(theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+    ];
+    for (i, (label, value, masked)) in fields.iter().enumerate() {
+        let display: String = if *masked {
+            if value.is_empty() {
+                " ".into()
+            } else {
+                "\u{2022}".repeat(value.len())
+            }
+        } else if value.is_empty() {
+            " ".into()
+        } else {
+            (*value).to_string()
+        };
+        let style = if form.field == i {
+            Style::default()
+                .fg(theme::NEUTRAL_50)
+                .add_modifier(Modifier::UNDERLINED)
+        } else {
+            Style::default().fg(theme::NEUTRAL_400)
+        };
+        lines.push(Line::from(vec![
+            Span::raw(format!("{}: ", label)),
+            Span::styled(display, style),
+        ]));
+    }
+
+    if form.busy {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            "Initializing vault...",
+            Style::default().fg(theme::SYNC),
+        ));
+    }
+
+    if let Some(ref err) = form.error {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            err.as_str(),
+            Style::default().fg(theme::ERROR),
+        ));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::PRIMARY))
+        .title(" Setup ");
+    frame.render_widget(Paragraph::new(lines).block(block), chunks[1]);
+
+    let footer = Line::from(vec![Span::styled(
+        "Enter=submit  Esc=quit  Tab=next field",
+        Style::default().fg(theme::NEUTRAL_500),
+    )]);
+    frame.render_widget(Paragraph::new(footer), chunks[2]);
+}
+
+fn render_settings(frame: &mut Frame, app: &App) {
+    let Some(ref form) = app.settings else {
+        return;
+    };
+    let area = frame.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(10),
+            Constraint::Length(2),
+        ])
+        .split(area);
+
+    let header = Line::from(vec![
+        Span::styled(
+            " waystone ",
+            Style::default()
+                .fg(theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Settings",
+            Style::default()
+                .fg(theme::SYNC)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    frame.render_widget(Paragraph::new(header), chunks[0]);
+
+    let policy_label = match form.conflict_policy {
+        waystone_core::conflict::ConflictPolicy::NewestWins => "newest-wins",
+        waystone_core::conflict::ConflictPolicy::Prompt => "prompt",
+    };
+
+    let fields: Vec<(&str, String, bool)> = vec![
+        ("Server URL", form.server_url.clone(), false),
+        (
+            "Conflict Policy",
+            format!("< {} > (space to toggle)", policy_label),
+            false,
+        ),
+        ("Username", form.username.clone(), false),
+        ("Device ID", app.device_id.clone(), true),
+    ];
+
+    let mut lines = vec![
+        Line::styled(
+            "Settings",
+            Style::default()
+                .fg(theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+    ];
+
+    for (i, (label, value, read_only)) in fields.iter().enumerate() {
+        let style = if *read_only {
+            Style::default().fg(theme::NEUTRAL_500)
+        } else if form.field == i {
+            Style::default()
+                .fg(theme::NEUTRAL_50)
+                .add_modifier(Modifier::UNDERLINED)
+        } else {
+            Style::default().fg(theme::NEUTRAL_400)
+        };
+        let prefix = if *read_only { "(read-only) " } else { "" };
+        lines.push(Line::from(vec![
+            Span::raw(format!("{}{}: ", prefix, label)),
+            Span::styled(
+                if value.is_empty() {
+                    " "
+                } else {
+                    value.as_str()
+                },
+                style,
+            ),
+        ]));
+    }
+
+    if let Some(ref err) = form.error {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(
+            err.as_str(),
+            Style::default().fg(theme::ERROR),
+        ));
+    }
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::PRIMARY))
+        .title(" Settings ");
+    frame.render_widget(Paragraph::new(lines).block(block), chunks[1]);
+
+    let footer = Line::from(vec![Span::styled(
+        "Enter=save  Esc=discard  Tab=next field  Space=toggle (on policy)",
+        Style::default().fg(theme::NEUTRAL_500),
+    )]);
+    frame.render_widget(Paragraph::new(footer), chunks[2]);
+}
+
+fn render_recovery_key_overlay(frame: &mut Frame, app: &App) {
+    let Overlay::RecoveryKey { ref key } = app.overlay else {
+        return;
+    };
+    let area = centered_rect(60, 12, frame.area());
+    frame.render_widget(Clear, area);
+
+    let lines = vec![
+        Line::styled(
+            "Recovery Key",
+            Style::default()
+                .fg(theme::WARNING)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+        Line::styled(
+            "Save this key somewhere safe. It CANNOT be shown again.",
+            Style::default().fg(theme::ERROR),
+        ),
+        Line::raw(""),
+        Line::styled(
+            key.as_str(),
+            Style::default()
+                .fg(theme::NEUTRAL_50)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+        Line::raw(""),
+        Line::styled(
+            "[s] Save to file   [Enter] I saved it",
+            Style::default().fg(theme::NEUTRAL_400),
+        ),
+    ];
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::WARNING))
+        .title(" Recovery Key ");
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }

@@ -12,6 +12,8 @@ const MAX_LOG_LINES: usize = 200;
 pub enum Screen {
     Dashboard,
     Conflicts,
+    Setup,
+    Settings,
 }
 
 pub enum Cmd {
@@ -34,6 +36,17 @@ pub enum Cmd {
         save_key: String,
         remote_hash: String,
     },
+    RunSetup {
+        server_url: String,
+        username: String,
+        password: String,
+        passphrase: String,
+    },
+    SaveRecoveryFile {
+        key: String,
+        device_id: String,
+    },
+    SaveSettings(WaystoneConfig),
 }
 
 impl std::fmt::Debug for Cmd {
@@ -66,6 +79,21 @@ impl std::fmt::Debug for Cmd {
                 .debug_struct("ResolveKeepRemote")
                 .field("target_id", target_id)
                 .field("save_key", save_key)
+                .finish(),
+            Self::RunSetup { server_url, .. } => f
+                .debug_struct("RunSetup")
+                .field("server_url", server_url)
+                .field("username", &"[REDACTED]")
+                .field("password", &"[REDACTED]")
+                .field("passphrase", &"[REDACTED]")
+                .finish(),
+            Self::SaveRecoveryFile { .. } => f
+                .debug_struct("SaveRecoveryFile")
+                .field("key", &"[REDACTED]")
+                .finish(),
+            Self::SaveSettings(cfg) => f
+                .debug_struct("SaveSettings")
+                .field("server_url", &cfg.server_url)
                 .finish(),
         }
     }
@@ -118,6 +146,8 @@ pub enum Msg {
         dav: Arc<WebDavClient>,
     },
     UnlockFailed(String),
+    SetupResult(Result<SetupOk, String>),
+    RecoverySaved(Result<std::path::PathBuf, String>),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,6 +211,9 @@ pub enum Overlay {
         action: PendingCmd,
     },
     Help,
+    RecoveryKey {
+        key: String,
+    },
 }
 
 impl std::fmt::Debug for Overlay {
@@ -221,8 +254,62 @@ impl std::fmt::Debug for Overlay {
                 .field("action", action)
                 .finish(),
             Self::Help => write!(f, "Help"),
+            Self::RecoveryKey { .. } => f
+                .debug_struct("RecoveryKey")
+                .field("key", &"[REDACTED]")
+                .finish(),
         }
     }
+}
+
+#[derive(Default)]
+pub struct SetupForm {
+    pub server_url: String,
+    pub username: String,
+    pub password: String,
+    pub passphrase: String,
+    pub confirm: String,
+    pub field: usize,
+    pub error: Option<String>,
+    pub busy: bool,
+}
+
+impl std::fmt::Debug for SetupForm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SetupForm")
+            .field("server_url", &self.server_url)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .field("passphrase", &"[REDACTED]")
+            .field("confirm", &"[REDACTED]")
+            .field("field", &self.field)
+            .field("error", &self.error)
+            .field("busy", &self.busy)
+            .finish()
+    }
+}
+
+impl Drop for SetupForm {
+    fn drop(&mut self) {
+        self.password.zeroize();
+        self.passphrase.zeroize();
+        self.confirm.zeroize();
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SettingsForm {
+    pub server_url: String,
+    pub conflict_policy: waystone_core::conflict::ConflictPolicy,
+    pub username: String,
+    pub field: usize,
+    pub error: Option<String>,
+}
+
+pub struct SetupOk {
+    pub recovery_key: String,
+    pub vault: Arc<Vault>,
+    pub dav: Arc<WebDavClient>,
 }
 
 #[derive(Debug, Clone)]
@@ -265,10 +352,15 @@ pub struct App {
     pub screen: Screen,
     pub conflicts: Vec<ConflictEntry>,
     pub conflict_sel: usize,
+    pub device_id: String,
+    pub conflict_policy: waystone_core::conflict::ConflictPolicy,
+    pub setup: Option<SetupForm>,
+    pub settings: Option<SettingsForm>,
 }
 
 impl App {
     pub fn new(config: &WaystoneConfig) -> Self {
+        let first_run = config.server_url.is_empty();
         Self {
             targets: config.targets.clone(),
             selected: 0,
@@ -282,9 +374,21 @@ impl App {
             should_quit: false,
             server_url: config.server_url.clone(),
             username: config.username.clone(),
-            screen: Screen::Dashboard,
+            screen: if first_run {
+                Screen::Setup
+            } else {
+                Screen::Dashboard
+            },
             conflicts: Vec::new(),
             conflict_sel: 0,
+            device_id: config.device_id.clone(),
+            conflict_policy: config.conflict_policy,
+            setup: if first_run {
+                Some(SetupForm::default())
+            } else {
+                None
+            },
+            settings: None,
         }
     }
 
@@ -299,11 +403,30 @@ impl App {
         std::env::var("WAYSTONE_WEBDAV_PASSWORD").is_err()
     }
 
-    pub fn to_config(&self, base: &WaystoneConfig) -> WaystoneConfig {
+    pub fn to_config(&self, _base: &WaystoneConfig) -> WaystoneConfig {
         WaystoneConfig {
+            device_id: self.device_id.clone(),
+            server_url: self.server_url.clone(),
+            conflict_policy: self.conflict_policy,
+            username: self.username.clone(),
             targets: self.targets.clone(),
-            ..base.clone()
         }
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupDecision {
+    Init,
+    RedirectUnlock,
+}
+
+#[allow(dead_code)]
+pub fn setup_decision(keys_json_present: bool) -> SetupDecision {
+    if keys_json_present {
+        SetupDecision::RedirectUnlock
+    } else {
+        SetupDecision::Init
     }
 }
 
@@ -391,6 +514,49 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
             }
             vec![]
         }
+
+        Msg::SetupResult(result) => match result {
+            Ok(ok) => {
+                if let Some(ref form) = app.setup {
+                    app.server_url = form.server_url.clone();
+                    app.username = if form.username.is_empty() {
+                        None
+                    } else {
+                        Some(form.username.clone())
+                    };
+                }
+                app.creds = Some(SessionCreds {
+                    vault: ok.vault,
+                    dav: ok.dav,
+                });
+                app.setup = None;
+                app.screen = Screen::Dashboard;
+                app.overlay = Overlay::RecoveryKey {
+                    key: ok.recovery_key,
+                };
+                app.push_log("Vault initialized successfully.".into());
+                vec![Cmd::SaveConfig, Cmd::RefreshAllStatuses]
+            }
+            Err(err) => {
+                if let Some(ref mut form) = app.setup {
+                    form.busy = false;
+                    form.error = Some(err);
+                }
+                vec![]
+            }
+        },
+
+        Msg::RecoverySaved(result) => {
+            match result {
+                Ok(path) => {
+                    app.push_log(format!("Recovery key saved to {}", path.display()));
+                }
+                Err(err) => {
+                    app.push_log(format!("Failed to save recovery key: {}", err));
+                }
+            }
+            vec![]
+        }
     }
 }
 
@@ -426,6 +592,8 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         Overlay::None => match app.screen {
             Screen::Dashboard => handle_dashboard_key(app, key),
             Screen::Conflicts => handle_conflicts_key(app, key),
+            Screen::Setup => handle_setup_key(app, key),
+            Screen::Settings => handle_settings_key(app, key),
         },
         Overlay::Unlock { .. } => handle_unlock_key(app, key),
         Overlay::TargetForm { .. } => handle_form_key(app, key),
@@ -434,6 +602,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             app.overlay = Overlay::None;
             vec![]
         }
+        Overlay::RecoveryKey { .. } => handle_recovery_key_overlay(app, key),
     }
 }
 
@@ -541,6 +710,17 @@ fn handle_dashboard_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             }
             app.screen = Screen::Conflicts;
             app.conflict_sel = 0;
+            vec![]
+        }
+        KeyCode::Char('S') => {
+            app.settings = Some(SettingsForm {
+                server_url: app.server_url.clone(),
+                conflict_policy: app.conflict_policy,
+                username: app.username.clone().unwrap_or_default(),
+                field: 0,
+                error: None,
+            });
+            app.screen = Screen::Settings;
             vec![]
         }
         _ => vec![],
@@ -807,6 +987,216 @@ fn handle_confirm_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         }
         KeyCode::Char('n') | KeyCode::Esc => {
             app.overlay = Overlay::None;
+            vec![]
+        }
+        _ => vec![],
+    }
+}
+
+fn handle_setup_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
+    use crossterm::event::KeyCode;
+
+    let Some(ref mut form) = app.setup else {
+        return vec![];
+    };
+    if form.busy {
+        return vec![];
+    }
+    let max_field: usize = 4;
+
+    match key.code {
+        KeyCode::Esc => {
+            form.passphrase.zeroize();
+            form.password.zeroize();
+            form.confirm.zeroize();
+            vec![Cmd::Quit]
+        }
+        KeyCode::Tab | KeyCode::Down => {
+            form.field = (form.field + 1).min(max_field);
+            vec![]
+        }
+        KeyCode::BackTab | KeyCode::Up => {
+            form.field = form.field.saturating_sub(1);
+            vec![]
+        }
+        KeyCode::Enter => {
+            form.error = None;
+            if form.server_url.trim().is_empty() {
+                form.error = Some("Server URL is required.".into());
+                return vec![];
+            }
+            if !form.server_url.starts_with("http://") && !form.server_url.starts_with("https://") {
+                form.error = Some("Server URL must start with http:// or https://".into());
+                return vec![];
+            }
+            if form.passphrase.is_empty() {
+                form.error = Some("Passphrase is required.".into());
+                return vec![];
+            }
+            if form.passphrase != form.confirm {
+                form.error = Some("Passphrases do not match.".into());
+                form.passphrase.zeroize();
+                form.confirm.zeroize();
+                return vec![];
+            }
+            let cmd = Cmd::RunSetup {
+                server_url: form.server_url.clone(),
+                username: form.username.clone(),
+                password: form.password.clone(),
+                passphrase: form.passphrase.clone(),
+            };
+            form.passphrase.zeroize();
+            form.password.zeroize();
+            form.confirm.zeroize();
+            form.busy = true;
+            vec![cmd]
+        }
+        KeyCode::Backspace => {
+            let field = match form.field {
+                0 => &mut form.server_url,
+                1 => &mut form.username,
+                2 => &mut form.password,
+                3 => &mut form.passphrase,
+                _ => &mut form.confirm,
+            };
+            field.pop();
+            vec![]
+        }
+        KeyCode::Char(c) => {
+            let field = match form.field {
+                0 => &mut form.server_url,
+                1 => &mut form.username,
+                2 => &mut form.password,
+                3 => &mut form.passphrase,
+                _ => &mut form.confirm,
+            };
+            field.push(c);
+            vec![]
+        }
+        _ => vec![],
+    }
+}
+
+fn submit_settings(app: &mut App) -> Vec<Cmd> {
+    let Some(ref form) = app.settings else {
+        return vec![];
+    };
+    if form.server_url.trim().is_empty() {
+        if let Some(ref mut f) = app.settings {
+            f.error = Some("Server URL is required.".into());
+        }
+        return vec![];
+    }
+    if !form.server_url.starts_with("http://") && !form.server_url.starts_with("https://") {
+        if let Some(ref mut f) = app.settings {
+            f.error = Some("Server URL must start with http:// or https://".into());
+        }
+        return vec![];
+    }
+    let server_changed = form.server_url != app.server_url;
+    app.server_url = form.server_url.clone();
+    app.username = if form.username.is_empty() {
+        None
+    } else {
+        Some(form.username.clone())
+    };
+    app.conflict_policy = form.conflict_policy;
+    let cfg = WaystoneConfig {
+        device_id: app.device_id.clone(),
+        server_url: app.server_url.clone(),
+        conflict_policy: app.conflict_policy,
+        username: app.username.clone(),
+        targets: app.targets.clone(),
+    };
+    if server_changed {
+        app.creds = None;
+        app.statuses.clear();
+        app.push_log("Server URL changed -- session invalidated.".into());
+    }
+    app.settings = None;
+    app.screen = Screen::Dashboard;
+    app.push_log("Settings saved.".into());
+    vec![Cmd::SaveSettings(cfg)]
+}
+
+fn handle_settings_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
+    use crossterm::event::KeyCode;
+
+    let Some(ref mut form) = app.settings else {
+        return vec![];
+    };
+    let max_field: usize = 2;
+
+    match key.code {
+        KeyCode::Esc => {
+            app.settings = None;
+            app.screen = Screen::Dashboard;
+            app.push_log("Settings discarded.".into());
+            vec![]
+        }
+        KeyCode::Tab | KeyCode::Down => {
+            form.field = (form.field + 1).min(max_field);
+            vec![]
+        }
+        KeyCode::BackTab | KeyCode::Up => {
+            form.field = form.field.saturating_sub(1);
+            vec![]
+        }
+        KeyCode::Enter => submit_settings(app),
+        KeyCode::Backspace => {
+            match form.field {
+                0 => {
+                    form.server_url.pop();
+                }
+                1 => {}
+                _ => {
+                    form.username.pop();
+                }
+            }
+            vec![]
+        }
+        KeyCode::Char(' ') if form.field == 1 => {
+            form.conflict_policy = match form.conflict_policy {
+                waystone_core::conflict::ConflictPolicy::NewestWins => {
+                    waystone_core::conflict::ConflictPolicy::Prompt
+                }
+                waystone_core::conflict::ConflictPolicy::Prompt => {
+                    waystone_core::conflict::ConflictPolicy::NewestWins
+                }
+            };
+            vec![]
+        }
+        KeyCode::Char(c) => {
+            match form.field {
+                0 => form.server_url.push(c),
+                1 => {}
+                _ => form.username.push(c),
+            }
+            vec![]
+        }
+        _ => vec![],
+    }
+}
+
+fn handle_recovery_key_overlay(app: &mut App, key_event: KeyEvent) -> Vec<Cmd> {
+    use crossterm::event::KeyCode;
+
+    let device_id = app.device_id.clone();
+    let Overlay::RecoveryKey { ref mut key } = app.overlay else {
+        return vec![];
+    };
+
+    match key_event.code {
+        KeyCode::Char('s') => {
+            vec![Cmd::SaveRecoveryFile {
+                key: key.clone(),
+                device_id,
+            }]
+        }
+        KeyCode::Enter => {
+            key.zeroize();
+            app.overlay = Overlay::None;
+            app.push_log("Recovery key acknowledged.".into());
             vec![]
         }
         _ => vec![],
@@ -1242,5 +1632,268 @@ mod tests {
         assert!(app.conflicts.is_empty());
         assert_eq!(app.screen, Screen::Dashboard);
         assert!(cmds.iter().any(|c| matches!(c, Cmd::RefreshStatus(0))));
+    }
+    // --- Setup / Settings / first-run tests ---
+
+    fn setup_config() -> WaystoneConfig {
+        WaystoneConfig {
+            device_id: "dev".into(),
+            server_url: String::new(),
+            conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
+            username: None,
+            targets: vec![],
+        }
+    }
+
+    #[test]
+    fn first_run_routes_to_setup_screen() {
+        let config = setup_config();
+        let app = App::new(&config);
+        assert_eq!(app.screen, Screen::Setup);
+        assert!(app.setup.is_some());
+    }
+
+    #[test]
+    fn non_empty_server_url_routes_to_dashboard() {
+        let app = test_app();
+        assert_eq!(app.screen, Screen::Dashboard);
+        assert!(app.setup.is_none());
+    }
+
+    #[test]
+    fn setup_decision_init_when_no_keys() {
+        assert_eq!(setup_decision(false), SetupDecision::Init);
+    }
+
+    #[test]
+    fn setup_decision_redirect_when_keys_exist() {
+        assert_eq!(setup_decision(true), SetupDecision::RedirectUnlock);
+    }
+
+    #[test]
+    fn setup_validation_rejects_empty_server() {
+        let mut app = App::new(&setup_config());
+        if let Some(ref mut form) = app.setup {
+            form.passphrase = "test123".into();
+            form.confirm = "test123".into();
+        }
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(cmds.is_empty());
+        assert!(app.setup.as_ref().unwrap().error.is_some());
+        assert!(
+            app.setup
+                .as_ref()
+                .unwrap()
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("Server URL")
+        );
+    }
+
+    #[test]
+    fn setup_validation_rejects_mismatched_passphrase() {
+        let mut app = App::new(&setup_config());
+        if let Some(ref mut form) = app.setup {
+            form.server_url = "http://localhost".into();
+            form.passphrase = "abc".into();
+            form.confirm = "xyz".into();
+        }
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(cmds.is_empty());
+        assert!(
+            app.setup
+                .as_ref()
+                .unwrap()
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("do not match")
+        );
+    }
+
+    #[test]
+    fn setup_valid_form_emits_run_setup() {
+        let mut app = App::new(&setup_config());
+        if let Some(ref mut form) = app.setup {
+            form.server_url = "http://localhost:5000".into();
+            form.username = "alice".into();
+            form.password = "secret".into();
+            form.passphrase = "pass123".into();
+            form.confirm = "pass123".into();
+        }
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::RunSetup { .. })));
+        assert!(app.setup.as_ref().unwrap().busy);
+    }
+
+    #[test]
+    fn setup_result_ok_transitions_to_dashboard_with_recovery_overlay() {
+        let mut app = App::new(&setup_config());
+        if let Some(ref mut form) = app.setup {
+            form.server_url = "http://localhost:5000".into();
+        }
+        let (vault, _) = waystone_core::crypto::Vault::init("test").unwrap();
+        let dav = crate::webdav::WebDavClient::new("http://localhost", None, None);
+        let cmds = update(
+            &mut app,
+            Msg::SetupResult(Ok(SetupOk {
+                recovery_key: "deadbeef".into(),
+                vault: Arc::new(vault),
+                dav: Arc::new(dav),
+            })),
+        );
+        assert_eq!(app.screen, Screen::Dashboard);
+        assert!(app.setup.is_none());
+        assert!(app.creds.is_some());
+        assert!(matches!(app.overlay, Overlay::RecoveryKey { .. }));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::SaveConfig)));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::RefreshAllStatuses)));
+    }
+
+    #[test]
+    fn setup_result_err_keeps_form_with_error() {
+        let mut app = App::new(&setup_config());
+        if let Some(ref mut form) = app.setup {
+            form.busy = true;
+        }
+        update(
+            &mut app,
+            Msg::SetupResult(Err("vault already exists".into())),
+        );
+        assert_eq!(app.screen, Screen::Setup);
+        assert!(!app.setup.as_ref().unwrap().busy);
+        assert!(
+            app.setup
+                .as_ref()
+                .unwrap()
+                .error
+                .as_ref()
+                .unwrap()
+                .contains("vault already exists")
+        );
+    }
+
+    #[test]
+    fn recovery_key_enter_dismisses() {
+        let mut app = test_app();
+        app.overlay = Overlay::RecoveryKey {
+            key: "abcdef1234567890".into(),
+        };
+        update(&mut app, key(KeyCode::Enter));
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn recovery_key_s_emits_save_cmd() {
+        let mut app = test_app();
+        app.overlay = Overlay::RecoveryKey {
+            key: "abcdef1234567890".into(),
+        };
+        let cmds = update(&mut app, key(KeyCode::Char('s')));
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, Cmd::SaveRecoveryFile { .. }))
+        );
+    }
+
+    #[test]
+    fn settings_opens_from_dashboard_with_s() {
+        let mut app = test_app();
+        update(&mut app, key(KeyCode::Char('S')));
+        assert_eq!(app.screen, Screen::Settings);
+        assert!(app.settings.is_some());
+        assert_eq!(
+            app.settings.as_ref().unwrap().server_url,
+            "http://localhost"
+        );
+    }
+
+    #[test]
+    fn settings_esc_discards_and_returns_to_dashboard() {
+        let mut app = test_app();
+        app.screen = Screen::Settings;
+        app.settings = Some(SettingsForm {
+            server_url: "http://changed".into(),
+            conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
+            username: "bob".into(),
+            field: 0,
+            error: None,
+        });
+        update(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.screen, Screen::Dashboard);
+        assert!(app.settings.is_none());
+        assert_eq!(app.server_url, "http://localhost");
+    }
+
+    #[test]
+    fn settings_save_emits_save_settings_cmd() {
+        let mut app = test_app();
+        app.screen = Screen::Settings;
+        app.settings = Some(SettingsForm {
+            server_url: "http://localhost".into(),
+            conflict_policy: waystone_core::conflict::ConflictPolicy::Prompt,
+            username: "alice".into(),
+            field: 0,
+            error: None,
+        });
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::SaveSettings(_))));
+        assert_eq!(app.screen, Screen::Dashboard);
+        assert!(app.settings.is_none());
+    }
+
+    #[test]
+    fn settings_server_change_clears_creds() {
+        let mut app = test_app();
+        let (vault, _) = waystone_core::crypto::Vault::init("test").unwrap();
+        let dav = crate::webdav::WebDavClient::new("http://localhost", None, None);
+        app.creds = Some(SessionCreds {
+            vault: Arc::new(vault),
+            dav: Arc::new(dav),
+        });
+        app.statuses.insert(0, TargetStatus::InSync);
+        app.screen = Screen::Settings;
+        app.settings = Some(SettingsForm {
+            server_url: "http://different-server".into(),
+            conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
+            username: String::new(),
+            field: 0,
+            error: None,
+        });
+        update(&mut app, key(KeyCode::Enter));
+        assert!(app.creds.is_none());
+        assert!(app.statuses.is_empty());
+        assert_eq!(app.server_url, "http://different-server");
+    }
+
+    #[test]
+    fn settings_toggle_conflict_policy() {
+        let mut app = test_app();
+        app.screen = Screen::Settings;
+        app.settings = Some(SettingsForm {
+            server_url: "http://localhost".into(),
+            conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
+            username: String::new(),
+            field: 1,
+            error: None,
+        });
+        update(&mut app, key(KeyCode::Char(' ')));
+        assert_eq!(
+            app.settings.as_ref().unwrap().conflict_policy,
+            waystone_core::conflict::ConflictPolicy::Prompt
+        );
+        update(&mut app, key(KeyCode::Char(' ')));
+        assert_eq!(
+            app.settings.as_ref().unwrap().conflict_policy,
+            waystone_core::conflict::ConflictPolicy::NewestWins
+        );
+    }
+
+    #[test]
+    fn setup_esc_quits_on_first_run() {
+        let mut app = App::new(&setup_config());
+        let cmds = update(&mut app, key(KeyCode::Esc));
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Quit)));
     }
 }

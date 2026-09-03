@@ -18,6 +18,7 @@ use ratatui::backend::CrosstermBackend;
 use std::io::stdout;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
+use zeroize::Zeroize;
 
 struct TerminalGuard;
 
@@ -38,7 +39,7 @@ impl Drop for TerminalGuard {
     }
 }
 
-pub async fn run(config: WaystoneConfig, config_path: PathBuf) -> Result<()> {
+pub async fn run(mut config: WaystoneConfig, config_path: PathBuf) -> Result<()> {
     let _guard = TerminalGuard;
     let mut terminal = TerminalGuard::init()?;
 
@@ -74,7 +75,7 @@ pub async fn run(config: WaystoneConfig, config_path: PathBuf) -> Result<()> {
         if let Some(msg) = msg {
             let cmds = app::update(&mut app, msg);
             for cmd in cmds {
-                dispatch_cmd(&mut app, cmd, &config, &config_path, tx.clone()).await?;
+                dispatch_cmd(&mut app, cmd, &mut config, &config_path, tx.clone()).await?;
             }
         }
 
@@ -89,7 +90,7 @@ pub async fn run(config: WaystoneConfig, config_path: PathBuf) -> Result<()> {
 async fn dispatch_cmd(
     app: &mut App,
     cmd: Cmd,
-    config: &WaystoneConfig,
+    config: &mut WaystoneConfig,
     config_path: &std::path::Path,
     tx: mpsc::Sender<Msg>,
 ) -> Result<()> {
@@ -289,6 +290,46 @@ async fn dispatch_cmd(
                 watch_busy_task(handle, tx.clone(), target_id);
             }
         }
+
+        Cmd::RunSetup {
+            server_url,
+            username,
+            password,
+            passphrase,
+        } => {
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                action::run_setup(server_url, username, password, passphrase, tx).await;
+            });
+        }
+
+        Cmd::SaveRecoveryFile { mut key, device_id } => {
+            let actual_device_id = if device_id.is_empty() {
+                config.device_id.clone()
+            } else {
+                device_id
+            };
+            let result = action::save_recovery_file(&key, &actual_device_id);
+            key.zeroize();
+            match result {
+                Ok(path) => {
+                    let _ = tx.send(Msg::RecoverySaved(Ok(path))).await;
+                }
+                Err(e) => {
+                    let _ = tx.send(Msg::RecoverySaved(Err(e.to_string()))).await;
+                }
+            }
+        }
+
+        Cmd::SaveSettings(new_cfg) => match new_cfg.save() {
+            Ok(()) => {
+                *config = new_cfg;
+                app.push_log("Settings saved to disk.".into());
+            }
+            Err(e) => {
+                app.push_log(format!("Failed to save settings: {}", e));
+            }
+        },
     }
     Ok(())
 }

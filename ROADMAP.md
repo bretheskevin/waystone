@@ -107,7 +107,15 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   save with metadata (local vs remote `{device_id, hash, mtime}`), resolved with **keep local**
   (push) / **keep remote** (force pull-by-hash → restore) / cancel — non-destructive (history is
   append-only). The restore tail is now one shared `helpers::restore_save_from_blob` (CLI + TUI).
-  **Deferred to v3**: content/file-level diff, "keep both", in-TUI vault init, settings screens.
+- **In-TUI setup + settings (TUI v3)**: `waystone tui` is now fully self-sufficient (no CLI needed).
+  First-run **Setup** (`Screen::Setup`, shown when no server is configured) creates the vault entirely
+  in the TUI — server/creds/passphrase form → **overwrite guard** (GET `/keys.json`: refuse + redirect
+  to unlock if a vault already exists, else `Vault::init` → PUT) → one-time **recovery-key modal**
+  (`Overlay::RecoveryKey`, save-to-file at `<config_dir>/recovery-<device_id>.txt` 0600 + explicit ack,
+  then zeroized). A **Settings** screen (`Screen::Settings`, `S`) edits server/policy/username
+  (device_id read-only); a server change clears session creds. Secrets masked, non-Debug, zeroized.
+  **Deferred to v4**: content/file-level conflict diff, "keep both", destructive re-init /
+  change-passphrase, recovery-key unlock in the TUI.
 
 ## Next
 - **M2 (remaining) — Switch shell: borealis UI + first on-hardware run**: the two-way save engine
