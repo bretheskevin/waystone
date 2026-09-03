@@ -115,10 +115,15 @@ async fn dispatch_cmd(
                 app.busy = Some(target_id);
                 let vault = creds.vault.clone();
                 let dav = creds.dav.clone();
+                let blocking_dav = creds.blocking_dav.clone();
                 let cfg = config.clone();
                 let tx_action = tx.clone();
                 let handle = tokio::spawn(async move {
-                    let creds = app::SessionCreds { vault, dav };
+                    let creds = app::SessionCreds {
+                        vault,
+                        dav,
+                        blocking_dav,
+                    };
                     if let Err(e) =
                         action::push_target(&target, &creds, &cfg, tx_action.clone(), target_id)
                             .await
@@ -140,10 +145,15 @@ async fn dispatch_cmd(
                 app.busy = Some(target_id);
                 let vault = creds.vault.clone();
                 let dav = creds.dav.clone();
+                let blocking_dav = creds.blocking_dav.clone();
                 let cfg = config.clone();
                 let tx_action = tx.clone();
                 let handle = tokio::spawn(async move {
-                    let creds = app::SessionCreds { vault, dav };
+                    let creds = app::SessionCreds {
+                        vault,
+                        dav,
+                        blocking_dav,
+                    };
                     if let Err(e) =
                         action::pull_target(&target, &creds, &cfg, tx_action.clone(), target_id)
                             .await
@@ -164,10 +174,15 @@ async fn dispatch_cmd(
             if let (Some(creds), Some(target)) = (&app.creds, app.targets.get(target_id).cloned()) {
                 let vault = creds.vault.clone();
                 let dav = creds.dav.clone();
+                let blocking_dav = creds.blocking_dav.clone();
                 let cfg = config.clone();
                 let tx = tx.clone();
                 tokio::spawn(async move {
-                    let creds = app::SessionCreds { vault, dav };
+                    let creds = app::SessionCreds {
+                        vault,
+                        dav,
+                        blocking_dav,
+                    };
                     if let Err(e) =
                         action::refresh_status(&target, &creds, &cfg, tx.clone(), target_id).await
                     {
@@ -188,10 +203,15 @@ async fn dispatch_cmd(
                     if let Some(target) = app.targets.get(target_id).cloned() {
                         let vault = creds.vault.clone();
                         let dav = creds.dav.clone();
+                        let blocking_dav = creds.blocking_dav.clone();
                         let cfg = config.clone();
                         let tx = tx.clone();
                         tokio::spawn(async move {
-                            let creds = app::SessionCreds { vault, dav };
+                            let creds = app::SessionCreds {
+                                vault,
+                                dav,
+                                blocking_dav,
+                            };
                             if let Err(e) =
                                 action::refresh_status(&target, &creds, &cfg, tx.clone(), target_id)
                                     .await
@@ -229,10 +249,15 @@ async fn dispatch_cmd(
                 app.busy = Some(target_id);
                 let vault = creds.vault.clone();
                 let dav = creds.dav.clone();
+                let blocking_dav = creds.blocking_dav.clone();
                 let cfg = config.clone();
                 let tx_action = tx.clone();
                 let handle = tokio::spawn(async move {
-                    let creds = app::SessionCreds { vault, dav };
+                    let creds = app::SessionCreds {
+                        vault,
+                        dav,
+                        blocking_dav,
+                    };
                     if let Err(e) = action::resolve_keep_local(
                         &target,
                         &save_key,
@@ -264,10 +289,15 @@ async fn dispatch_cmd(
                 app.busy = Some(target_id);
                 let vault = creds.vault.clone();
                 let dav = creds.dav.clone();
+                let blocking_dav = creds.blocking_dav.clone();
                 let cfg = config.clone();
                 let tx_action = tx.clone();
                 let handle = tokio::spawn(async move {
-                    let creds = app::SessionCreds { vault, dav };
+                    let creds = app::SessionCreds {
+                        vault,
+                        dav,
+                        blocking_dav,
+                    };
                     if let Err(e) = action::resolve_keep_remote(
                         &target,
                         &save_key,

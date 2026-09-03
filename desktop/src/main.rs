@@ -8,6 +8,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use waystone_core::conflict::SyncDecision;
+use waystone_sync::WebDav as _;
 
 #[derive(Parser)]
 #[command(name = "waystone", version, about = "Game-save sync tool")]
@@ -92,8 +93,10 @@ fn resolve_webdav_credentials(
     }
 }
 
-async fn do_pull_save(
-    pipe: &pipeline::SyncPipeline<'_>,
+#[allow(clippy::too_many_arguments)]
+fn do_pull_save(
+    vault: &waystone_core::crypto::Vault,
+    dav: &webdav::BlockingWebDav,
     save: &waystone_core::model::NormalizedSave,
     dest: &std::path::Path,
     adapter_name: &str,
@@ -101,7 +104,7 @@ async fn do_pull_save(
     device_id: &str,
     policy: waystone_core::conflict::ConflictPolicy,
 ) -> Result<()> {
-    let all_heads = pipe.read_all_remote_heads(save).await?;
+    let all_heads = waystone_sync::read_remote_heads(vault, save, dav)?;
     let (entry, _) = waystone_core::packaging::package(save);
 
     let decision = waystone_core::conflict::decide_pull(
@@ -124,7 +127,13 @@ async fn do_pull_save(
     match pull_hash {
         Some(hash) => {
             println!("Pulling: {} / {}", save.id.game.display_name, save.id.slot);
-            let zip_bytes = pipe.pull_blob(save, &hash).await?;
+            let blob_name = vault.blob_name(&hash);
+            let base_path = waystone_sync::orchestration::remote_path(vault, save);
+            let blob_path = format!("{}/blobs/{}.bin", base_path, blob_name);
+            let encrypted = dav
+                .get(&blob_path)?
+                .ok_or_else(|| anyhow::anyhow!("blob not found on server"))?;
+            let zip_bytes = vault.decrypt_blob(&encrypted)?;
             helpers::restore_save_from_blob(&zip_bytes, save, dest, adapter_name, system_name)?;
         }
         None => match decision {
@@ -189,7 +198,8 @@ async fn main() -> Result<()> {
 
             let passphrase = rpassword::prompt_password("Passphrase: ")?;
             let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
-            let dav = webdav::WebDavClient::new(&cfg.server_url, wdav_user, wdav_pass);
+            let dav =
+                webdav::WebDavClient::new(&cfg.server_url, wdav_user.clone(), wdav_pass.clone());
             let keys_data = dav.get("/keys.json").await?.ok_or_else(|| {
                 anyhow::anyhow!("no keys.json on server — run `waystone init` first")
             })?;
@@ -198,20 +208,22 @@ async fn main() -> Result<()> {
 
             let raw = helpers::read_source_tree(&source)?;
             let saves = adapter.normalize(&raw);
+            let count = saves.len();
 
-            let pipe = pipeline::SyncPipeline {
-                vault: &vault,
-                dav: &dav,
-                device_id: &cfg.device_id,
-                policy: cfg.conflict_policy,
-            };
+            let blocking_dav = webdav::BlockingWebDav::new(&cfg.server_url, wdav_user, wdav_pass);
+            let vault_arc = std::sync::Arc::new(vault);
+            let device_id = cfg.device_id.clone();
 
-            for save in &saves {
-                println!("Pushing: {} / {}", save.id.game.display_name, save.id.slot);
-                pipe.push(save).await?;
-            }
+            tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                for save in &saves {
+                    println!("Pushing: {} / {}", save.id.game.display_name, save.id.slot);
+                    waystone_sync::push_one(&vault_arc, save, &device_id, &blocking_dav)?;
+                }
+                Ok(())
+            })
+            .await??;
 
-            println!("Done. {} save(s) pushed.", saves.len());
+            println!("Done. {} save(s) pushed.", count);
             Ok(())
         }
 
@@ -225,7 +237,8 @@ async fn main() -> Result<()> {
 
             let passphrase = rpassword::prompt_password("Passphrase: ")?;
             let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
-            let dav = webdav::WebDavClient::new(&cfg.server_url, wdav_user, wdav_pass);
+            let dav =
+                webdav::WebDavClient::new(&cfg.server_url, wdav_user.clone(), wdav_pass.clone());
             let keys_data = dav
                 .get("/keys.json")
                 .await?
@@ -243,24 +256,21 @@ async fn main() -> Result<()> {
             };
             let local_saves = adapter_obj.normalize(&raw);
 
-            let pipe = pipeline::SyncPipeline {
-                vault: &vault,
-                dav: &dav,
-                device_id: &cfg.device_id,
-                policy: cfg.conflict_policy,
-            };
+            let blocking_dav = webdav::BlockingWebDav::new(&cfg.server_url, wdav_user, wdav_pass);
+            let device_id = cfg.device_id.clone();
+            let policy = cfg.conflict_policy;
 
             for save in &local_saves {
                 do_pull_save(
-                    &pipe,
+                    &vault,
+                    &blocking_dav,
                     save,
                     &dest,
                     &adapter,
                     &system,
-                    &cfg.device_id,
-                    cfg.conflict_policy,
-                )
-                .await?;
+                    &device_id,
+                    policy,
+                )?;
             }
 
             println!("Pull complete.");

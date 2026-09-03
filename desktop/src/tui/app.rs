@@ -1,5 +1,5 @@
 use crate::config::{SyncTarget, WaystoneConfig};
-use crate::webdav::WebDavClient;
+use crate::webdav::{BlockingWebDav, WebDavClient};
 use crossterm::event::KeyEvent;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -144,6 +144,7 @@ pub enum Msg {
     UnlockOk {
         vault: Arc<Vault>,
         dav: Arc<WebDavClient>,
+        blocking_dav: Arc<BlockingWebDav>,
     },
     UnlockFailed(String),
     SetupResult(Result<SetupOk, String>),
@@ -178,6 +179,7 @@ impl TargetStatus {
 pub struct SessionCreds {
     pub vault: Arc<Vault>,
     pub dav: Arc<WebDavClient>,
+    pub blocking_dav: Arc<BlockingWebDav>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -310,6 +312,7 @@ pub struct SetupOk {
     pub recovery_key: String,
     pub vault: Arc<Vault>,
     pub dav: Arc<WebDavClient>,
+    pub blocking_dav: Arc<BlockingWebDav>,
 }
 
 #[derive(Debug, Clone)]
@@ -487,12 +490,20 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
             vec![]
         }
 
-        Msg::UnlockOk { vault, dav } => {
+        Msg::UnlockOk {
+            vault,
+            dav,
+            blocking_dav,
+        } => {
             let pending = match &app.overlay {
                 Overlay::Unlock { then, .. } => then.clone(),
                 _ => Option::None,
             };
-            app.creds = Some(SessionCreds { vault, dav });
+            app.creds = Some(SessionCreds {
+                vault,
+                dav,
+                blocking_dav,
+            });
             app.overlay = Overlay::None;
             app.push_log("Session unlocked.".into());
             pending
@@ -528,6 +539,7 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
                 app.creds = Some(SessionCreds {
                     vault: ok.vault,
                     dav: ok.dav,
+                    blocking_dav: ok.blocking_dav,
                 });
                 app.setup = None;
                 app.screen = Screen::Dashboard;
@@ -1538,6 +1550,7 @@ mod tests {
         app.creds = Some(SessionCreds {
             vault: Arc::new(vault),
             dav: Arc::new(dav),
+            blocking_dav: Arc::new(BlockingWebDav::new("http://localhost", None, None)),
         });
         let mut entry = make_conflict_entry(0);
         entry.remote_hash = "rh123".into();
@@ -1741,6 +1754,7 @@ mod tests {
                 recovery_key: "deadbeef".into(),
                 vault: Arc::new(vault),
                 dav: Arc::new(dav),
+                blocking_dav: Arc::new(BlockingWebDav::new("http://localhost", None, None)),
             })),
         );
         assert_eq!(app.screen, Screen::Dashboard);
@@ -1851,6 +1865,7 @@ mod tests {
         app.creds = Some(SessionCreds {
             vault: Arc::new(vault),
             dav: Arc::new(dav),
+            blocking_dav: Arc::new(BlockingWebDav::new("http://localhost", None, None)),
         });
         app.statuses.insert(0, TargetStatus::InSync);
         app.screen = Screen::Settings;

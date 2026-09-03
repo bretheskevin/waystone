@@ -1,16 +1,17 @@
 use crate::config::{SyncTarget, WaystoneConfig};
 use crate::helpers;
-use crate::pipeline::SyncPipeline;
 use crate::tui::app::{
     ActionResult, ConflictEntry, HeadInfo, Msg, SessionCreds, SetupOk, TargetStatus,
 };
-use crate::webdav::WebDavClient;
+use crate::webdav::{BlockingWebDav, WebDavClient};
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use waystone_core::conflict::{self, ConflictWinner, SyncDecision};
 use waystone_core::crypto::Vault;
 use waystone_core::model::NormalizedSave;
+use waystone_core::packaging;
+use waystone_sync::WebDav as _;
 use zeroize::Zeroize;
 
 /// Builds the normalized save list for `target` synchronously.
@@ -39,39 +40,27 @@ pub async fn push_target(
         })
         .await;
 
-    // Collect saves synchronously before any await (Adapter is not Send)
     let saves: Vec<NormalizedSave> = load_target_saves(target)?;
+    let count = saves.len();
 
     let _ = tx
         .send(Msg::Progress {
             target_id,
-            phase: format!("pushing {} save(s)", saves.len()),
+            phase: format!("pushing {} save(s)", count),
         })
         .await;
 
-    let pipe = SyncPipeline {
-        vault: &creds.vault,
-        dav: &creds.dav,
-        device_id: &config.device_id,
-        policy: config.conflict_policy,
-    };
+    let vault = Arc::clone(&creds.vault);
+    let dav = Arc::clone(&creds.blocking_dav);
+    let device_id = config.device_id.clone();
 
-    let count = saves.len();
-    for (i, save) in saves.iter().enumerate() {
-        let _ = tx
-            .send(Msg::Progress {
-                target_id,
-                phase: format!(
-                    "pushing {}/{}: {} / {}",
-                    i + 1,
-                    count,
-                    save.id.game.display_name,
-                    save.id.slot
-                ),
-            })
-            .await;
-        pipe.push(save).await?;
-    }
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        for save in &saves {
+            waystone_sync::push_one(&vault, save, &device_id, dav.as_ref())?;
+        }
+        Ok(())
+    })
+    .await??;
 
     let _ = tx
         .send(Msg::ActionDone {
@@ -97,77 +86,66 @@ pub async fn pull_target(
         .await;
 
     let dest = target.path.clone();
-
-    // Collect saves synchronously before any await (Adapter is not Send)
     let saves: Vec<NormalizedSave> = load_target_saves(target)?;
+    let count = saves.len();
 
     let _ = tx
         .send(Msg::Progress {
             target_id,
-            phase: format!("checking {} save(s)", saves.len()),
+            phase: format!("checking {} save(s)", count),
         })
         .await;
 
-    let pipe = SyncPipeline {
-        vault: &creds.vault,
-        dav: &creds.dav,
-        device_id: &config.device_id,
-        policy: config.conflict_policy,
-    };
+    let vault = Arc::clone(&creds.vault);
+    let dav = Arc::clone(&creds.blocking_dav);
+    let device_id = config.device_id.clone();
+    let adapter_name = target.adapter.clone();
+    let system_name = target.system.clone();
+    let policy = config.conflict_policy;
 
-    let count = saves.len();
-    let mut pulled = 0usize;
-    for (i, save) in saves.iter().enumerate() {
-        let _ = tx
-            .send(Msg::Progress {
-                target_id,
-                phase: format!(
-                    "checking {}/{}: {} / {}",
-                    i + 1,
-                    count,
-                    save.id.game.display_name,
-                    save.id.slot
-                ),
-            })
-            .await;
+    let pulled = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        let mut pulled = 0usize;
+        for save in &saves {
+            let all_heads = waystone_sync::read_remote_heads(&vault, save, dav.as_ref())?;
+            let (entry, _) = packaging::package(save);
+            let decision = conflict::decide_pull(
+                Some(&entry.content.hash),
+                &entry.mtime,
+                &all_heads,
+                &device_id,
+                policy,
+            );
 
-        let all_heads = pipe.read_all_remote_heads(save).await?;
-        let (entry, _) = waystone_core::packaging::package(save);
-        let decision = conflict::decide_pull(
-            Some(&entry.content.hash),
-            &entry.mtime,
-            &all_heads,
-            &config.device_id,
-            config.conflict_policy,
-        );
+            let pull_hash: Option<String> = match &decision {
+                SyncDecision::Pull { head_hash } => Some(head_hash.clone()),
+                SyncDecision::ConflictResolved {
+                    winner: ConflictWinner::Remote,
+                    ..
+                } => conflict::fold_heads(&all_heads).map(|m| m.hash),
+                _ => None,
+            };
 
-        let pull_hash: Option<String> = match &decision {
-            SyncDecision::Pull { head_hash } => Some(head_hash.clone()),
-            SyncDecision::ConflictResolved {
-                winner: ConflictWinner::Remote,
-                ..
-            } => conflict::fold_heads(&all_heads).map(|m| m.hash),
-            _ => None,
-        };
-
-        if let Some(hash) = pull_hash {
-            let _ = tx
-                .send(Msg::Progress {
-                    target_id,
-                    phase: format!("pulling {} / {}", save.id.game.display_name, save.id.slot),
-                })
-                .await;
-            let zip_bytes = pipe.pull_blob(save, &hash).await?;
-            helpers::restore_save_from_blob(
-                &zip_bytes,
-                save,
-                &dest,
-                &target.adapter,
-                &target.system,
-            )?;
-            pulled += 1;
+            if let Some(hash) = pull_hash {
+                let blob_name = vault.blob_name(&hash);
+                let base_path = waystone_sync::orchestration::remote_path(&vault, save);
+                let blob_path = format!("{}/blobs/{}.bin", base_path, blob_name);
+                let encrypted = dav
+                    .get(&blob_path)?
+                    .ok_or_else(|| anyhow::anyhow!("blob not found on server"))?;
+                let zip_bytes = vault.decrypt_blob(&encrypted)?;
+                helpers::restore_save_from_blob(
+                    &zip_bytes,
+                    save,
+                    &dest,
+                    &adapter_name,
+                    &system_name,
+                )?;
+                pulled += 1;
+            }
         }
-    }
+        Ok(pulled)
+    })
+    .await??;
 
     let _ = tx
         .send(Msg::ActionDone {
@@ -192,54 +170,56 @@ pub async fn refresh_status(
         })
         .await;
 
-    // Collect saves synchronously (Adapter is not Send)
     let saves: Vec<NormalizedSave> = load_target_saves(target)?;
 
-    let pipe = SyncPipeline {
-        vault: &creds.vault,
-        dav: &creds.dav,
-        device_id: &config.device_id,
-        policy: config.conflict_policy,
-    };
+    let vault = Arc::clone(&creds.vault);
+    let dav = Arc::clone(&creds.blocking_dav);
+    let device_id = config.device_id.clone();
+    let target_name = target.name.clone();
 
-    let mut worst = TargetStatus::InSync;
-    let mut conflict_entries: Vec<ConflictEntry> = Vec::new();
+    let (worst, conflict_entries) = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<(TargetStatus, Vec<ConflictEntry>)> {
+            let mut worst = TargetStatus::InSync;
+            let mut conflict_entries: Vec<ConflictEntry> = Vec::new();
 
-    for save in &saves {
-        let all_heads = pipe.read_all_remote_heads(save).await?;
-        let (entry, _) = waystone_core::packaging::package(save);
+            for save in &saves {
+                let all_heads = waystone_sync::read_remote_heads(&vault, save, dav.as_ref())?;
+                let (entry, _) = packaging::package(save);
 
-        // Always use Prompt for detection — surfaces all true divergences regardless of config.
-        let decision = conflict::decide_pull(
-            Some(&entry.content.hash),
-            &entry.mtime,
-            &all_heads,
-            &config.device_id,
-            conflict::ConflictPolicy::Prompt,
-        );
+                let decision = conflict::decide_pull(
+                    Some(&entry.content.hash),
+                    &entry.mtime,
+                    &all_heads,
+                    &device_id,
+                    conflict::ConflictPolicy::Prompt,
+                );
 
-        let status = match &decision {
-            SyncDecision::InSync => TargetStatus::InSync,
-            SyncDecision::Pull { .. } => TargetStatus::Behind,
-            SyncDecision::Push => TargetStatus::Ahead,
-            SyncDecision::ConflictResolved { .. } => TargetStatus::Conflict,
-            SyncDecision::ConflictNeedsInput { .. } => TargetStatus::Conflict,
-        };
-        worst = worst_status(worst, status);
+                let status = match &decision {
+                    SyncDecision::InSync => TargetStatus::InSync,
+                    SyncDecision::Pull { .. } => TargetStatus::Behind,
+                    SyncDecision::Push => TargetStatus::Ahead,
+                    SyncDecision::ConflictResolved { .. } => TargetStatus::Conflict,
+                    SyncDecision::ConflictNeedsInput { .. } => TargetStatus::Conflict,
+                };
+                worst = worst_status(worst, status);
 
-        if let Some(ce) = build_conflict_entry(
-            save,
-            &decision,
-            &entry.content.hash,
-            &entry.mtime,
-            &all_heads,
-            &config.device_id,
-            target_id,
-            &target.name,
-        ) {
-            conflict_entries.push(ce);
-        }
-    }
+                if let Some(ce) = build_conflict_entry(
+                    save,
+                    &decision,
+                    &entry.content.hash,
+                    &entry.mtime,
+                    &all_heads,
+                    &device_id,
+                    target_id,
+                    &target_name,
+                ) {
+                    conflict_entries.push(ce);
+                }
+            }
+            Ok((worst, conflict_entries))
+        },
+    )
+    .await??;
 
     let _ = tx
         .send(Msg::Status {
@@ -324,7 +304,7 @@ pub async fn resolve_keep_remote(
     save_key: &str,
     remote_hash: &str,
     creds: &SessionCreds,
-    config: &WaystoneConfig,
+    _config: &WaystoneConfig,
     tx: mpsc::Sender<Msg>,
     target_id: usize,
 ) -> Result<()> {
@@ -339,14 +319,8 @@ pub async fn resolve_keep_remote(
     let save = saves
         .iter()
         .find(|s| s.group_key == save_key)
-        .ok_or_else(|| anyhow::anyhow!("save '{}' not found in target", save_key))?;
-
-    let pipe = SyncPipeline {
-        vault: &creds.vault,
-        dav: &creds.dav,
-        device_id: &config.device_id,
-        policy: config.conflict_policy,
-    };
+        .ok_or_else(|| anyhow::anyhow!("save '{}' not found in target", save_key))?
+        .clone();
 
     let _ = tx
         .send(Msg::Progress {
@@ -358,19 +332,31 @@ pub async fn resolve_keep_remote(
         })
         .await;
 
-    let zip_bytes = pipe.pull_blob(save, remote_hash).await?;
-    helpers::restore_save_from_blob(
-        &zip_bytes,
-        save,
-        &target.path,
-        &target.adapter,
-        &target.system,
-    )?;
+    let vault = Arc::clone(&creds.vault);
+    let dav = Arc::clone(&creds.blocking_dav);
+    let hash = remote_hash.to_string();
+    let dest = target.path.clone();
+    let adapter_name = target.adapter.clone();
+    let system_name = target.system.clone();
+    let save_key_owned = save_key.to_string();
+
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        let blob_name = vault.blob_name(&hash);
+        let base_path = waystone_sync::orchestration::remote_path(&vault, &save);
+        let blob_path = format!("{}/blobs/{}.bin", base_path, blob_name);
+        let encrypted = dav
+            .get(&blob_path)?
+            .ok_or_else(|| anyhow::anyhow!("blob not found on server"))?;
+        let zip_bytes = vault.decrypt_blob(&encrypted)?;
+        helpers::restore_save_from_blob(&zip_bytes, &save, &dest, &adapter_name, &system_name)?;
+        Ok(())
+    })
+    .await??;
 
     let _ = tx
         .send(Msg::ActionDone {
             target_id,
-            result: ActionResult::Ok(format!("kept remote for {}", save_key)),
+            result: ActionResult::Ok(format!("kept remote for {}", save_key_owned)),
         })
         .await;
 
@@ -401,11 +387,12 @@ pub async fn attempt_unlock(
     let result = try_unlock(&server_url, username, &passphrase, webdav_password).await;
     passphrase.zeroize();
     match result {
-        Ok((vault, dav)) => {
+        Ok((vault, dav, blocking_dav)) => {
             let _ = tx
                 .send(Msg::UnlockOk {
                     vault: Arc::new(vault),
                     dav: Arc::new(dav),
+                    blocking_dav: Arc::new(blocking_dav),
                 })
                 .await;
         }
@@ -421,14 +408,15 @@ async fn try_unlock(
     username: Option<String>,
     passphrase: &str,
     webdav_password: Option<String>,
-) -> Result<(Vault, WebDavClient)> {
-    let dav = WebDavClient::new(server_url, username, webdav_password);
+) -> Result<(Vault, WebDavClient, BlockingWebDav)> {
+    let dav = WebDavClient::new(server_url, username.clone(), webdav_password.clone());
     let keys_data = dav
         .get("/keys.json")
         .await?
         .ok_or_else(|| anyhow::anyhow!("no keys.json on server -- run `waystone init` first"))?;
     let vault = Vault::unlock_with_passphrase(passphrase, &keys_data)?;
-    Ok((vault, dav))
+    let blocking_dav = BlockingWebDav::new(server_url, username, webdav_password);
+    Ok((vault, dav, blocking_dav))
 }
 
 pub async fn run_setup(
@@ -443,12 +431,13 @@ pub async fn run_setup(
     password.zeroize();
 
     match result {
-        Ok((vault, dav, recovery_key)) => {
+        Ok((vault, dav, blocking_dav, recovery_key)) => {
             let _ = tx
                 .send(Msg::SetupResult(Ok(SetupOk {
                     recovery_key,
                     vault: Arc::new(vault),
                     dav: Arc::new(dav),
+                    blocking_dav: Arc::new(blocking_dav),
                 })))
                 .await;
         }
@@ -463,7 +452,7 @@ async fn try_setup(
     username: &str,
     password: &str,
     passphrase: &str,
-) -> Result<(Vault, WebDavClient, String)> {
+) -> Result<(Vault, WebDavClient, BlockingWebDav, String)> {
     let user = if username.is_empty() {
         None
     } else {
@@ -474,7 +463,7 @@ async fn try_setup(
     } else {
         Some(password.to_owned())
     };
-    let dav = WebDavClient::new(server_url, user, pass);
+    let dav = WebDavClient::new(server_url, user.clone(), pass.clone());
 
     // Overwrite guard: refuse if keys.json already exists
     let existing = dav.get("/keys.json").await?;
@@ -488,7 +477,8 @@ async fn try_setup(
     dav.mkdir_p("/").await?;
     dav.put("/keys.json", keys_json).await?;
 
-    Ok((vault, dav, recovery_key))
+    let blocking_dav = BlockingWebDav::new(server_url, user, pass);
+    Ok((vault, dav, blocking_dav, recovery_key))
 }
 
 pub fn save_recovery_file(key: &str, device_id: &str) -> Result<std::path::PathBuf> {

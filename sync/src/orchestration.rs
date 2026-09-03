@@ -16,7 +16,7 @@ pub struct PullOutcome {
     pub files: Option<Vec<(String, Vec<u8>)>>,
 }
 
-fn remote_path(vault: &Vault, save: &NormalizedSave) -> String {
+pub fn remote_path(vault: &Vault, save: &NormalizedSave) -> String {
     let sys_seg = vault.path_segment(save.id.system.as_str());
     let game_seg = vault.path_segment(&save.id.game.key);
     let slot_seg = vault.path_segment(&save.id.slot);

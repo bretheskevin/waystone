@@ -86,6 +86,7 @@ impl WebDavClient {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn exists(&self, path: &str) -> Result<bool> {
         let resp = self
             .request(reqwest::Method::HEAD, path)
@@ -106,6 +107,7 @@ impl WebDavClient {
     }
 
     /// Issue a PROPFIND Depth:1 against a collection and return all `<href>` values.
+    #[allow(dead_code)]
     pub async fn propfind(&self, path: &str) -> Result<Vec<String>> {
         let resp = self
             .request(reqwest::Method::from_bytes(b"PROPFIND").unwrap(), path)
@@ -148,6 +150,166 @@ fn parse_propfind_hrefs(xml: &str) -> Vec<String> {
         }
     }
     hrefs
+}
+
+pub struct BlockingWebDav {
+    client: reqwest::blocking::Client,
+    base_url: String,
+    username: Option<String>,
+    password: Option<String>,
+}
+
+impl std::fmt::Debug for BlockingWebDav {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BlockingWebDav")
+            .field("base_url", &self.base_url)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl Clone for BlockingWebDav {
+    fn clone(&self) -> Self {
+        Self {
+            client: reqwest::blocking::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .expect("failed to build HTTP client"),
+            base_url: self.base_url.clone(),
+            username: self.username.clone(),
+            password: self.password.clone(),
+        }
+    }
+}
+
+impl BlockingWebDav {
+    pub fn new(base_url: &str, username: Option<String>, password: Option<String>) -> Self {
+        Self {
+            client: reqwest::blocking::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .timeout(std::time::Duration::from_secs(120))
+                .build()
+                .expect("failed to build HTTP client"),
+            base_url: base_url.trim_end_matches('/').to_string(),
+            username,
+            password,
+        }
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}/{}", self.base_url, path.trim_start_matches('/'))
+    }
+
+    fn request(&self, method: reqwest::Method, path: &str) -> reqwest::blocking::RequestBuilder {
+        let mut req = self.client.request(method, self.url(path));
+        if let (Some(u), Some(p)) = (&self.username, &self.password) {
+            req = req.basic_auth(u, Some(p));
+        }
+        req
+    }
+}
+
+impl Drop for BlockingWebDav {
+    fn drop(&mut self) {
+        self.password.zeroize();
+    }
+}
+
+impl waystone_sync::WebDav for BlockingWebDav {
+    fn get(&self, path: &str) -> waystone_sync::Result<Option<Vec<u8>>> {
+        let resp = self
+            .request(reqwest::Method::GET, path)
+            .send()
+            .map_err(|e| waystone_sync::SyncError::WebDav(e.to_string()))?;
+        if resp.status().as_u16() == 404 {
+            return Ok(None);
+        }
+        if !resp.status().is_success() {
+            return Err(waystone_sync::SyncError::WebDav(format!(
+                "GET {} returned {}",
+                path,
+                resp.status()
+            )));
+        }
+        Ok(Some(
+            resp.bytes()
+                .map_err(|e| waystone_sync::SyncError::WebDav(e.to_string()))?
+                .to_vec(),
+        ))
+    }
+
+    fn put(&self, path: &str, body: Vec<u8>) -> waystone_sync::Result<()> {
+        let resp = self
+            .request(reqwest::Method::PUT, path)
+            .body(body)
+            .send()
+            .map_err(|e| waystone_sync::SyncError::WebDav(e.to_string()))?;
+        if !resp.status().is_success() {
+            return Err(waystone_sync::SyncError::WebDav(format!(
+                "PUT {} returned {}",
+                path,
+                resp.status()
+            )));
+        }
+        Ok(())
+    }
+
+    fn exists(&self, path: &str) -> waystone_sync::Result<bool> {
+        let resp = self
+            .request(reqwest::Method::HEAD, path)
+            .send()
+            .map_err(|e| waystone_sync::SyncError::WebDav(e.to_string()))?;
+        Ok(resp.status().is_success())
+    }
+
+    fn propfind(&self, path: &str) -> waystone_sync::Result<Vec<String>> {
+        let resp = self
+            .request(reqwest::Method::from_bytes(b"PROPFIND").unwrap(), path)
+            .header("Depth", "1")
+            .header("Content-Type", "application/xml")
+            .body(
+                r#"<?xml version="1.0"?><D:propfind xmlns:D="DAV:"><D:prop><D:resourcetype/></D:prop></D:propfind>"#,
+            )
+            .send()
+            .map_err(|e| waystone_sync::SyncError::WebDav(e.to_string()))?;
+        if resp.status().as_u16() == 404 {
+            return Ok(vec![]);
+        }
+        if !resp.status().is_success() {
+            return Err(waystone_sync::SyncError::WebDav(format!(
+                "PROPFIND {} returned {}",
+                path,
+                resp.status()
+            )));
+        }
+        let text = resp
+            .text()
+            .map_err(|e| waystone_sync::SyncError::WebDav(e.to_string()))?;
+        Ok(parse_propfind_hrefs(&text))
+    }
+
+    fn mkdir_p(&self, path: &str) -> waystone_sync::Result<()> {
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut current = String::new();
+        for seg in segments {
+            current = format!("{}/{}", current, seg);
+            let resp = self
+                .request(reqwest::Method::from_bytes(b"MKCOL").unwrap(), &current)
+                .send()
+                .map_err(|e| waystone_sync::SyncError::WebDav(e.to_string()))?;
+            let status = resp.status().as_u16();
+            if status != 201 && status != 405 && !resp.status().is_success() {
+                return Err(waystone_sync::SyncError::WebDav(format!(
+                    "MKCOL {} returned {}",
+                    current,
+                    resp.status()
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -215,5 +377,11 @@ mod tests {
         let hrefs = client.propfind("/proptest/col").await.unwrap();
         assert!(hrefs.iter().any(|h| h.ends_with("/a.txt")));
         assert!(hrefs.iter().any(|h| h.ends_with("/b.txt")));
+    }
+
+    #[test]
+    fn blocking_webdav_implements_sync_trait() {
+        let dav = BlockingWebDav::new("http://localhost:5099", None, None);
+        let _trait_obj: &dyn waystone_sync::WebDav = &dav;
     }
 }
