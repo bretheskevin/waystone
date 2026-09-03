@@ -1,5 +1,7 @@
 mod config;
+mod helpers;
 mod pipeline;
+mod tui;
 mod webdav;
 
 use anyhow::Result;
@@ -55,6 +57,8 @@ enum Commands {
         #[arg(long)]
         username: Option<String>,
     },
+    /// Launch the interactive TUI dashboard
+    Tui,
     /// Show sync status
     Status {
         /// Path to the save source directory
@@ -70,59 +74,6 @@ enum Commands {
         #[arg(long)]
         username: Option<String>,
     },
-}
-
-fn parse_system(s: &str) -> Result<waystone_core::model::SystemId> {
-    match s {
-        "switch" => Ok(waystone_core::model::SystemId::Switch),
-        "3ds" => Ok(waystone_core::model::SystemId::ThreeDS),
-        "nds" => Ok(waystone_core::model::SystemId::Nds),
-        "gba" => Ok(waystone_core::model::SystemId::Gba),
-        "gbc" => Ok(waystone_core::model::SystemId::Gbc),
-        "gb" => Ok(waystone_core::model::SystemId::Gb),
-        other => anyhow::bail!("unknown system: {}", other),
-    }
-}
-
-fn make_adapter(
-    name: &str,
-    system: waystone_core::model::SystemId,
-) -> Result<Box<dyn waystone_core::adapters::Adapter>> {
-    match name {
-        "jksv" => Ok(Box::new(waystone_core::adapters::jksv::JksvAdapter::new(
-            system,
-        ))),
-        "mgba" => Ok(Box::new(waystone_core::adapters::mgba::MgbaAdapter::new(
-            system,
-        ))),
-        other => anyhow::bail!("unknown adapter: {}", other),
-    }
-}
-
-fn read_source_tree(path: &std::path::Path) -> Result<waystone_core::model::RawTree> {
-    let mut files = Vec::new();
-    for entry in walkdir(path)? {
-        let rel = entry.strip_prefix(path)?.to_string_lossy().to_string();
-        let content = std::fs::read(&entry)?;
-        files.push(waystone_core::model::RawFile { path: rel, content });
-    }
-    Ok(waystone_core::model::RawTree { files })
-}
-
-fn walkdir(dir: &std::path::Path) -> Result<Vec<PathBuf>> {
-    let mut result = Vec::new();
-    if dir.is_dir() {
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                result.extend(walkdir(&path)?);
-            } else {
-                result.push(path);
-            }
-        }
-    }
-    Ok(result)
 }
 
 /// Resolve WebDAV credentials: username from arg > config; password from env > interactive prompt.
@@ -242,8 +193,8 @@ async fn main() -> Result<()> {
             username,
         } => {
             let cfg = config::WaystoneConfig::load()?;
-            let system = parse_system(&system)?;
-            let adapter = make_adapter(&adapter, system)?;
+            let system = helpers::parse_system(&system)?;
+            let adapter = helpers::make_adapter(&adapter, system)?;
 
             let passphrase = rpassword::prompt_password("Passphrase: ")?;
             let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
@@ -254,7 +205,7 @@ async fn main() -> Result<()> {
             let vault =
                 waystone_core::crypto::Vault::unlock_with_passphrase(&passphrase, &keys_data)?;
 
-            let raw = read_source_tree(&source)?;
+            let raw = helpers::read_source_tree(&source)?;
             let saves = adapter.normalize(&raw);
 
             let pipe = pipeline::SyncPipeline {
@@ -280,8 +231,8 @@ async fn main() -> Result<()> {
             username,
         } => {
             let cfg = config::WaystoneConfig::load()?;
-            let system = parse_system(&system)?;
-            let adapter = make_adapter(&adapter, system)?;
+            let system = helpers::parse_system(&system)?;
+            let adapter = helpers::make_adapter(&adapter, system)?;
 
             let passphrase = rpassword::prompt_password("Passphrase: ")?;
             let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
@@ -294,7 +245,7 @@ async fn main() -> Result<()> {
                 waystone_core::crypto::Vault::unlock_with_passphrase(&passphrase, &keys_data)?;
 
             let raw = if dest.exists() {
-                read_source_tree(&dest)?
+                helpers::read_source_tree(&dest)?
             } else {
                 waystone_core::model::RawTree { files: vec![] }
             };
@@ -323,6 +274,12 @@ async fn main() -> Result<()> {
             Ok(())
         }
 
+        Commands::Tui => {
+            let cfg = config::WaystoneConfig::load()?;
+            let config_path = config::WaystoneConfig::config_dir()?.join("config.json");
+            tui::run(cfg, config_path).await
+        }
+
         Commands::Status {
             source,
             adapter,
@@ -330,9 +287,9 @@ async fn main() -> Result<()> {
             username: _,
         } => {
             let cfg = config::WaystoneConfig::load()?;
-            let system = parse_system(&system)?;
-            let adapter = make_adapter(&adapter, system)?;
-            let raw = read_source_tree(&source)?;
+            let system = helpers::parse_system(&system)?;
+            let adapter = helpers::make_adapter(&adapter, system)?;
+            let raw = helpers::read_source_tree(&source)?;
             let saves = adapter.normalize(&raw);
 
             println!("Device: {}", cfg.device_id);

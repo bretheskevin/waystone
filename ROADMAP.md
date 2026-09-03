@@ -93,6 +93,17 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
 - **nds-bootstrap**: https://github.com/DS-Homebrew/nds-bootstrap
 - **Checkpoint**: https://github.com/FlagBrew/Checkpoint
 
+### Desktop TUI (`waystone tui`)
+- Interactive `ratatui` v1 + `crossterm` dashboard over the existing async pipeline, launched by a
+  new `waystone tui` subcommand (CLI subcommands unchanged). **Elm-style architecture**: pure `App`
+  state + `Msg` + `update()` reducer (19 headless unit tests) + `ui()` render + a `tokio::select!`
+  loop merging `crossterm::EventStream` and an `mpsc` fed by background push/pull tasks (live
+  progress). Full-CRUD **sync targets** persisted in `WaystoneConfig` (`targets`, `#[serde(default)]`
+  back-compat); per-target sync status; **session unlock modal** (vault passphrase + WebDAV password,
+  masked, in-memory, zeroized). Colors from `design/tokens.json` (`tui/theme.rs`) for design parity.
+  Shared `desktop/src/helpers.rs` gives the CLI and TUI one adapter/pipeline code path. **Deferred to
+  v2**: interactive conflict-resolution picker, in-TUI vault init, settings screens.
+
 ## Next
 - **M2 (remaining) — Switch shell: borealis UI + first on-hardware run**: the two-way save engine
   (push + pull/restore) and verified HTTPS are built and compile+link-verified end-to-end.

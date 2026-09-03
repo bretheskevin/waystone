@@ -9,6 +9,16 @@ pub struct WebDavClient {
     password: Option<String>,
 }
 
+impl std::fmt::Debug for WebDavClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WebDavClient")
+            .field("base_url", &self.base_url)
+            .field("username", &self.username)
+            .field("password", &"[REDACTED]")
+            .finish()
+    }
+}
+
 impl WebDavClient {
     pub fn new(base_url: &str, username: Option<String>, password: Option<String>) -> Self {
         Self {
