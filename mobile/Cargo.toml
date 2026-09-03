@@ -1,0 +1,22 @@
+[package]
+name = "waystone-mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+# uniffi 0.32.0 used (latest available; plan pinned 0.29.1 which predates current release)
+[dependencies]
+waystone-core = { path = "../core" }
+waystone-sync = { path = "../sync" }
+uniffi = { version = "=0.32.0", features = ["cli"] }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "uniffi-bindgen.rs"
+
+[dev-dependencies]
+uniffi = { version = "=0.32.0", features = ["bindgen-tests"] }
+tempfile = "3"
