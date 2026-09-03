@@ -83,6 +83,15 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   augmented by a Mozilla CA bundle embedded via romfs (`ROMFS := romfs`, `--romfsdir`). CA bundle
   bytes confirmed present in the `.nro`. **Compile+link verified; not yet run on hardware (clock
   must be correct for cert date validation).**
+- **Switch borealis GUI vertical slice (compile+link)**: replaces the console driver as the default
+  entry point with a **borealis** UI (deko3d backend) — `app_main.cpp` + a programmatic
+  `TitleListActivity` (game list + "Sync all" action) driving `push_title`/`pull_title` on a
+  `SyncController` worker thread, with a live status label polled via `brls::RepeatingTimer`. borealis
+  is vendored as a pinned submodule (`switch/lib/borealis` @ `20e2d33b`, `library/borealis.mk`
+  fragment); the romfs is assembled at build time from the submodule (fonts/i18n/xml + `uam`-compiled
+  deko3d shaders), with only `cacert.pem` committed. The console driver is kept byte-for-byte behind
+  `make CONSOLE=1`. **Compile+link verified in both modes and romfs embedding confirmed via the
+  packaging log; the UI cannot be rendered on the host — not yet eyeballed on hardware.**
 
 **Quality:** 103 tests pass (11 new checkpoint core tests + 3 checkpoint FFI tests), clippy clean.
 
@@ -118,10 +127,12 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   change-passphrase, recovery-key unlock in the TUI.
 
 ## Next
-- **M2 (remaining) — Switch shell: borealis UI + first on-hardware run**: the two-way save engine
-  (push + pull/restore) and verified HTTPS are built and compile+link-verified end-to-end.
-  Remaining: borealis UI (game list + config/credential entry, replacing the console driver) and
-  running it on Switch hardware for the first time.
+- **M2 (remaining) — Switch shell: full UI + first on-hardware run**: the two-way save engine
+  (push + pull/restore), verified HTTPS, and a **borealis GUI vertical slice** (title list + live
+  sync; console driver kept behind `CONSOLE=1`) are built and compile+link-verified end-to-end.
+  Remaining: eyeball the borealis UI on Switch hardware (first on-hardware run), then the full-parity
+  screens — runtime setup / credential entry via swkbd (re-enables the excluded `swkbd.cpp`),
+  conflict-resolution inbox, and settings — mirroring the desktop TUI.
 - **M3 — Android shell**: Kotlin/Compose UI, core via **UniFFI** (SAF + OkHttp).
 - **M4 — 3DS shell**: C++/libctru + citro2d.
 
