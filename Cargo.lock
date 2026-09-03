@@ -2381,6 +2381,7 @@ dependencies = [
  "rpassword",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "uuid",
  "waystone-core",

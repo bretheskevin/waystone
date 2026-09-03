@@ -219,6 +219,76 @@ async fn dispatch_cmd(
                 action::attempt_unlock(server_url, username, passphrase, webdav_password, tx).await;
             });
         }
+
+        Cmd::ResolveKeepLocal {
+            target_id,
+            save_key,
+        } => {
+            if let (Some(creds), Some(target)) = (&app.creds, app.targets.get(target_id).cloned()) {
+                app.busy = Some(target_id);
+                let vault = creds.vault.clone();
+                let dav = creds.dav.clone();
+                let cfg = config.clone();
+                let tx_action = tx.clone();
+                let handle = tokio::spawn(async move {
+                    let creds = app::SessionCreds { vault, dav };
+                    if let Err(e) = action::resolve_keep_local(
+                        &target,
+                        &save_key,
+                        &creds,
+                        &cfg,
+                        tx_action.clone(),
+                        target_id,
+                    )
+                    .await
+                    {
+                        let _ = tx_action
+                            .send(Msg::ActionDone {
+                                target_id,
+                                result: app::ActionResult::Err(e.to_string()),
+                            })
+                            .await;
+                    }
+                });
+                watch_busy_task(handle, tx.clone(), target_id);
+            }
+        }
+
+        Cmd::ResolveKeepRemote {
+            target_id,
+            save_key,
+            remote_hash,
+        } => {
+            if let (Some(creds), Some(target)) = (&app.creds, app.targets.get(target_id).cloned()) {
+                app.busy = Some(target_id);
+                let vault = creds.vault.clone();
+                let dav = creds.dav.clone();
+                let cfg = config.clone();
+                let tx_action = tx.clone();
+                let handle = tokio::spawn(async move {
+                    let creds = app::SessionCreds { vault, dav };
+                    if let Err(e) = action::resolve_keep_remote(
+                        &target,
+                        &save_key,
+                        &remote_hash,
+                        &creds,
+                        &cfg,
+                        tx_action.clone(),
+                        target_id,
+                    )
+                    .await
+                    {
+                        let _ = tx_action
+                            .send(Msg::ActionDone {
+                                target_id,
+                                result: app::ActionResult::Err(e.to_string()),
+                            })
+                            .await;
+                    }
+                });
+                watch_busy_task(handle, tx.clone(), target_id);
+            }
+        }
     }
     Ok(())
 }

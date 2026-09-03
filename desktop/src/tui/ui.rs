@@ -1,4 +1,4 @@
-use crate::tui::app::{App, FormMode, Overlay, TargetStatus};
+use crate::tui::app::{App, FormMode, Overlay, Screen, TargetStatus};
 use crate::tui::theme;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -9,6 +9,21 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 const SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
 
 pub fn ui(frame: &mut Frame, app: &App) {
+    match app.screen {
+        Screen::Dashboard => render_dashboard(frame, app),
+        Screen::Conflicts => render_conflicts_screen(frame, app),
+    }
+
+    match &app.overlay {
+        Overlay::None => {}
+        Overlay::Help => render_help_overlay(frame),
+        Overlay::Unlock { .. } => render_unlock_overlay(frame, app),
+        Overlay::TargetForm { .. } => render_form_overlay(frame, app),
+        Overlay::Confirm { message, .. } => render_confirm_overlay(frame, message),
+    }
+}
+
+fn render_dashboard(frame: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -21,14 +36,125 @@ pub fn ui(frame: &mut Frame, app: &App) {
     render_header(frame, app, chunks[0]);
     render_targets(frame, app, chunks[1]);
     render_log(frame, app, chunks[2]);
+}
 
-    match &app.overlay {
-        Overlay::None => {}
-        Overlay::Help => render_help_overlay(frame),
-        Overlay::Unlock { .. } => render_unlock_overlay(frame, app),
-        Overlay::TargetForm { .. } => render_form_overlay(frame, app),
-        Overlay::Confirm { message, .. } => render_confirm_overlay(frame, message),
+fn render_conflicts_screen(frame: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(5),
+            Constraint::Length(3),
+        ])
+        .split(frame.area());
+
+    let spinner = if app.busy.is_some() {
+        SPINNER_FRAMES[app.spinner as usize % SPINNER_FRAMES.len()]
+    } else {
+        ' '
+    };
+    let header_line = Line::from(vec![
+        Span::styled(
+            " waystone ",
+            Style::default()
+                .fg(theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Conflicts",
+            Style::default()
+                .fg(theme::WARNING)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(" | {} item(s) {} ", app.conflicts.len(), spinner,)),
+    ]);
+    frame.render_widget(Paragraph::new(header_line), chunks[0]);
+
+    if app.conflicts.is_empty() {
+        let empty = Paragraph::new(Line::raw("  No conflicts")).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::NEUTRAL_700))
+                .title(" Conflicts Inbox "),
+        );
+        frame.render_widget(empty, chunks[1]);
+    } else {
+        let items: Vec<ListItem> = app
+            .conflicts
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let is_selected = i == app.conflict_sel;
+                let detail = if is_selected {
+                    vec![
+                        Line::from(vec![Span::styled(
+                            &entry.label,
+                            Style::default().fg(theme::NEUTRAL_50),
+                        )]),
+                        Line::from(vec![
+                            Span::raw("  LOCAL  "),
+                            Span::styled(
+                                &entry.local.hash[..12.min(entry.local.hash.len())],
+                                Style::default().fg(theme::SYNC),
+                            ),
+                            Span::raw(format!("  {}", entry.local.mtime)),
+                        ]),
+                        Line::from(vec![
+                            Span::raw("  REMOTE "),
+                            Span::styled(
+                                &entry.remote.hash[..12.min(entry.remote.hash.len())],
+                                Style::default().fg(theme::WARNING),
+                            ),
+                            Span::raw(format!(
+                                "  {}  ({})",
+                                entry.remote.mtime,
+                                entry.remote.device_id.as_deref().unwrap_or("?"),
+                            )),
+                        ]),
+                    ]
+                } else {
+                    vec![Line::from(vec![Span::styled(
+                        &entry.label,
+                        Style::default().fg(theme::NEUTRAL_300),
+                    )])]
+                };
+                ListItem::new(detail)
+            })
+            .collect();
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme::WARNING))
+                    .title(" Conflicts Inbox "),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(theme::PRIMARY_800)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("> ");
+
+        let mut state = ratatui::widgets::ListState::default();
+        state.select(Some(app.conflict_sel));
+        frame.render_stateful_widget(list, chunks[1], &mut state);
     }
+
+    let footer = Line::from(vec![
+        Span::styled(
+            " [\u{2191}\u{2193}] ",
+            Style::default().fg(theme::NEUTRAL_50),
+        ),
+        Span::styled("select", Style::default().fg(theme::NEUTRAL_400)),
+        Span::styled(" [l] ", Style::default().fg(theme::NEUTRAL_50)),
+        Span::styled("keep local", Style::default().fg(theme::SYNC)),
+        Span::styled(" [r] ", Style::default().fg(theme::NEUTRAL_50)),
+        Span::styled("keep remote", Style::default().fg(theme::WARNING)),
+        Span::styled(" [esc] ", Style::default().fg(theme::NEUTRAL_50)),
+        Span::styled("back", Style::default().fg(theme::NEUTRAL_400)),
+    ]);
+    frame.render_widget(Paragraph::new(footer), chunks[2]);
 }
 
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -41,6 +167,11 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         "unlocked"
     } else {
         "locked"
+    };
+    let conflict_hint = if !app.conflicts.is_empty() {
+        format!(" | {} conflict(s) [C]", app.conflicts.len())
+    } else {
+        String::new()
     };
     let line = Line::from(vec![
         Span::styled(
@@ -59,6 +190,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
             if app.dirty { "[modified]" } else { "" },
             Style::default().fg(theme::WARNING),
         ),
+        Span::styled(conflict_hint, Style::default().fg(theme::WARNING)),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }
@@ -127,7 +259,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 }
 
 fn render_help_overlay(frame: &mut Frame) {
-    let area = centered_rect(50, 14, frame.area());
+    let area = centered_rect(50, 16, frame.area());
     frame.render_widget(Clear, area);
     let text = vec![
         Line::styled(
@@ -141,6 +273,7 @@ fn render_help_overlay(frame: &mut Frame) {
         Line::raw("p              Push selected"),
         Line::raw("P              Pull selected"),
         Line::raw("r              Refresh status"),
+        Line::raw("C              Conflicts inbox"),
         Line::raw("a              Add target"),
         Line::raw("e              Edit target"),
         Line::raw("d              Delete target"),

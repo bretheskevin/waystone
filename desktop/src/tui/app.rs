@@ -8,6 +8,12 @@ use zeroize::Zeroize;
 
 const MAX_LOG_LINES: usize = 200;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    Dashboard,
+    Conflicts,
+}
+
 pub enum Cmd {
     SpawnPush(usize),
     SpawnPull(usize),
@@ -19,6 +25,15 @@ pub enum Cmd {
     },
     SaveConfig,
     Quit,
+    ResolveKeepLocal {
+        target_id: usize,
+        save_key: String,
+    },
+    ResolveKeepRemote {
+        target_id: usize,
+        save_key: String,
+        remote_hash: String,
+    },
 }
 
 impl std::fmt::Debug for Cmd {
@@ -35,6 +50,23 @@ impl std::fmt::Debug for Cmd {
                 .finish(),
             Self::SaveConfig => write!(f, "SaveConfig"),
             Self::Quit => write!(f, "Quit"),
+            Self::ResolveKeepLocal {
+                target_id,
+                save_key,
+            } => f
+                .debug_struct("ResolveKeepLocal")
+                .field("target_id", target_id)
+                .field("save_key", save_key)
+                .finish(),
+            Self::ResolveKeepRemote {
+                target_id,
+                save_key,
+                ..
+            } => f
+                .debug_struct("ResolveKeepRemote")
+                .field("target_id", target_id)
+                .field("save_key", save_key)
+                .finish(),
         }
     }
 }
@@ -43,6 +75,23 @@ impl std::fmt::Debug for Cmd {
 pub enum ActionResult {
     Ok(String),
     Err(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeadInfo {
+    pub hash: String,
+    pub mtime: String,
+    pub device_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConflictEntry {
+    pub target_id: usize,
+    pub label: String,
+    pub save_key: String,
+    pub local: HeadInfo,
+    pub remote: HeadInfo,
+    pub remote_hash: String,
 }
 
 pub enum Msg {
@@ -59,6 +108,10 @@ pub enum Msg {
     Status {
         target_id: usize,
         status: TargetStatus,
+    },
+    Conflicts {
+        target_id: usize,
+        entries: Vec<ConflictEntry>,
     },
     UnlockOk {
         vault: Arc<Vault>,
@@ -180,6 +233,15 @@ pub enum PendingCmd {
     #[allow(dead_code)]
     RefreshAllStatuses,
     DeleteTarget(usize),
+    ResolveKeepLocal {
+        target_id: usize,
+        save_key: String,
+    },
+    ResolveKeepRemote {
+        target_id: usize,
+        save_key: String,
+        remote_hash: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -200,6 +262,9 @@ pub struct App {
     pub should_quit: bool,
     pub server_url: String,
     pub username: Option<String>,
+    pub screen: Screen,
+    pub conflicts: Vec<ConflictEntry>,
+    pub conflict_sel: usize,
 }
 
 impl App {
@@ -217,6 +282,9 @@ impl App {
             should_quit: false,
             server_url: config.server_url.clone(),
             username: config.username.clone(),
+            screen: Screen::Dashboard,
+            conflicts: Vec::new(),
+            conflict_sel: 0,
         }
     }
 
@@ -258,6 +326,17 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
             match result {
                 ActionResult::Ok(msg) => {
                     app.push_log(format!("[{}] Done: {}", target_id, msg));
+                    if app.screen == Screen::Conflicts {
+                        app.conflicts.retain(|c| c.target_id != target_id);
+                        if app.conflict_sel >= app.conflicts.len() && !app.conflicts.is_empty() {
+                            app.conflict_sel = app.conflicts.len() - 1;
+                        }
+                        if app.conflicts.is_empty() {
+                            app.screen = Screen::Dashboard;
+                            app.conflict_sel = 0;
+                        }
+                        return vec![Cmd::RefreshStatus(target_id)];
+                    }
                 }
                 ActionResult::Err(err) => {
                     app.statuses
@@ -270,6 +349,18 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
 
         Msg::Status { target_id, status } => {
             app.statuses.insert(target_id, status);
+            vec![]
+        }
+
+        Msg::Conflicts { target_id, entries } => {
+            app.conflicts.retain(|c| c.target_id != target_id);
+            app.conflicts.extend(entries);
+            if app.conflict_sel >= app.conflicts.len() && !app.conflicts.is_empty() {
+                app.conflict_sel = app.conflicts.len() - 1;
+            }
+            if app.conflicts.is_empty() {
+                app.conflict_sel = 0;
+            }
             vec![]
         }
 
@@ -311,12 +402,31 @@ fn pending_to_cmd(p: PendingCmd) -> Cmd {
         PendingCmd::RefreshAllStatuses => Cmd::RefreshAllStatuses,
         // DeleteTarget is handled directly in Confirm overlay; not reachable from unlock flow
         PendingCmd::DeleteTarget(_) => Cmd::Quit,
+        PendingCmd::ResolveKeepLocal {
+            target_id,
+            save_key,
+        } => Cmd::ResolveKeepLocal {
+            target_id,
+            save_key,
+        },
+        PendingCmd::ResolveKeepRemote {
+            target_id,
+            save_key,
+            remote_hash,
+        } => Cmd::ResolveKeepRemote {
+            target_id,
+            save_key,
+            remote_hash,
+        },
     }
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     match &app.overlay {
-        Overlay::None => handle_dashboard_key(app, key),
+        Overlay::None => match app.screen {
+            Screen::Dashboard => handle_dashboard_key(app, key),
+            Screen::Conflicts => handle_conflicts_key(app, key),
+        },
         Overlay::Unlock { .. } => handle_unlock_key(app, key),
         Overlay::TargetForm { .. } => handle_form_key(app, key),
         Overlay::Confirm { .. } => handle_confirm_key(app, key),
@@ -424,11 +534,78 @@ fn handle_dashboard_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             }
             ensure_creds_then(app, PendingCmd::RefreshStatus(app.selected))
         }
+        KeyCode::Char('C') => {
+            if app.conflicts.is_empty() {
+                app.push_log("No conflicts to resolve.".into());
+                return vec![];
+            }
+            app.screen = Screen::Conflicts;
+            app.conflict_sel = 0;
+            vec![]
+        }
         _ => vec![],
     }
 }
 
-fn ensure_creds_then(app: &mut App, pending: PendingCmd) -> Vec<Cmd> {
+fn handle_conflicts_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
+    use crossterm::event::KeyCode;
+
+    if app.busy.is_some() {
+        if key.code == KeyCode::Char('q') {
+            return vec![Cmd::Quit];
+        }
+        return vec![];
+    }
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.screen = Screen::Dashboard;
+            vec![]
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !app.conflicts.is_empty() {
+                app.conflict_sel = (app.conflict_sel + 1).min(app.conflicts.len() - 1);
+            }
+            vec![]
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.conflict_sel > 0 {
+                app.conflict_sel -= 1;
+            }
+            vec![]
+        }
+        KeyCode::Char('l') => {
+            if let Some(entry) = app.conflicts.get(app.conflict_sel) {
+                ensure_creds_then(
+                    app,
+                    PendingCmd::ResolveKeepLocal {
+                        target_id: entry.target_id,
+                        save_key: entry.save_key.clone(),
+                    },
+                )
+            } else {
+                vec![]
+            }
+        }
+        KeyCode::Char('r') => {
+            if let Some(entry) = app.conflicts.get(app.conflict_sel) {
+                ensure_creds_then(
+                    app,
+                    PendingCmd::ResolveKeepRemote {
+                        target_id: entry.target_id,
+                        save_key: entry.save_key.clone(),
+                        remote_hash: entry.remote_hash.clone(),
+                    },
+                )
+            } else {
+                vec![]
+            }
+        }
+        _ => vec![],
+    }
+}
+
+pub(crate) fn ensure_creds_then(app: &mut App, pending: PendingCmd) -> Vec<Cmd> {
     if app.creds.is_some() {
         vec![pending_to_cmd(pending)]
     } else {
@@ -675,6 +852,25 @@ mod tests {
         App::new(&config)
     }
 
+    fn make_conflict_entry(target_id: usize) -> ConflictEntry {
+        ConflictEntry {
+            target_id,
+            label: format!("Switch \u{00b7} Test/main"),
+            save_key: format!("switch/TEST_{}/main", target_id),
+            local: HeadInfo {
+                hash: "local_hash".into(),
+                mtime: "2026-01-01T00:00:00Z".into(),
+                device_id: None,
+            },
+            remote: HeadInfo {
+                hash: "remote_hash".into(),
+                mtime: "2026-01-02T00:00:00Z".into(),
+                device_id: Some("other-dev".into()),
+            },
+            remote_hash: "remote_hash".into(),
+        }
+    }
+
     #[test]
     fn selection_moves_down() {
         let mut app = test_app();
@@ -887,5 +1083,164 @@ mod tests {
         update(&mut app, key(KeyCode::Char('y')));
         assert_eq!(app.targets.len(), 2);
         assert_eq!(app.selected, 1);
+    }
+
+    // --- Conflict screen tests ---
+
+    #[test]
+    fn screen_switch_to_conflicts() {
+        let mut app = test_app();
+        app.conflicts.push(make_conflict_entry(0));
+        update(&mut app, key(KeyCode::Char('C')));
+        assert_eq!(app.screen, Screen::Conflicts);
+        assert_eq!(app.conflict_sel, 0);
+    }
+
+    #[test]
+    fn screen_switch_to_conflicts_noop_when_empty() {
+        let mut app = test_app();
+        assert!(app.conflicts.is_empty());
+        update(&mut app, key(KeyCode::Char('C')));
+        assert_eq!(app.screen, Screen::Dashboard);
+        assert!(app.log.back().unwrap().text.contains("No conflicts"));
+    }
+
+    #[test]
+    fn conflict_sel_nav_clamps() {
+        let mut app = test_app();
+        app.screen = Screen::Conflicts;
+        app.conflicts = vec![make_conflict_entry(0), make_conflict_entry(1)];
+
+        update(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.conflict_sel, 1);
+        update(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.conflict_sel, 1);
+
+        update(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.conflict_sel, 0);
+        update(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.conflict_sel, 0);
+    }
+
+    #[test]
+    fn conflicts_esc_returns_to_dashboard() {
+        let mut app = test_app();
+        app.screen = Screen::Conflicts;
+        update(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.screen, Screen::Dashboard);
+    }
+
+    #[test]
+    fn keep_local_without_creds_opens_unlock() {
+        let mut app = test_app();
+        app.screen = Screen::Conflicts;
+        app.conflicts.push(make_conflict_entry(0));
+        update(&mut app, key(KeyCode::Char('l')));
+        assert!(matches!(app.overlay, Overlay::Unlock { .. }));
+    }
+
+    #[test]
+    fn keep_remote_emits_resolve_cmd_with_creds() {
+        let mut app = test_app();
+        app.screen = Screen::Conflicts;
+        let (vault, _) = waystone_core::crypto::Vault::init("test").unwrap();
+        let dav = crate::webdav::WebDavClient::new("http://localhost", None, None);
+        app.creds = Some(SessionCreds {
+            vault: Arc::new(vault),
+            dav: Arc::new(dav),
+        });
+        let mut entry = make_conflict_entry(0);
+        entry.remote_hash = "rh123".into();
+        app.conflicts.push(entry);
+        let cmds = update(&mut app, key(KeyCode::Char('r')));
+        assert!(cmds.iter().any(|c| matches!(
+            c,
+            Cmd::ResolveKeepRemote { remote_hash, .. } if remote_hash == "rh123"
+        )));
+    }
+
+    #[test]
+    fn conflicts_msg_merges_by_target_id() {
+        let mut app = test_app();
+        app.conflicts = vec![make_conflict_entry(0), make_conflict_entry(1)];
+
+        let new_entry = ConflictEntry {
+            target_id: 0,
+            label: "refreshed".into(),
+            save_key: "k1_new".into(),
+            local: HeadInfo {
+                hash: "l2".into(),
+                mtime: "t2".into(),
+                device_id: None,
+            },
+            remote: HeadInfo {
+                hash: "r2".into(),
+                mtime: "t2".into(),
+                device_id: Some("d2".into()),
+            },
+            remote_hash: "r2".into(),
+        };
+        update(
+            &mut app,
+            Msg::Conflicts {
+                target_id: 0,
+                entries: vec![new_entry],
+            },
+        );
+
+        assert_eq!(app.conflicts.len(), 2);
+        assert_eq!(app.conflicts.iter().filter(|c| c.target_id == 0).count(), 1);
+        assert_eq!(
+            app.conflicts
+                .iter()
+                .find(|c| c.target_id == 0)
+                .unwrap()
+                .label,
+            "refreshed"
+        );
+        assert_eq!(
+            app.conflicts
+                .iter()
+                .find(|c| c.target_id == 1)
+                .unwrap()
+                .label,
+            "Switch \u{00b7} Test/main"
+        );
+    }
+
+    #[test]
+    fn conflicts_msg_clears_stale_entries() {
+        let mut app = test_app();
+        app.conflicts = vec![make_conflict_entry(0)];
+
+        update(
+            &mut app,
+            Msg::Conflicts {
+                target_id: 0,
+                entries: vec![],
+            },
+        );
+
+        assert!(app.conflicts.is_empty());
+    }
+
+    #[test]
+    fn action_done_on_conflicts_screen_removes_entry_and_refreshes() {
+        let mut app = test_app();
+        app.screen = Screen::Conflicts;
+        app.busy = Some(0);
+        app.conflicts.push(make_conflict_entry(0));
+
+        let cmds = update(
+            &mut app,
+            Msg::ActionDone {
+                target_id: 0,
+                result: ActionResult::Ok("resolved".into()),
+            },
+        );
+
+        assert!(app.conflicts.is_empty());
+        assert_eq!(app.screen, Screen::Dashboard);
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::RefreshStatus(0))));
     }
 }

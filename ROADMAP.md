@@ -101,8 +101,13 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   progress). Full-CRUD **sync targets** persisted in `WaystoneConfig` (`targets`, `#[serde(default)]`
   back-compat); per-target sync status; **session unlock modal** (vault passphrase + WebDAV password,
   masked, in-memory, zeroized). Colors from `design/tokens.json` (`tui/theme.rs`) for design parity.
-  Shared `desktop/src/helpers.rs` gives the CLI and TUI one adapter/pipeline code path. **Deferred to
-  v2**: interactive conflict-resolution picker, in-TUI vault init, settings screens.
+  Shared `desktop/src/helpers.rs` gives the CLI and TUI one adapter/pipeline code path.
+- **Conflict-resolution inbox (TUI v2)**: status refresh detects divergences with
+  `ConflictPolicy::Prompt` (regardless of config); a `Screen::Conflicts` inbox lists every diverged
+  save with metadata (local vs remote `{device_id, hash, mtime}`), resolved with **keep local**
+  (push) / **keep remote** (force pull-by-hash → restore) / cancel — non-destructive (history is
+  append-only). The restore tail is now one shared `helpers::restore_save_from_blob` (CLI + TUI).
+  **Deferred to v3**: content/file-level diff, "keep both", in-TUI vault init, settings screens.
 
 ## Next
 - **M2 (remaining) — Switch shell: borealis UI + first on-hardware run**: the two-way save engine

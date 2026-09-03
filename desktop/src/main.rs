@@ -96,7 +96,8 @@ async fn do_pull_save(
     pipe: &pipeline::SyncPipeline<'_>,
     save: &waystone_core::model::NormalizedSave,
     dest: &std::path::Path,
-    adapter: &dyn waystone_core::adapters::Adapter,
+    adapter_name: &str,
+    system_name: &str,
     device_id: &str,
     policy: waystone_core::conflict::ConflictPolicy,
 ) -> Result<()> {
@@ -124,17 +125,7 @@ async fn do_pull_save(
         Some(hash) => {
             println!("Pulling: {} / {}", save.id.game.display_name, save.id.slot);
             let zip_bytes = pipe.pull_blob(save, &hash).await?;
-            let files = waystone_core::packaging::unzip(&zip_bytes)?;
-            let mut restored = save.clone();
-            restored.files = files;
-            let native = adapter.to_native(&restored);
-            for file in &native.files {
-                let path = dest.join(&file.path);
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::write(&path, &file.content)?;
-            }
+            helpers::restore_save_from_blob(&zip_bytes, save, dest, adapter_name, system_name)?;
         }
         None => match decision {
             SyncDecision::InSync => {
@@ -231,8 +222,6 @@ async fn main() -> Result<()> {
             username,
         } => {
             let cfg = config::WaystoneConfig::load()?;
-            let system = helpers::parse_system(&system)?;
-            let adapter = helpers::make_adapter(&adapter, system)?;
 
             let passphrase = rpassword::prompt_password("Passphrase: ")?;
             let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
@@ -244,12 +233,15 @@ async fn main() -> Result<()> {
             let vault =
                 waystone_core::crypto::Vault::unlock_with_passphrase(&passphrase, &keys_data)?;
 
+            let system_id = helpers::parse_system(&system)?;
+            let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
+
             let raw = if dest.exists() {
                 helpers::read_source_tree(&dest)?
             } else {
                 waystone_core::model::RawTree { files: vec![] }
             };
-            let local_saves = adapter.normalize(&raw);
+            let local_saves = adapter_obj.normalize(&raw);
 
             let pipe = pipeline::SyncPipeline {
                 vault: &vault,
@@ -263,7 +255,8 @@ async fn main() -> Result<()> {
                     &pipe,
                     save,
                     &dest,
-                    adapter.as_ref(),
+                    &adapter,
+                    &system,
                     &cfg.device_id,
                     cfg.conflict_policy,
                 )
