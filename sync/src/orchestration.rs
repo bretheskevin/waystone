@@ -101,6 +101,21 @@ pub fn read_remote_heads(
     Ok(heads)
 }
 
+pub fn fetch_blob(
+    vault: &Vault,
+    save: &NormalizedSave,
+    hash: &str,
+    dav: &dyn WebDav,
+) -> Result<Vec<u8>> {
+    let blob_name = vault.blob_name(hash);
+    let base_path = remote_path(vault, save);
+    let blob_path = format!("{}/blobs/{}.bin", base_path, blob_name);
+    let encrypted = dav
+        .get(&blob_path)?
+        .ok_or(SyncError::BlobNotFound(blob_path))?;
+    Ok(vault.decrypt_blob(&encrypted)?)
+}
+
 pub fn pull_one(
     vault: &Vault,
     save: &NormalizedSave,
@@ -130,13 +145,7 @@ pub fn pull_one(
 
     let files = match pull_hash {
         Some(hash) => {
-            let blob_name = vault.blob_name(&hash);
-            let base_path = remote_path(vault, save);
-            let blob_path = format!("{}/blobs/{}.bin", base_path, blob_name);
-            let encrypted = dav
-                .get(&blob_path)?
-                .ok_or(SyncError::BlobNotFound(blob_path))?;
-            let zip_bytes = vault.decrypt_blob(&encrypted)?;
+            let zip_bytes = fetch_blob(vault, save, &hash, dav)?;
             Some(packaging::unzip(&zip_bytes)?)
         }
         None => None,

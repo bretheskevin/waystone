@@ -290,7 +290,6 @@ async fn dispatch_cmd(
                 let vault = creds.vault.clone();
                 let dav = creds.dav.clone();
                 let blocking_dav = creds.blocking_dav.clone();
-                let cfg = config.clone();
                 let tx_action = tx.clone();
                 let handle = tokio::spawn(async move {
                     let creds = app::SessionCreds {
@@ -303,7 +302,6 @@ async fn dispatch_cmd(
                         &save_key,
                         &remote_hash,
                         &creds,
-                        &cfg,
                         tx_action.clone(),
                         target_id,
                     )

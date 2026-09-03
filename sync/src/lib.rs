@@ -53,4 +53,6 @@ pub trait WebDav {
     fn mkdir_p(&self, path: &str) -> Result<()>;
 }
 
-pub use orchestration::{PullOutcome, PushOutcome, pull_one, push_one, read_remote_heads};
+pub use orchestration::{
+    PullOutcome, PushOutcome, fetch_blob, pull_one, push_one, read_remote_heads,
+};

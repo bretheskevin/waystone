@@ -11,7 +11,6 @@ use waystone_core::conflict::{self, ConflictWinner, SyncDecision};
 use waystone_core::crypto::Vault;
 use waystone_core::model::NormalizedSave;
 use waystone_core::packaging;
-use waystone_sync::WebDav as _;
 use zeroize::Zeroize;
 
 /// Builds the normalized save list for `target` synchronously.
@@ -126,13 +125,7 @@ pub async fn pull_target(
             };
 
             if let Some(hash) = pull_hash {
-                let blob_name = vault.blob_name(&hash);
-                let base_path = waystone_sync::orchestration::remote_path(&vault, save);
-                let blob_path = format!("{}/blobs/{}.bin", base_path, blob_name);
-                let encrypted = dav
-                    .get(&blob_path)?
-                    .ok_or_else(|| anyhow::anyhow!("blob not found on server"))?;
-                let zip_bytes = vault.decrypt_blob(&encrypted)?;
+                let zip_bytes = waystone_sync::fetch_blob(&vault, save, &hash, dav.as_ref())?;
                 helpers::restore_save_from_blob(
                     &zip_bytes,
                     save,
@@ -304,7 +297,6 @@ pub async fn resolve_keep_remote(
     save_key: &str,
     remote_hash: &str,
     creds: &SessionCreds,
-    _config: &WaystoneConfig,
     tx: mpsc::Sender<Msg>,
     target_id: usize,
 ) -> Result<()> {
@@ -341,13 +333,7 @@ pub async fn resolve_keep_remote(
     let save_key_owned = save_key.to_string();
 
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        let blob_name = vault.blob_name(&hash);
-        let base_path = waystone_sync::orchestration::remote_path(&vault, &save);
-        let blob_path = format!("{}/blobs/{}.bin", base_path, blob_name);
-        let encrypted = dav
-            .get(&blob_path)?
-            .ok_or_else(|| anyhow::anyhow!("blob not found on server"))?;
-        let zip_bytes = vault.decrypt_blob(&encrypted)?;
+        let zip_bytes = waystone_sync::fetch_blob(&vault, &save, &hash, dav.as_ref())?;
         helpers::restore_save_from_blob(&zip_bytes, &save, &dest, &adapter_name, &system_name)?;
         Ok(())
     })

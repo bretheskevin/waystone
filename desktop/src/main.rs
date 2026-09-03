@@ -8,7 +8,6 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use waystone_core::conflict::SyncDecision;
-use waystone_sync::WebDav as _;
 
 #[derive(Parser)]
 #[command(name = "waystone", version, about = "Game-save sync tool")]
@@ -127,13 +126,7 @@ fn do_pull_save(
     match pull_hash {
         Some(hash) => {
             println!("Pulling: {} / {}", save.id.game.display_name, save.id.slot);
-            let blob_name = vault.blob_name(&hash);
-            let base_path = waystone_sync::orchestration::remote_path(vault, save);
-            let blob_path = format!("{}/blobs/{}.bin", base_path, blob_name);
-            let encrypted = dav
-                .get(&blob_path)?
-                .ok_or_else(|| anyhow::anyhow!("blob not found on server"))?;
-            let zip_bytes = vault.decrypt_blob(&encrypted)?;
+            let zip_bytes = waystone_sync::fetch_blob(vault, save, &hash, dav)?;
             helpers::restore_save_from_blob(&zip_bytes, save, dest, adapter_name, system_name)?;
         }
         None => match decision {

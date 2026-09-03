@@ -15,7 +15,6 @@ mod tests {
         use waystone_core::model::{
             Confidence, GameRef, NormalizedSave, SaveId, SaveKind, SystemId, build_group_key,
         };
-        use waystone_sync::WebDav as _;
 
         let server = "http://localhost:5099";
 
@@ -91,11 +90,7 @@ mod tests {
             other => panic!("expected Pull or ConflictResolved(Remote), got {:?}", other),
         };
 
-        let blob_name = vault2.blob_name(&head_hash);
-        let base_path = waystone_sync::orchestration::remote_path(&vault2, &save_old);
-        let blob_path = format!("{}/blobs/{}.bin", base_path, blob_name);
-        let encrypted = dav2.get(&blob_path).unwrap().expect("blob exists");
-        let zip_bytes = vault2.decrypt_blob(&encrypted).unwrap();
+        let zip_bytes = waystone_sync::fetch_blob(&vault2, &save_old, &head_hash, &dav2).unwrap();
         let files = waystone_core::packaging::unzip(&zip_bytes).unwrap();
         let save_file = files
             .iter()
