@@ -133,7 +133,16 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   Remaining: eyeball the borealis UI on Switch hardware (first on-hardware run), then the full-parity
   screens — runtime setup / credential entry via swkbd (re-enables the excluded `swkbd.cpp`),
   conflict-resolution inbox, and settings — mirroring the desktop TUI.
-- **M3 — Android shell**: Kotlin/Compose UI, core via **UniFFI** (SAF + OkHttp).
+- **M3 (foundation landed) — Android shell**: the **UniFFI binding foundation** is built and
+  host-verified. A new shared **`waystone-sync`** crate owns the sync orchestration (a sync `WebDav`
+  trait + `push_one`/`pull_one`/`fetch_blob`, reusing `core`); **desktop was refactored** to delegate
+  to it (blocking bridge via `spawn_blocking`, 64 tests still green); and a new **`waystone-mobile`**
+  UniFFI crate (uniffi 0.32) exposes a vertical slice to Kotlin — `Vault`, records, `SyncDecision`,
+  a foreign `WebDav` trait (Kotlin implements OkHttp), and `jksv_normalize`/`push_one`/`pull_one`,
+  with committed generated Kotlin kept honest by an up-to-date test. `cargo test/clippy/fmt` green
+  workspace-wide. Remaining: the Kotlin/Compose UI + Kotlin SAF (storage) & OkHttp (WebDAV) trait
+  impls; then full-parity surface (all adapters, packaging, a policy parameter on `pull_one`, richer
+  `NormalizedSave` fidelity) and a first on-device run.
 - **M4 — 3DS shell**: C++/libctru + citro2d.
 
 All shells share one design system (`design/tokens.json`), rendered natively per
