@@ -34,7 +34,11 @@ int main(int argc, char* argv[])
     socketInitializeDefault();
     romfsInit();
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
-        goto cleanup;
+    {
+        romfsExit();
+        socketExit();
+        return 1;
+    }
 
     WsBuf recovery = {nullptr, 0};
     WsBuf keys     = {nullptr, 0};

@@ -19,5 +19,10 @@ switch/*.nacp
 switch/*.map
 switch/build.log
 
+# Switch romfs is assembled at build time from the borealis submodule;
+# only cacert.pem is committed.
+switch/romfs/*
+!switch/romfs/cacert.pem
+
 # Generated knowledge-graph cache
 graphify-out/

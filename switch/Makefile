@@ -34,10 +34,14 @@ EXCLUDES	:=	source/app_main.cpp
 else
 SOURCES		:=	source source/ui
 EXCLUDES	:=	source/main.cpp
+ROMFS_ASSETS	:=	romfs-assets
 # Path to the borealis repo root (relative to TOPDIR = switch/).
 BOREALIS_PATH	:=	lib/borealis
 # Compiled deko3d shaders will be written to $(ROMFS)/$(OUT_SHADERS)/ at build time.
 OUT_SHADERS	:=	shaders
+# Borealis romfs resources (fonts/i18n/img/xml) are assembled from the submodule at
+# build time. switch/romfs/{i18n,img,...} are NOT committed; submodule is the single source.
+BOREALIS_RESOURCES	:=	$(BOREALIS_PATH)/resources
 # borealis TUs we intentionally drop from this slice.
 # swkbd.cpp calls swkbdConfigSetStringLenMaxExt which was removed from current libnx.
 # On-screen keyboard is deferred; no other borealis TU references Swkbd, so dropping
@@ -164,14 +168,24 @@ ifneq ($(strip $(ROMFS)),)
 	export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
 endif
 
-.PHONY: $(BUILD) clean all
+.PHONY: $(BUILD) clean all romfs-assets
 
 #---------------------------------------------------------------------------------
-all: $(ROMFS_TARGETS) | $(BUILD)
+# romfs-assets is a prereq only in GUI mode; in CONSOLE=1 the var expands to empty.
+all: $(ROMFS_ASSETS) $(ROMFS_TARGETS) | $(BUILD)
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
+
+# Copy borealis fonts/i18n/img/xml from submodule into romfs before packaging (GUI only).
+# Idempotent: cp -R src/. dest/ overwrites in place on repeated builds.
+# Remove the .gitignore that cp -R brings in so it never lands in the embedded romfs.
+ifneq ($(CONSOLE),1)
+romfs-assets:
+	@cp -R $(BOREALIS_RESOURCES)/. $(ROMFS)/
+	@rm -f $(ROMFS)/.gitignore
+endif
 
 # deko3d shader compilation: .glsl → .dksh via uam (present in devkita64 base image).
 # ROMFS_TARGETS is empty in CONSOLE=1 mode (no OUT_SHADERS, no .glsl in SOURCES).
@@ -199,7 +213,9 @@ endif
 #---------------------------------------------------------------------------------
 clean:
 	@echo clean ...
-	@rm -fr $(BUILD) $(ROMFS_FOLDERS) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
+	@rm -fr $(BUILD) $(TARGET).nro $(TARGET).nacp $(TARGET).elf \
+		$(filter-out $(ROMFS)/cacert.pem,$(wildcard $(ROMFS)/*)) \
+		$(wildcard $(ROMFS)/.gitignore)
 
 #---------------------------------------------------------------------------------
 else
