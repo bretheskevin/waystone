@@ -1,3 +1,9 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum Confidence {
+    Strong,
+    Weak,
+}
+
 #[derive(Debug, Clone, uniffi::Record)]
 pub struct RawFileEntry {
     pub path: String,
@@ -16,6 +22,9 @@ pub struct NormalizedSave {
     pub game_key: String,
     pub display_name: String,
     pub title_id: Option<String>,
+    pub serial: Option<String>,
+    pub rom_crc: Option<String>,
+    pub confidence: Confidence,
     pub slot: String,
     pub kind: String,
     pub group_key: String,

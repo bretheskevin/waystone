@@ -814,7 +814,7 @@ internal object UniffiLib {
     ): Unit
     external fun uniffi_waystone_mobile_fn_func_jksv_normalize(`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_waystone_mobile_fn_func_pull_one(`vault`: Long,`save`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,`dav`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_waystone_mobile_fn_func_pull_one(`vault`: Long,`save`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,`dav`: Long,`policy`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_push_one(`vault`: Long,`save`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,`dav`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -942,7 +942,7 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_waystone_mobile_checksum_func_jksv_normalize() != 59127) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_waystone_mobile_checksum_func_pull_one() != 5317) {
+    if (lib.uniffi_waystone_mobile_checksum_func_pull_one() != 46026) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_func_push_one() != 31616) {
@@ -2214,6 +2214,12 @@ data class NormalizedSave (
     , 
     var `titleId`: kotlin.String?
     , 
+    var `serial`: kotlin.String?
+    , 
+    var `romCrc`: kotlin.String?
+    , 
+    var `confidence`: Confidence
+    , 
     var `slot`: kotlin.String
     , 
     var `kind`: kotlin.String
@@ -2246,6 +2252,9 @@ public object FfiConverterTypeNormalizedSave: FfiConverterRustBuffer<NormalizedS
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterOptionalString.read(buf),
+            FfiConverterTypeConfidence.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
@@ -2261,6 +2270,9 @@ public object FfiConverterTypeNormalizedSave: FfiConverterRustBuffer<NormalizedS
             FfiConverterString.allocationSize(value.`gameKey`) +
             FfiConverterString.allocationSize(value.`displayName`) +
             FfiConverterOptionalString.allocationSize(value.`titleId`) +
+            FfiConverterOptionalString.allocationSize(value.`serial`) +
+            FfiConverterOptionalString.allocationSize(value.`romCrc`) +
+            FfiConverterTypeConfidence.allocationSize(value.`confidence`) +
             FfiConverterString.allocationSize(value.`slot`) +
             FfiConverterString.allocationSize(value.`kind`) +
             FfiConverterString.allocationSize(value.`groupKey`) +
@@ -2275,6 +2287,9 @@ public object FfiConverterTypeNormalizedSave: FfiConverterRustBuffer<NormalizedS
             FfiConverterString.write(value.`gameKey`, buf)
             FfiConverterString.write(value.`displayName`, buf)
             FfiConverterOptionalString.write(value.`titleId`, buf)
+            FfiConverterOptionalString.write(value.`serial`, buf)
+            FfiConverterOptionalString.write(value.`romCrc`, buf)
+            FfiConverterTypeConfidence.write(value.`confidence`, buf)
             FfiConverterString.write(value.`slot`, buf)
             FfiConverterString.write(value.`kind`, buf)
             FfiConverterString.write(value.`groupKey`, buf)
@@ -2445,6 +2460,74 @@ public object FfiConverterTypeVaultInit: FfiConverterRustBuffer<VaultInit> {
             FfiConverterByteArray.write(value.`keysJson`, buf)
     }
 }
+
+
+
+
+enum class Confidence {
+    
+    STRONG,
+    WEAK;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeConfidence: FfiConverterRustBuffer<Confidence> {
+    override fun read(buf: ByteBuffer) = try {
+        Confidence.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: Confidence) = 4UL
+
+    override fun write(value: Confidence, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class ConflictPolicy {
+    
+    NEWEST_WINS,
+    PROMPT;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeConflictPolicy: FfiConverterRustBuffer<ConflictPolicy> {
+    override fun read(buf: ByteBuffer) = try {
+        ConflictPolicy.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: ConflictPolicy) = 4UL
+
+    override fun write(value: ConflictPolicy, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
 
 
 
@@ -2669,6 +2752,14 @@ sealed class WaystoneException: kotlin.Exception() {
             get() = "path=${ `path` }"
     }
     
+    class InvalidSystem(
+        
+        val `system`: kotlin.String
+        ) : WaystoneException() {
+        override val message
+            get() = "system=${ `system` }"
+    }
+    
 
     
 
@@ -2703,6 +2794,9 @@ public object FfiConverterTypeWaystoneError : FfiConverterRustBuffer<WaystoneExc
             5 -> WaystoneException.BlobNotFound(
                 FfiConverterString.read(buf),
                 )
+            6 -> WaystoneException.InvalidSystem(
+                FfiConverterString.read(buf),
+                )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
         }
     }
@@ -2734,6 +2828,11 @@ public object FfiConverterTypeWaystoneError : FfiConverterRustBuffer<WaystoneExc
                 4UL
                 + FfiConverterString.allocationSize(value.`path`)
             )
+            is WaystoneException.InvalidSystem -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`system`)
+            )
         }
     }
 
@@ -2762,6 +2861,11 @@ public object FfiConverterTypeWaystoneError : FfiConverterRustBuffer<WaystoneExc
             is WaystoneException.BlobNotFound -> {
                 buf.putInt(5)
                 FfiConverterString.write(value.`path`, buf)
+                Unit
+            }
+            is WaystoneException.InvalidSystem -> {
+                buf.putInt(6)
+                FfiConverterString.write(value.`system`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -2987,7 +3091,7 @@ public object FfiConverterSequenceTypeRawFileEntry: FfiConverterRustBuffer<List<
     }
     
 
-    @Throws(WaystoneException::class) fun `pullOne`(`vault`: Vault, `save`: NormalizedSave, `deviceId`: kotlin.String, `dav`: WebDav): PullOutcome {
+    @Throws(WaystoneException::class) fun `pullOne`(`vault`: Vault, `save`: NormalizedSave, `deviceId`: kotlin.String, `dav`: WebDav, `policy`: ConflictPolicy): PullOutcome {
             return FfiConverterTypePullOutcome.lift(
     uniffiRustCallWithError(WaystoneException) { _status ->
     UniffiLib.uniffi_waystone_mobile_fn_func_pull_one(
@@ -2996,7 +3100,8 @@ public object FfiConverterSequenceTypeRawFileEntry: FfiConverterRustBuffer<List<
         FfiConverterTypeVault.lower(`vault`),
         FfiConverterTypeNormalizedSave.lower(`save`),
         FfiConverterString.lower(`deviceId`),
-        FfiConverterTypeWebDav.lower(`dav`),_status)
+        FfiConverterTypeWebDav.lower(`dav`),
+        FfiConverterTypeConflictPolicy.lower(`policy`),_status)
 }
     )
     }

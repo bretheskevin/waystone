@@ -1,6 +1,6 @@
-use crate::decision::{PullOutcome, PushOutcome, SyncDecision};
+use crate::decision::{ConflictPolicy, PullOutcome, PushOutcome, SyncDecision};
 use crate::error::WaystoneError;
-use crate::types::{FileEntry, NormalizedSave, RawTree};
+use crate::types::{Confidence, FileEntry, NormalizedSave, RawTree};
 use crate::vault::Vault;
 use crate::webdav::{WebDav, WebDavBridge};
 use std::sync::Arc;
@@ -8,18 +8,21 @@ use waystone_core::adapters::Adapter;
 use waystone_core::adapters::jksv::JksvAdapter;
 use waystone_core::model as core_model;
 
-fn to_core_save(save: &NormalizedSave) -> core_model::NormalizedSave {
-    core_model::NormalizedSave {
+fn to_core_save(save: &NormalizedSave) -> Result<core_model::NormalizedSave, WaystoneError> {
+    Ok(core_model::NormalizedSave {
         id: core_model::SaveId {
             source: save.source.clone(),
-            system: parse_system(&save.system),
+            system: parse_system(&save.system)?,
             game: core_model::GameRef {
                 key: save.game_key.clone(),
                 display_name: save.display_name.clone(),
-                confidence: core_model::Confidence::Strong,
+                confidence: match save.confidence {
+                    Confidence::Strong => core_model::Confidence::Strong,
+                    Confidence::Weak => core_model::Confidence::Weak,
+                },
                 title_id: save.title_id.clone(),
-                serial: None,
-                rom_crc: None,
+                serial: save.serial.clone(),
+                rom_crc: save.rom_crc.clone(),
             },
             slot: save.slot.clone(),
             kind: parse_kind(&save.kind),
@@ -32,7 +35,7 @@ fn to_core_save(save: &NormalizedSave) -> core_model::NormalizedSave {
             .iter()
             .map(|f| (f.path.clone(), f.content.clone()))
             .collect(),
-    }
+    })
 }
 
 fn from_core_save(save: &core_model::NormalizedSave) -> NormalizedSave {
@@ -42,6 +45,12 @@ fn from_core_save(save: &core_model::NormalizedSave) -> NormalizedSave {
         game_key: save.id.game.key.clone(),
         display_name: save.id.game.display_name.clone(),
         title_id: save.id.game.title_id.clone(),
+        serial: save.id.game.serial.clone(),
+        rom_crc: save.id.game.rom_crc.clone(),
+        confidence: match save.id.game.confidence {
+            core_model::Confidence::Strong => Confidence::Strong,
+            core_model::Confidence::Weak => Confidence::Weak,
+        },
         slot: save.id.slot.clone(),
         kind: match save.id.kind {
             core_model::SaveKind::Battery => "battery".into(),
@@ -62,15 +71,17 @@ fn from_core_save(save: &core_model::NormalizedSave) -> NormalizedSave {
     }
 }
 
-fn parse_system(s: &str) -> core_model::SystemId {
+fn parse_system(s: &str) -> Result<core_model::SystemId, WaystoneError> {
     match s {
-        "switch" => core_model::SystemId::Switch,
-        "3ds" => core_model::SystemId::ThreeDS,
-        "nds" => core_model::SystemId::Nds,
-        "gba" => core_model::SystemId::Gba,
-        "gbc" => core_model::SystemId::Gbc,
-        "gb" => core_model::SystemId::Gb,
-        _ => core_model::SystemId::Switch,
+        "switch" => Ok(core_model::SystemId::Switch),
+        "3ds" => Ok(core_model::SystemId::ThreeDS),
+        "nds" => Ok(core_model::SystemId::Nds),
+        "gba" => Ok(core_model::SystemId::Gba),
+        "gbc" => Ok(core_model::SystemId::Gbc),
+        "gb" => Ok(core_model::SystemId::Gb),
+        other => Err(WaystoneError::InvalidSystem {
+            system: other.to_string(),
+        }),
     }
 }
 
@@ -109,6 +120,13 @@ fn from_core_decision(d: &waystone_core::conflict::SyncDecision) -> SyncDecision
     }
 }
 
+fn map_conflict_policy(policy: ConflictPolicy) -> waystone_core::conflict::ConflictPolicy {
+    match policy {
+        ConflictPolicy::NewestWins => waystone_core::conflict::ConflictPolicy::NewestWins,
+        ConflictPolicy::Prompt => waystone_core::conflict::ConflictPolicy::Prompt,
+    }
+}
+
 #[uniffi::export]
 pub fn jksv_normalize(raw: RawTree) -> Vec<NormalizedSave> {
     let core_raw = core_model::RawTree {
@@ -136,7 +154,7 @@ pub fn push_one(
     device_id: String,
     dav: Arc<dyn WebDav>,
 ) -> Result<PushOutcome, WaystoneError> {
-    let core_save = to_core_save(&save);
+    let core_save = to_core_save(&save)?;
     let bridge = WebDavBridge { inner: dav };
     let outcome = waystone_sync::push_one(vault.core_vault(), &core_save, &device_id, &bridge)?;
     Ok(match outcome {
@@ -151,14 +169,15 @@ pub fn pull_one(
     save: NormalizedSave,
     device_id: String,
     dav: Arc<dyn WebDav>,
+    policy: ConflictPolicy,
 ) -> Result<PullOutcome, WaystoneError> {
-    let core_save = to_core_save(&save);
+    let core_save = to_core_save(&save)?;
     let bridge = WebDavBridge { inner: dav };
     let outcome = waystone_sync::pull_one(
         vault.core_vault(),
         &core_save,
         &device_id,
-        waystone_core::conflict::ConflictPolicy::NewestWins,
+        map_conflict_policy(policy),
         &bridge,
     )?;
     Ok(PullOutcome {

@@ -5,6 +5,7 @@ pub enum WaystoneError {
     WebDav { msg: String },
     Json { msg: String },
     BlobNotFound { path: String },
+    InvalidSystem { system: String },
 }
 
 impl std::fmt::Display for WaystoneError {
@@ -15,6 +16,7 @@ impl std::fmt::Display for WaystoneError {
             Self::WebDav { msg } => write!(f, "webdav: {msg}"),
             Self::Json { msg } => write!(f, "json: {msg}"),
             Self::BlobNotFound { path } => write!(f, "blob not found: {path}"),
+            Self::InvalidSystem { system } => write!(f, "unknown system: {system}"),
         }
     }
 }

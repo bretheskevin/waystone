@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use waystone_mobile::decision::{PushOutcome, SyncDecision};
+use waystone_mobile::decision::{ConflictPolicy, PushOutcome, SyncDecision};
 use waystone_mobile::error::WaystoneError;
 use waystone_mobile::exports::{jksv_normalize, pull_one, push_one};
-use waystone_mobile::types::{FileEntry, NormalizedSave, RawFileEntry, RawTree};
+use waystone_mobile::types::{Confidence, FileEntry, NormalizedSave, RawFileEntry, RawTree};
 use waystone_mobile::vault::Vault;
 use waystone_mobile::webdav::WebDav;
 
@@ -61,6 +61,9 @@ fn make_mobile_save(content: &[u8], mtime: &str) -> NormalizedSave {
         game_key: "TEST_GAME".into(),
         display_name: "Test Game".into(),
         title_id: Some("TEST_GAME".into()),
+        serial: None,
+        rom_crc: None,
+        confidence: Confidence::Strong,
         slot: "main".into(),
         kind: "native".into(),
         group_key: "switch/TEST_GAME/main".into(),
@@ -126,6 +129,7 @@ fn mobile_push_and_pull_round_trip() {
         save.clone(),
         "dev2".into(),
         Arc::clone(&dav),
+        ConflictPolicy::NewestWins,
     )
     .unwrap();
 
@@ -200,8 +204,100 @@ fn pull_in_sync_when_already_up_to_date() {
         save.clone(),
         "dev1".into(),
         Arc::clone(&dav),
+        ConflictPolicy::NewestWins,
     )
     .unwrap();
     assert!(matches!(result.decision, SyncDecision::InSync));
     assert!(result.files.is_none());
+}
+
+// Fix 1: parse_system must error on unknown system strings.
+#[test]
+fn parse_system_errors_on_unknown_system() {
+    let init = Vault::init("err-test".into()).unwrap();
+    let dav: Arc<dyn WebDav> = Arc::new(MockWebDav::new());
+    let mut save = make_mobile_save(b"content", "2026-01-01T00:00:00Z");
+    save.system = "megadrive".into();
+    let result = push_one(init.vault, save, "dev1".into(), dav);
+    assert!(matches!(result, Err(WaystoneError::InvalidSystem { .. })));
+}
+
+// Fix 2: pull_one must accept an explicit ConflictPolicy parameter.
+// Push a newer version with dev1, then pull with dev2 holding an older version.
+#[test]
+fn pull_one_accepts_conflict_policy_newest_wins() {
+    let init = Vault::init("policy-test".into()).unwrap();
+    let dav: Arc<dyn WebDav> = Arc::new(MockWebDav::new());
+
+    let old_save = make_mobile_save(b"old-content", "2026-01-01T00:00:00Z");
+    push_one(
+        init.vault.clone(),
+        old_save.clone(),
+        "dev1".into(),
+        Arc::clone(&dav),
+    )
+    .unwrap();
+
+    let new_save = make_mobile_save(b"new-content", "2026-01-02T00:00:00Z");
+    push_one(
+        init.vault.clone(),
+        new_save,
+        "dev1".into(),
+        Arc::clone(&dav),
+    )
+    .unwrap();
+
+    let result = pull_one(
+        init.vault,
+        old_save,
+        "dev2".into(),
+        Arc::clone(&dav),
+        ConflictPolicy::NewestWins,
+    )
+    .unwrap();
+    assert!(
+        matches!(
+            result.decision,
+            SyncDecision::Pull { .. } | SyncDecision::ConflictResolved { .. }
+        ),
+        "expected Pull or ConflictResolved, got {:?}",
+        result.decision
+    );
+}
+
+// Fix 3: jksv_normalize populates confidence from the adapter output (not hardcoded).
+// JKSV sets Strong when the directory name is a pure 16-char hex title ID.
+#[test]
+fn jksv_normalize_populates_confidence_from_adapter() {
+    // Pure 16-char hex dir → parse_title_dir extracts title_id → Strong confidence.
+    let raw_strong = RawTree {
+        files: vec![RawFileEntry {
+            path: "0100AAAA00001000/slot0/data.sav".into(),
+            content: vec![0xCA, 0xFE],
+        }],
+    };
+    let saves = jksv_normalize(raw_strong);
+    assert_eq!(saves.len(), 1);
+    assert!(
+        matches!(saves[0].confidence, Confidence::Strong),
+        "expected Strong for pure-hex dir, got {:?}",
+        saves[0].confidence
+    );
+    assert!(saves[0].serial.is_none());
+    assert!(saves[0].rom_crc.is_none());
+
+    // Display-name dir → no title_id → Weak confidence.
+    let raw_weak = RawTree {
+        files: vec![RawFileEntry {
+            path: "TestGame/slot0/data.sav".into(),
+            content: vec![0xBE, 0xEF],
+        }],
+    };
+    let saves_weak = jksv_normalize(raw_weak);
+    assert_eq!(saves_weak.len(), 1);
+    assert!(
+        matches!(saves_weak[0].confidence, Confidence::Weak),
+        "expected Weak for name-only dir, got {:?}",
+        saves_weak[0].confidence
+    );
 }

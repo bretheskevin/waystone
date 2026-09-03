@@ -1,3 +1,9 @@
+#[derive(Debug, Clone, Copy, uniffi::Enum)]
+pub enum ConflictPolicy {
+    NewestWins,
+    Prompt,
+}
+
 #[derive(Debug, uniffi::Enum)]
 pub enum SyncDecision {
     InSync,
