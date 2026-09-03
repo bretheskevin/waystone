@@ -12,14 +12,39 @@ include $(DEVKITPRO)/libnx/switch_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	waystone-spike
 BUILD		:=	build
-SOURCES		:=	source
 DATA		:=	data
-INCLUDES	:=	../ffi/include
+INCLUDES	:=	../ffi/include source
 ROMFS		:=	romfs
 
 # WAYSTONE_TARGET selects which cross-compiled libwaystone_ffi.a to link.
 # build.sh overrides it to aarch64-none-elf for the custom-target fallback.
 WAYSTONE_TARGET	?=	aarch64-nintendo-switch-freestanding
+
+#---------------------------------------------------------------------------------
+# Build-mode guard.
+#
+#   Default (no CONSOLE):  GUI build — borealis deko3d backend.
+#     Entry point: source/app_main.cpp.  source/main.cpp excluded.
+#   CONSOLE=1:             Console driver build — no borealis.
+#     Entry point: source/main.cpp.  source/app_main.cpp excluded.
+#
+ifeq ($(CONSOLE),1)
+SOURCES		:=	source
+EXCLUDES	:=	source/app_main.cpp
+else
+SOURCES		:=	source source/ui
+EXCLUDES	:=	source/main.cpp
+# Path to the borealis repo root (relative to TOPDIR = switch/).
+BOREALIS_PATH	:=	lib/borealis
+# Compiled deko3d shaders will be written to $(ROMFS)/$(OUT_SHADERS)/ at build time.
+OUT_SHADERS	:=	shaders
+# borealis TUs we intentionally drop from this slice.
+# swkbd.cpp calls swkbdConfigSetStringLenMaxExt which was removed from current libnx.
+# On-screen keyboard is deferred; no other borealis TU references Swkbd, so dropping
+# this TU is link-safe.
+BOREALIS_EXCLUDES	:=	swkbd.cpp
+endif
+#---------------------------------------------------------------------------------
 
 #---------------------------------------------------------------------------------
 # options for code generation
@@ -31,7 +56,16 @@ CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
 
+ifeq ($(CONSOLE),1)
+# Console build: apply globally — no borealis TUs in the tree.
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
+else
+# GUI build: omit -fno-rtti/-fno-exceptions globally so borealis TUs can compile.
+# -include flags force-prepend std headers missing from nanovg-deko3d transitive includes.
+# borealis view.hpp has typeid() inline — RTTI stays on for TUs including <borealis.hpp>.
+# Engine TUs (saves/sync/net/json/base64) re-add -fno-rtti/-fno-exceptions per-target below.
+CXXFLAGS	:= $(CFLAGS) -std=c++17 -Wno-volatile -include optional -include variant -include string_view
+endif
 
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
@@ -40,6 +74,15 @@ LIBS	:= -lwaystone_ffi $(shell $(DEVKITPRO)/portlibs/switch/bin/curl-config --li
 
 #---------------------------------------------------------------------------------
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
+
+# Include borealis Makefile fragment for the GUI build.
+# Appends to SOURCES, INCLUDES, LIBS, CXXFLAGS (-DYG_ENABLE_EVENTS, -fdata-sections,
+# -DBRLS_RESOURCES="romfs:/"), and links -ldeko3d -lm.
+# deko3d (including uam shader compiler and libdeko3d.a) ships in the devkita64 base image.
+# Pinned submodule: switch/lib/borealis @ 20e2d33b6c4ffce139ce304c503c04f5b94da920
+ifneq ($(CONSOLE),1)
+include $(TOPDIR)/$(BOREALIS_PATH)/library/borealis.mk
+endif
 
 #---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
@@ -56,7 +99,13 @@ export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
+GLSLFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.glsl)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
+
+# Exclude the inactive entry point (main.cpp or app_main.cpp) and any borealis TUs
+# that are intentionally dropped for this slice (swkbd.cpp in GUI mode).
+# BOREALIS_EXCLUDES is empty/unset in CONSOLE=1 mode, so it is a no-op there.
+CPPFILES	:=	$(filter-out $(notdir $(EXCLUDES)) $(BOREALIS_EXCLUDES),$(CPPFILES))
 
 #---------------------------------------------------------------------------------
 ifeq ($(strip $(CPPFILES)),)
@@ -69,6 +118,18 @@ export OFILES_BIN	:=	$(addsuffix .o,$(BINFILES))
 export OFILES_SRC	:=	$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
 export OFILES 	:=	$(OFILES_BIN) $(OFILES_SRC)
 export HFILES_BIN	:=	$(addsuffix .h,$(subst .,_,$(BINFILES)))
+
+ifneq ($(strip $(ROMFS)),)
+	ROMFS_TARGETS	:=
+	ROMFS_FOLDERS	:=
+	ifneq ($(strip $(OUT_SHADERS)),)
+		ROMFS_SHADERS	:= $(ROMFS)/$(OUT_SHADERS)
+		ROMFS_TARGETS	+= $(patsubst %.glsl,$(ROMFS_SHADERS)/%.dksh,$(GLSLFILES))
+		ROMFS_FOLDERS	+= $(ROMFS_SHADERS)
+	endif
+
+	export ROMFS_DEPS := $(foreach file,$(ROMFS_TARGETS),$(CURDIR)/$(file))
+endif
 
 export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
@@ -106,16 +167,39 @@ endif
 .PHONY: $(BUILD) clean all
 
 #---------------------------------------------------------------------------------
-all: $(BUILD)
+all: $(ROMFS_TARGETS) | $(BUILD)
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
-	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+
+# deko3d shader compilation: .glsl → .dksh via uam (present in devkita64 base image).
+# ROMFS_TARGETS is empty in CONSOLE=1 mode (no OUT_SHADERS, no .glsl in SOURCES).
+ifneq ($(strip $(ROMFS_TARGETS)),)
+
+$(ROMFS_TARGETS): | $(ROMFS_FOLDERS)
+
+$(ROMFS_FOLDERS):
+	@mkdir -p $@
+
+$(ROMFS_SHADERS)/%_vsh.dksh: %_vsh.glsl
+	@echo {vert} $(notdir $<)
+	@uam -s vert -o $@ $<
+
+$(ROMFS_SHADERS)/%_fsh.dksh: %_fsh.glsl
+	@echo {frag} $(notdir $<)
+	@uam -s frag -o $@ $<
+
+$(ROMFS_SHADERS)/%.dksh: %.glsl
+	@echo {comp} $(notdir $<)
+	@uam -s comp -o $@ $<
+
+endif
 
 #---------------------------------------------------------------------------------
 clean:
 	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
+	@rm -fr $(BUILD) $(ROMFS_FOLDERS) $(TARGET).nro $(TARGET).nacp $(TARGET).elf
 
 #---------------------------------------------------------------------------------
 else
@@ -123,10 +207,22 @@ else
 
 DEPENDS	:=	$(OFILES:.o=.d)
 
+# GUI build: re-apply -fno-rtti and -fno-exceptions only to our own engine TUs.
+# These files do NOT include borealis headers, so RTTI/exceptions are not needed.
+# app_main.cpp includes <borealis.hpp> which has typeid() inline in view.hpp —
+# it must NOT have -fno-rtti; it inherits global CXXFLAGS (RTTI enabled).
+# CONSOLE=1: flags are already in global CXXFLAGS; this block is skipped.
+ifneq ($(CONSOLE),1)
+OUR_ENGINE_OBJS := saves.o sync.o net.o json.o base64.o
+$(OUR_ENGINE_OBJS): CXXFLAGS += -fno-rtti -fno-exceptions
+endif
+
 #---------------------------------------------------------------------------------
 all	:	$(OUTPUT).nro
 
-$(OUTPUT).nro	:	$(OUTPUT).elf $(OUTPUT).nacp
+# NRO depends on ROMFS_DEPS (compiled .dksh shaders) so the build fails loudly
+# if shaders were not compiled. ROMFS_DEPS is empty in CONSOLE=1 mode.
+$(OUTPUT).nro	:	$(OUTPUT).elf $(OUTPUT).nacp $(ROMFS_DEPS)
 
 $(OUTPUT).elf	:	$(OFILES)
 

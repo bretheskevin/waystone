@@ -22,6 +22,7 @@ ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
     CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
 
 # switch-curl: libcurl for Switch homebrew (WebDAV HTTP client)
+# deko3d + uam + libdeko3d ship in the devkita64 base image; no extra portlib needed for the borealis deko3d backend.
 RUN dkp-pacman -Syu --noconfirm && dkp-pacman -S --noconfirm switch-curl
 
 # Nightly toolchain + rust-src (for -Zbuild-std). Fail loudly on a broken download.
