@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "desktop", "ffi"]
+members = ["core", "desktop", "ffi", "sync"]
 resolver = "2"
 
 [workspace.package]
