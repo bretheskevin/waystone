@@ -1,0 +1,44 @@
+#!/bin/sh
+# Waystone pre-push hook: run the full verification gate before every push.
+#
+# Checks (in order, fail-fast):
+#   1. cargo fmt --all --check
+#   2. cargo clippy --workspace --all-targets -- -D warnings
+#   3. cargo test --workspace
+#   4. Switch cross-compile/link (skipped when Docker or waystone-switch image is absent)
+#
+# Enable once per clone:
+#   git config core.hooksPath .githooks
+#
+# Bypass for a single push (not recommended): git push --no-verify
+
+if ! cargo fmt --all --check; then
+	echo >&2
+	echo "✗ rustfmt check failed — run 'cargo fmt --all' and push again." >&2
+	exit 1
+fi
+
+if ! cargo clippy --workspace --all-targets -- -D warnings; then
+	echo >&2
+	echo "✗ clippy failed — fix all warnings before pushing." >&2
+	exit 1
+fi
+
+if ! cargo test --workspace; then
+	echo >&2
+	echo "✗ tests failed — fix failing tests before pushing." >&2
+	exit 1
+fi
+
+if docker info >/dev/null 2>&1 && docker image inspect waystone-switch >/dev/null 2>&1; then
+	if ! docker run --rm -v "$PWD":/work -w /work waystone-switch bash -lc \
+		"cargo +nightly build -Zbuild-std=core,alloc --target aarch64-nintendo-switch-freestanding --features switch -p waystone-ffi --release && make -C switch"; then
+		echo >&2
+		echo "✗ Switch cross-compile/link failed — fix before pushing." >&2
+		exit 1
+	fi
+else
+	echo "⚠ Switch cross-compile SKIPPED (Docker or waystone-switch image unavailable)" >&2
+fi
+
+echo "✓ pre-push checks passed" >&2

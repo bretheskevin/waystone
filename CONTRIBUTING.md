@@ -51,9 +51,16 @@ and simultaneous updates to all shell test suites.
   failing test.
 - The `core` crate must stay I/O-free. No filesystem, no networking, no `std::fs`,
   no `tokio`. Bytes in, decisions out.
-- Use `cargo fmt` before committing. A pre-commit hook enforces this: enable it
-  once per clone with `git config core.hooksPath .githooks` and it will block any
-  commit that is not `cargo fmt --all --check` clean.
+- Use `cargo fmt` before committing. A **pre-commit** hook enforces this: enable
+  it once per clone with `git config core.hooksPath .githooks` and it will block
+  any commit that is not `cargo fmt --all --check` clean.
+- A **pre-push** hook runs the full gate — `cargo fmt --all --check`,
+  `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test
+  --workspace`, and (when Docker and the `waystone-switch` image are present) a
+  Switch cross-compile/link — and blocks the push on any failure. When Docker or
+  the image is absent the Switch step is skipped with a loud warning; the rest
+  still runs. The same `git config core.hooksPath .githooks` enable step covers
+  both hooks. Bypass for a single push (not recommended): `git push --no-verify`.
 
 ## Console and mobile toolchains
 
