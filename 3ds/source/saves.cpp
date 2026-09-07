@@ -268,6 +268,14 @@ int write_save_files(u64 title_id, const char* files_json) {
             continue;
         }
 
+        // Truncate to exact size (FS_OPEN_WRITE does not truncate unlike fopen "wb").
+        if (R_FAILED(FSFILE_SetSize(fh, static_cast<u64>(bytes.size())))) {
+            printf("  write_save_files: FSFILE_SetSize failed for %s\n", path.c_str());
+            FSFILE_Close(fh);
+            ret = -1;
+            continue;
+        }
+
         if (!bytes.empty()) {
             u32 written = 0;
             if (R_FAILED(FSFILE_Write(fh, &written, 0,
