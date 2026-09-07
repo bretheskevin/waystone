@@ -27,4 +27,9 @@ std::string current_utc_time();
 // Get or create a persistent device ID (stored at sdmc:/waystone/device_id.txt).
 std::string get_device_id();
 
+// Restore a flat FileEntryDto JSON array ([{"path":"...","data_b64":"..."},...])
+// into the title's ARCHIVE_USER_SAVEDATA, then commit.
+// Returns 0 on success, -1 on mount/commit failure.
+int write_save_files(u64 title_id, const char* files_json);
+
 #endif

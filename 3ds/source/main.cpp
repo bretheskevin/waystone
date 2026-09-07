@@ -134,7 +134,19 @@ int main(int argc, char* argv[]) {
             int rc = push_title(vault, titles[i], device_id.c_str(), dav);
             if (rc > 0) total_pushed += rc;
         }
-        printf("\n=== Push done: %d saves pushed ===\n", total_pushed);
+        printf("\n=== Push done: %d saves pushed ===\n\n", total_pushed);
+
+        printf("--- Pull phase ---\n");
+        int total_pulled = 0;
+        for (size_t i = 0; i < titles.size(); i++) {
+            printf("[%zu/%zu] %s (TID %016llX)\n",
+                   i + 1, titles.size(),
+                   titles[i].name.c_str(),
+                   static_cast<unsigned long long>(titles[i].title_id));
+            int rc = pull_title(vault, titles[i], device_id.c_str(), dav);
+            if (rc > 0) total_pulled += rc;
+        }
+        printf("\n=== Pull done: %d saves pulled ===\n", total_pulled);
     }
 
 cleanup:

@@ -54,6 +54,16 @@ std::vector<TitleInfo> list_titles() {
     return titles;
 }
 
+// Open the ARCHIVE_USER_SAVEDATA for a given title_id (SD card).
+// Caller must FSUSER_CloseArchive on success.
+static Result open_save_archive(u64 title_id, FS_Archive* archive) {
+    u32 path_data[3] = {MEDIATYPE_SD,
+                        static_cast<u32>(title_id & 0xFFFFFFFF),
+                        static_cast<u32>(title_id >> 32)};
+    FS_Path archive_path = {PATH_BINARY, sizeof(path_data), path_data};
+    return FSUSER_OpenArchive(archive, ARCHIVE_USER_SAVEDATA, archive_path);
+}
+
 // Recursively walk a 3DS save archive directory using libctru FS API.
 static void walk_archive(FS_Archive archive, const char* rel,
                          std::vector<std::pair<std::string, std::vector<uint8_t>>>* out) {
@@ -126,14 +136,8 @@ static void walk_archive(FS_Archive archive, const char* rel,
 }
 
 std::string extract_save_json(const TitleInfo& title) {
-    // Open the title's savedata archive (SD card titles).
     FS_Archive archive;
-    u32 path_data[3] = {MEDIATYPE_SD,
-                        static_cast<u32>(title.title_id & 0xFFFFFFFF),
-                        static_cast<u32>(title.title_id >> 32)};
-    FS_Path archive_path = {PATH_BINARY, sizeof(path_data), path_data};
-
-    if (R_FAILED(FSUSER_OpenArchive(&archive, ARCHIVE_USER_SAVEDATA, archive_path))) {
+    if (R_FAILED(open_save_archive(title.title_id, &archive))) {
         printf("  FSUSER_OpenArchive failed for TID %016llX\n",
                (unsigned long long)title.title_id);
         return "";
@@ -200,4 +204,91 @@ std::string get_device_id() {
     }
 
     return std::string(hex, 32);
+}
+
+int write_save_files(u64 title_id, const char* files_json) {
+    FS_Archive archive;
+    if (R_FAILED(open_save_archive(title_id, &archive))) {
+        printf("  write_save_files: FSUSER_OpenArchive failed for TID %016llX\n",
+               (unsigned long long)title_id);
+        return -1;
+    }
+
+    std::vector<std::string> entries = json_split_array(files_json);
+    int ret = 0;
+
+    for (const auto& entry_str : entries) {
+        std::string path     = json_get_string(entry_str.c_str(), "path");
+        std::string data_b64 = json_get_string(entry_str.c_str(), "data_b64");
+
+        if (path.empty()) {
+            printf("  write_save_files: missing path in file entry\n");
+            ret = -1;
+            continue;
+        }
+
+        // Decode file content (empty data_b64 → 0-byte file, which is valid).
+        std::vector<uint8_t> bytes;
+        if (!data_b64.empty()) {
+            bytes = base64_decode(data_b64);
+            if (bytes.empty()) {
+                printf("  write_save_files: base64_decode failed for %s\n", path.c_str());
+                ret = -1;
+                continue;
+            }
+        }
+
+        // Create parent directories under the archive root.
+        size_t last_slash = path.rfind('/');
+        if (last_slash != std::string::npos && last_slash > 0) {
+            std::string dir_part = path.substr(0, last_slash);
+            std::string accumulated;
+            size_t start = 0;
+            while (start < dir_part.size()) {
+                size_t end = dir_part.find('/', start);
+                if (end == std::string::npos) end = dir_part.size();
+                if (end > start) {
+                    accumulated += "/" + dir_part.substr(start, end - start);
+                    FSUSER_CreateDirectory(archive,
+                        fsMakePath(PATH_ASCII, accumulated.c_str()), 0);
+                    // ignore result — already-exists is expected and OK
+                }
+                start = end + 1;
+            }
+        }
+
+        // Open (or create) the file for writing.
+        Handle fh;
+        std::string file_path = "/" + path;
+        if (R_FAILED(FSUSER_OpenFile(&fh, archive,
+                     fsMakePath(PATH_ASCII, file_path.c_str()),
+                     FS_OPEN_CREATE | FS_OPEN_WRITE, 0))) {
+            printf("  write_save_files: FSUSER_OpenFile failed for %s\n", path.c_str());
+            ret = -1;
+            continue;
+        }
+
+        if (!bytes.empty()) {
+            u32 written = 0;
+            if (R_FAILED(FSFILE_Write(fh, &written, 0,
+                         bytes.data(), static_cast<u32>(bytes.size()),
+                         FS_WRITE_FLUSH))) {
+                printf("  write_save_files: FSFILE_Write failed for %s\n", path.c_str());
+                FSFILE_Close(fh);
+                ret = -1;
+                continue;
+            }
+        }
+        FSFILE_Close(fh);
+    }
+
+    // REQUIRED: flush all pending writes to the underlying save filesystem.
+    if (R_FAILED(FSUSER_ControlArchive(archive, ARCHIVE_ACTION_COMMIT_SAVE_DATA,
+                                       NULL, 0, NULL, 0))) {
+        printf("  write_save_files: ARCHIVE_ACTION_COMMIT_SAVE_DATA failed\n");
+        FSUSER_CloseArchive(archive);
+        return -1;
+    }
+    FSUSER_CloseArchive(archive);
+    return ret;
 }

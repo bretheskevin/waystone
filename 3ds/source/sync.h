@@ -15,4 +15,12 @@ int push_title(const WsVault* vault,
                const char* device_id,
                const WebDavCfg& dav);
 
+// Pull all saves for a single title from the WebDAV backend (NewestWins, non-interactive).
+// 3DS savedata is per-title (no AccountUid).
+// Returns number of saves pulled (0 = nothing to pull, -1 = error).
+int pull_title(const WsVault* vault,
+               const TitleInfo& title,
+               const char* device_id,
+               const WebDavCfg& dav);
+
 #endif
