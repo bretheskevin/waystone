@@ -147,12 +147,14 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   host-verified (compile+link via a new devkitARM Docker image `waystone-3ds`). A new `3ds/` shell
   (devkitARM/libctru) mirrors the Switch M2 engine console-driven: libctru title enumeration +
   FS-archive savedata extraction → `ws_checkpoint_normalize("3ds", …)` → package → vault-encrypt →
-  WebDAV **push** over plain HTTP. To keep it DRY, the FFI/core no_std runtime + entropy were
-  generalized (`console_runtime`/`console_entropy`, gated `any(feature = "switch", feature = "3ds")`)
-  and `json`/`jsmn`/`base64` extracted to a shared `shell-common/` consumed by both console shells;
-  the Switch build stayed green throughout. Cross-compiles to `armv6k-nintendo-3ds` into a `.3dsx`
-  (with a 3DS `getrandom` shim over `PS_GenerateRandomBytes`). Remaining: pull/restore, TLS/HTTPS,
-  the citro2d GUI, and a first on-hardware run.
+  WebDAV **two-way sync** (push AND pull/restore) over plain HTTP: pull mirrors the Switch
+  slice — PROPFIND heads → `ws_decide_pull` (NewestWins) → GET+decrypt blob → `ws_unzip` →
+  `write_save_files` (FS-archive write-back + `ARCHIVE_ACTION_COMMIT_SAVE_DATA`). To keep it DRY, the
+  FFI/core no_std runtime + entropy were generalized (`console_runtime`/`console_entropy`, gated
+  `any(feature = "switch", feature = "3ds")`) and `json`/`jsmn`/`base64` extracted to a shared
+  `shell-common/` consumed by both console shells; the Switch build stayed green throughout.
+  Cross-compiles to `armv6k-nintendo-3ds` into a `.3dsx` (with a 3DS `getrandom` shim over
+  `PS_GenerateRandomBytes`). Remaining: TLS/HTTPS, the citro2d GUI, and a first on-hardware run.
 
 All shells share one design system (`design/tokens.json`), rendered natively per
 platform — premium and platform-appropriate, not a forced single skin.
