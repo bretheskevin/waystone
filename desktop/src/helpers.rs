@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 use waystone_core::adapters::Adapter;
@@ -76,7 +76,7 @@ pub fn snapshot_save_dir(
         return Ok(None);
     }
 
-    let sanitized_key = group_key.replace('/', "_");
+    let sanitized_key = group_key.replace(['/', '\\'], "_").replace("..", "__");
     let ts = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
     let snap_dir = backups_root.join(&sanitized_key).join(ts.to_string());
     std::fs::create_dir_all(&snap_dir)?;
@@ -91,6 +91,21 @@ pub fn snapshot_save_dir(
     }
 
     Ok(Some(snap_dir))
+}
+
+/// Run the safety-backup snapshot before a destructive restore.
+/// Returns the snapshot path, `None` if src was empty/missing or backup is disabled.
+pub fn safety_snapshot(
+    dest: &Path,
+    group_key: &str,
+    safety_backup: bool,
+) -> Result<Option<PathBuf>> {
+    if !safety_backup {
+        return Ok(None);
+    }
+    let backups_root = crate::config::WaystoneConfig::config_dir()?.join("backups");
+    snapshot_save_dir(dest, &backups_root, group_key)
+        .with_context(|| format!("safety backup failed for {group_key}; restore aborted"))
 }
 
 /// Unzips `zip_bytes`, converts files to native adapter layout, and writes them under `dest`.

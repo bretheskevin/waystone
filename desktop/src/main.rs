@@ -127,20 +127,8 @@ fn do_pull_save(
     match pull_hash {
         Some(hash) => {
             println!("Pulling: {} / {}", save.id.game.display_name, save.id.slot);
-            if safety_backup {
-                let backups_root = config::WaystoneConfig::config_dir()?.join("backups");
-                match helpers::snapshot_save_dir(dest, &backups_root, &save.group_key) {
-                    Ok(Some(p)) => println!("  safety backup -> {}", p.display()),
-                    Ok(None) => {}
-                    Err(e) => {
-                        anyhow::bail!(
-                            "safety backup failed for {}/{}: {}; restore aborted",
-                            save.id.game.display_name,
-                            save.id.slot,
-                            e
-                        );
-                    }
-                }
+            if let Some(p) = helpers::safety_snapshot(dest, &save.group_key, safety_backup)? {
+                println!("  safety backup -> {}", p.display());
             }
             let zip_bytes = waystone_sync::fetch_blob(vault, save, &hash, dav)?;
             helpers::restore_save_from_blob(&zip_bytes, save, dest, adapter_name, system_name)?;

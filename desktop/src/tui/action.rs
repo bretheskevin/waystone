@@ -126,19 +126,7 @@ pub async fn pull_target(
             };
 
             if let Some(hash) = pull_hash {
-                if safety_backup {
-                    let backups_root = crate::config::WaystoneConfig::config_dir()?.join("backups");
-                    match helpers::snapshot_save_dir(&dest, &backups_root, &save.group_key) {
-                        Ok(Some(_)) | Ok(None) => {}
-                        Err(e) => {
-                            anyhow::bail!(
-                                "safety backup failed for {}; restore aborted: {}",
-                                save.group_key,
-                                e
-                            );
-                        }
-                    }
-                }
+                helpers::safety_snapshot(&dest, &save.group_key, safety_backup)?;
                 let zip_bytes = waystone_sync::fetch_blob(&vault, save, &hash, dav.as_ref())?;
                 helpers::restore_save_from_blob(
                     &zip_bytes,
@@ -346,22 +334,9 @@ pub async fn resolve_keep_remote(
     let adapter_name = target.adapter.clone();
     let system_name = target.system.clone();
     let save_key_owned = save_key.to_string();
-    let save_group_key = save.group_key.clone();
 
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        if safety_backup {
-            let backups_root = crate::config::WaystoneConfig::config_dir()?.join("backups");
-            match helpers::snapshot_save_dir(&dest, &backups_root, &save_group_key) {
-                Ok(Some(_)) | Ok(None) => {}
-                Err(e) => {
-                    anyhow::bail!(
-                        "safety backup failed for {}; restore aborted: {}",
-                        save_group_key,
-                        e
-                    );
-                }
-            }
-        }
+        helpers::safety_snapshot(&dest, &save.group_key, safety_backup)?;
         let zip_bytes = waystone_sync::fetch_blob(&vault, &save, &hash, dav.as_ref())?;
         helpers::restore_save_from_blob(&zip_bytes, &save, &dest, &adapter_name, &system_name)?;
         Ok(())
