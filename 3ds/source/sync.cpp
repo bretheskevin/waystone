@@ -1,5 +1,6 @@
 #include "sync.h"
 #include "json.h"
+#include "snapshot.h"
 
 #include <cstdio>
 #include <cstring>
@@ -385,6 +386,20 @@ int pull_title(const WsVault* vault,
             printf("  FAIL: ws_unzip: %s\n",
                    ws_last_error() ? ws_last_error() : "unknown");
             continue;
+        }
+
+        // Safety snapshot of the current local save before overwriting.
+        {
+            std::string sanitized = snapshot_sanitize_key(group_key);
+            std::string snap_ts = history_timestamp();
+            std::string backup_dir = std::string("sdmc:/waystone/backups/") +
+                                     sanitized + "/" + snap_ts;
+            if (!write_snapshot(backup_dir.c_str(), raw_json.c_str())) {
+                printf("  WARN: safety snapshot failed for %s, skipping restore\n",
+                       group_key.c_str());
+                ws_string_free(files_json);
+                continue;
+            }
         }
 
         int wrc = write_save_files(title.title_id, files_json);
