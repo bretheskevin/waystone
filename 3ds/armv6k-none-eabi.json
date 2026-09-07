@@ -1,0 +1,20 @@
+{
+    "llvm-target": "armv6k-unknown-none-eabihf",
+    "data-layout": "e-m:e-p:32:32-Fi8-i64:64-v128:64:128-a:0:32-n32-S64",
+    "arch": "arm",
+    "target-endian": "little",
+    "target-pointer-width": "32",
+    "target-c-int-width": "32",
+    "os": "none",
+    "env": "eabihf",
+    "vendor": "",
+    "linker-flavor": "gcc",
+    "linker": "arm-none-eabi-gcc",
+    "panic-strategy": "abort",
+    "relocation-model": "static",
+    "disable-redzone": true,
+    "features": "+v6k,+vfp2",
+    "has-thread-local": false,
+    "eh-frame-header": false,
+    "executables": false
+}
