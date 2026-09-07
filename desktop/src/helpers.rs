@@ -132,7 +132,7 @@ mod tests {
         );
         let any_dat = written
             .iter()
-            .any(|p| p.extension().map_or(false, |e| e == "dat"));
+            .any(|p| p.extension().is_some_and(|e| e == "dat"));
         assert!(any_dat, "expected a .dat file in restored tree");
     }
 }

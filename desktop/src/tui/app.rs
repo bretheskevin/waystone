@@ -1257,7 +1257,7 @@ mod tests {
     fn make_conflict_entry(target_id: usize) -> ConflictEntry {
         ConflictEntry {
             target_id,
-            label: format!("Switch \u{00b7} Test/main"),
+            label: "Switch \u{00b7} Test/main".to_string(),
             save_key: format!("switch/TEST_{}/main", target_id),
             local: HeadInfo {
                 hash: "local_hash".into(),

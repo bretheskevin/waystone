@@ -82,7 +82,7 @@ fn find_kt_files(dir: &Path) -> Vec<std::path::PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 result.extend(find_kt_files(&path));
-            } else if path.extension().map_or(false, |e| e == "kt") {
+            } else if path.extension().is_some_and(|e| e == "kt") {
                 result.push(path);
             }
         }
@@ -92,7 +92,7 @@ fn find_kt_files(dir: &Path) -> Vec<std::path::PathBuf> {
 
 fn find_kt_file(dir: &Path, filename: &str) -> std::path::PathBuf {
     for path in find_kt_files(dir) {
-        if path.file_name().map_or(false, |n| n == filename) {
+        if path.file_name().is_some_and(|n| n == filename) {
             return path;
         }
     }
