@@ -8,7 +8,7 @@ services:
     volumes:
       - waystone-data:/data
     ports:
-      - "${WAYSTONE_PORT:-5000}:5000"
+      - "${WAYSTONE_PORT:-5005}:5000"
     environment:
       - DUFS_AUTH=${WAYSTONE_AUTH:-}
     healthcheck:

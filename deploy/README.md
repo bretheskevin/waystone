@@ -7,14 +7,14 @@ cd deploy
 docker compose up -d
 ```
 
-This starts `dufs` on `http://localhost:5000` with no authentication.
+This starts `dufs` on `http://localhost:5005` with no authentication.
 
 ## Production (Dokploy + Traefik)
 
 1. Set environment variables:
    - `WAYSTONE_DOMAIN` - your domain (e.g., `saves.example.com`)
    - `WAYSTONE_AUTH` - dufs auth string (e.g., `user:password@/:rw`)
-   - `WAYSTONE_PORT` - host port (default: 5000)
+   - `WAYSTONE_PORT` - host port (default: 5005)
 
 2. Deploy via Dokploy or `docker compose up -d`.
 
