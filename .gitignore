@@ -10,6 +10,8 @@
 # Local corporate CA certs for the Docker build (not committed)
 switch/certs/*.pem
 switch/certs/*.crt
+3ds/certs/*.pem
+3ds/certs/*.crt
 
 # Switch homebrew build artifacts
 switch/build/
@@ -23,6 +25,14 @@ switch/build.log
 # only cacert.pem is committed.
 switch/romfs/*
 !switch/romfs/cacert.pem
+
+# 3DS homebrew build artifacts
+3ds/build/
+3ds/*.3dsx
+3ds/*.elf
+3ds/*.smdh
+3ds/*.map
+3ds/build.log
 
 # Generated knowledge-graph cache
 graphify-out/

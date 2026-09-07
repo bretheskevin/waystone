@@ -1,6 +1,7 @@
 #include "net.h"
 #include <cstdio>
 #include <cstring>
+#include <sys/select.h>
 #include <curl/curl.h>
 
 // ---- Callbacks ----

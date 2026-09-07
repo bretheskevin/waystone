@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <3ds.h>
+#include <sys/select.h>
 #include <curl/curl.h>
 
 struct Vault;
