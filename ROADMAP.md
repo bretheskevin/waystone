@@ -145,6 +145,17 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   `helpers::guarded_restore` (safety-snapshot → fetch-blob → restore) backs CLI pull, TUI pull, conflict
   keep-remote, **and** both new history-restore paths — 3 open-coded copies collapsed to 1. Host-verified:
   `cargo test --workspace` green (14 new tests), clippy/fmt clean, reviewed CLEAN (0 findings).
+- **Local-snapshot restore (offline)**: the local safety-backup snapshots at
+  `<config_dir>/backups/<key>/<ts>/` — previously write-only — are now browsable and restorable, closing
+  the last leg of the recovery arc (an un-pushed local you accidentally overwrote is recoverable). Because
+  a snapshot is a native-layout raw copy, restore is a **guarded file-copy back** (overwrite-merge) needing
+  **no vault, no WebDAV, no passphrase** — fully **offline**, usable with the server down or before a vault
+  exists. A separate **`waystone snapshots list|restore`** CLI + a TUI **`Screen::Snapshots`** (`b` on the
+  dashboard, deliberately **not** creds-gated, unlike history's `h`) both go through the safety guard
+  (current save snapshotted before overwrite). Browse+restore only (delete/prune deferred). DRY:
+  `sanitize_group_key` + `copy_tree` extracted from `snapshot_save_dir` and single-sourced across
+  writer/reader; hermetic testable cores take an explicit `backups_root`. Host-verified: `cargo test
+  --workspace` green (19 new tests: 9 helpers + 4 CLI + 6 TUI), clippy/fmt clean, reviewed CLEAN (0 findings).
 
 ## Next
 - **M2 (remaining) — Switch shell: full UI + first on-hardware run**: the two-way save engine
