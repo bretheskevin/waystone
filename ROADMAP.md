@@ -143,7 +143,16 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   workspace-wide. Remaining: the Kotlin/Compose UI + Kotlin SAF (storage) & OkHttp (WebDAV) trait
   impls; then full-parity surface (all adapters, packaging, a policy parameter on `pull_one`, richer
   `NormalizedSave` fidelity) and a first on-device run.
-- **M4 — 3DS shell**: C++/libctru + citro2d.
+- **M4 (engine foundation landed) — 3DS shell**: the 3DS save-sync ENGINE is built and
+  host-verified (compile+link via a new devkitARM Docker image `waystone-3ds`). A new `3ds/` shell
+  (devkitARM/libctru) mirrors the Switch M2 engine console-driven: libctru title enumeration +
+  FS-archive savedata extraction → `ws_checkpoint_normalize("3ds", …)` → package → vault-encrypt →
+  WebDAV **push** over plain HTTP. To keep it DRY, the FFI/core no_std runtime + entropy were
+  generalized (`console_runtime`/`console_entropy`, gated `any(feature = "switch", feature = "3ds")`)
+  and `json`/`jsmn`/`base64` extracted to a shared `shell-common/` consumed by both console shells;
+  the Switch build stayed green throughout. Cross-compiles to `armv6k-nintendo-3ds` into a `.3dsx`
+  (with a 3DS `getrandom` shim over `PS_GenerateRandomBytes`). Remaining: pull/restore, TLS/HTTPS,
+  the citro2d GUI, and a first on-hardware run.
 
 All shells share one design system (`design/tokens.json`), rendered natively per
 platform — premium and platform-appropriate, not a forced single skin.
