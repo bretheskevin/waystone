@@ -60,6 +60,27 @@ pub fn walkdir(dir: &Path) -> Result<Vec<PathBuf>> {
     Ok(result)
 }
 
+/// Path-safe form of a group_key for the backups/ directory layout.
+/// Single source of truth for writer (snapshot_save_dir) and readers.
+pub fn sanitize_group_key(group_key: &str) -> String {
+    // Replace `..` before slashes so `../x` → `_/x` → `__x` (2 underscores, not 3).
+    group_key.replace("..", "_").replace(['/', '\\'], "_")
+}
+
+/// Recursively copy every file under `src_root` into `dst_root`, creating parents.
+/// Overwrite-merge: does not delete files already in dst that are not in src.
+pub fn copy_tree(src_root: &Path, dst_root: &Path) -> Result<()> {
+    for file_path in walkdir(src_root)? {
+        let rel = file_path.strip_prefix(src_root)?;
+        let dest = dst_root.join(rel);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(&file_path, &dest)?;
+    }
+    Ok(())
+}
+
 /// Recursively copy the current local save tree to a timestamped backup dir.
 /// Returns the snapshot path on success. `Ok(None)` when `src` is missing or
 /// empty (nothing to back up). `Err` on any fs failure (caller aborts the restore).
@@ -76,19 +97,12 @@ pub fn snapshot_save_dir(
         return Ok(None);
     }
 
-    let sanitized_key = group_key.replace(['/', '\\'], "_").replace("..", "__");
+    let sanitized_key = sanitize_group_key(group_key);
     let ts = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
     let snap_dir = backups_root.join(&sanitized_key).join(ts.to_string());
     std::fs::create_dir_all(&snap_dir)?;
 
-    for file_path in &files {
-        let rel = file_path.strip_prefix(src)?;
-        let dest = snap_dir.join(rel);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::copy(file_path, &dest)?;
-    }
+    copy_tree(src, &snap_dir)?;
 
     Ok(Some(snap_dir))
 }
@@ -106,6 +120,100 @@ pub fn safety_snapshot(
     let backups_root = crate::config::WaystoneConfig::config_dir()?.join("backups");
     snapshot_save_dir(dest, &backups_root, group_key)
         .with_context(|| format!("safety backup failed for {group_key}; restore aborted"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotEntry {
+    pub timestamp: String,
+    pub path: PathBuf,
+    pub file_count: usize,
+    pub total_bytes: u64,
+}
+
+pub fn list_snapshots_in(backups_root: &Path, group_key: &str) -> Result<Vec<SnapshotEntry>> {
+    let dir = backups_root.join(sanitize_group_key(group_key));
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+    let mut entries = Vec::new();
+    for e in std::fs::read_dir(&dir)? {
+        let p = e?.path();
+        if !p.is_dir() {
+            continue;
+        }
+        let ts = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        if ts.is_empty() {
+            continue;
+        }
+        let files = walkdir(&p)?;
+        let total_bytes = files
+            .iter()
+            .filter_map(|f| std::fs::metadata(f).ok())
+            .map(|m| m.len())
+            .sum();
+        entries.push(SnapshotEntry {
+            timestamp: ts,
+            path: p,
+            file_count: files.len(),
+            total_bytes,
+        });
+    }
+    entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    Ok(entries)
+}
+
+pub fn list_snapshots(group_key: &str) -> Result<Vec<SnapshotEntry>> {
+    let backups_root = crate::config::WaystoneConfig::config_dir()?.join("backups");
+    list_snapshots_in(&backups_root, group_key)
+}
+
+pub fn human_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+pub fn restore_from_snapshot_in(
+    backups_root: &Path,
+    group_key: &str,
+    timestamp: &str,
+    dest: &Path,
+    safety_backup: bool,
+) -> Result<Option<PathBuf>> {
+    let snap_dir = backups_root
+        .join(sanitize_group_key(group_key))
+        .join(timestamp);
+    if !snap_dir.is_dir() {
+        anyhow::bail!("snapshot '{}' not found for {}", timestamp, group_key);
+    }
+    let guard = if safety_backup {
+        snapshot_save_dir(dest, backups_root, group_key)
+            .with_context(|| format!("safety backup failed for {group_key}; restore aborted"))?
+    } else {
+        None
+    };
+    copy_tree(&snap_dir, dest)?;
+    Ok(guard)
+}
+
+pub fn restore_from_snapshot(
+    group_key: &str,
+    timestamp: &str,
+    dest: &Path,
+    safety_backup: bool,
+) -> Result<Option<PathBuf>> {
+    let backups_root = crate::config::WaystoneConfig::config_dir()?.join("backups");
+    restore_from_snapshot_in(&backups_root, group_key, timestamp, dest, safety_backup)
 }
 
 /// Perform a guarded restore: safety-snapshot the destination, fetch the blob,
@@ -256,5 +364,167 @@ mod tests {
             "switch/G/s",
         );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn sanitize_group_key_replaces_slashes_and_dotdot() {
+        assert_eq!(
+            sanitize_group_key("switch/GAME_001/main"),
+            "switch_GAME_001_main"
+        );
+        assert_eq!(sanitize_group_key("3ds\\GAME\\slot"), "3ds_GAME_slot");
+        assert_eq!(
+            sanitize_group_key("../../../etc/passwd"),
+            "______etc_passwd"
+        );
+        assert_eq!(sanitize_group_key("plain_key"), "plain_key");
+    }
+
+    #[test]
+    fn copy_tree_copies_nested_structure() {
+        let src = tempfile::tempdir().unwrap();
+        let sub = src.path().join("subdir");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(src.path().join("a.sav"), b"aaa").unwrap();
+        std::fs::write(sub.join("b.dat"), b"bbb").unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        copy_tree(src.path(), dst.path()).unwrap();
+        assert_eq!(std::fs::read(dst.path().join("a.sav")).unwrap(), b"aaa");
+        assert_eq!(
+            std::fs::read(dst.path().join("subdir").join("b.dat")).unwrap(),
+            b"bbb"
+        );
+    }
+
+    #[test]
+    fn copy_tree_overwrites_existing_files() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("save.dat"), b"new-data").unwrap();
+        let dst = tempfile::tempdir().unwrap();
+        std::fs::write(dst.path().join("save.dat"), b"old-data").unwrap();
+        std::fs::write(dst.path().join("extra.txt"), b"keep-me").unwrap();
+        copy_tree(src.path(), dst.path()).unwrap();
+        assert_eq!(
+            std::fs::read(dst.path().join("save.dat")).unwrap(),
+            b"new-data"
+        );
+        assert_eq!(
+            std::fs::read(dst.path().join("extra.txt")).unwrap(),
+            b"keep-me"
+        );
+    }
+
+    #[test]
+    fn list_snapshots_in_returns_entries_newest_first() {
+        let backups = tempfile::tempdir().unwrap();
+        let key_dir = backups.path().join("switch_GAME_001_main");
+        let ts1 = key_dir.join("20260901T120000.000Z");
+        let ts2 = key_dir.join("20260907T143100.000Z");
+        std::fs::create_dir_all(&ts1).unwrap();
+        std::fs::write(ts1.join("save.dat"), b"aaa").unwrap();
+        std::fs::create_dir_all(&ts2).unwrap();
+        std::fs::write(ts2.join("save.dat"), b"bbb").unwrap();
+        std::fs::write(ts2.join("extra.sav"), b"cc").unwrap();
+        let entries = list_snapshots_in(backups.path(), "switch/GAME_001/main").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].timestamp, "20260907T143100.000Z");
+        assert_eq!(entries[0].file_count, 2);
+        assert_eq!(entries[0].total_bytes, 5);
+        assert_eq!(entries[1].timestamp, "20260901T120000.000Z");
+        assert_eq!(entries[1].file_count, 1);
+        assert_eq!(entries[1].total_bytes, 3);
+    }
+
+    #[test]
+    fn list_snapshots_in_returns_empty_for_missing_dir() {
+        let backups = tempfile::tempdir().unwrap();
+        let entries = list_snapshots_in(backups.path(), "nonexistent/key").unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn list_snapshots_in_returns_empty_for_empty_dir() {
+        let backups = tempfile::tempdir().unwrap();
+        let key_dir = backups.path().join("switch_GAME_001_main");
+        std::fs::create_dir_all(&key_dir).unwrap();
+        let entries = list_snapshots_in(backups.path(), "switch/GAME_001/main").unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn restore_from_snapshot_in_copies_files_to_dest() {
+        let backups = tempfile::tempdir().unwrap();
+        let snap_dir = backups
+            .path()
+            .join("switch_GAME_001_main")
+            .join("20260907T143100.000Z");
+        std::fs::create_dir_all(&snap_dir).unwrap();
+        std::fs::write(snap_dir.join("save.dat"), b"snapshot-data").unwrap();
+        let sub = snap_dir.join("subdir");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("extra.sav"), b"extra").unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        std::fs::write(dest.path().join("old.txt"), b"old").unwrap();
+        let result = restore_from_snapshot_in(
+            backups.path(),
+            "switch/GAME_001/main",
+            "20260907T143100.000Z",
+            dest.path(),
+            true,
+        )
+        .unwrap();
+        assert!(result.is_some());
+        assert_eq!(
+            std::fs::read(dest.path().join("save.dat")).unwrap(),
+            b"snapshot-data"
+        );
+        assert_eq!(
+            std::fs::read(dest.path().join("subdir").join("extra.sav")).unwrap(),
+            b"extra"
+        );
+        assert_eq!(std::fs::read(dest.path().join("old.txt")).unwrap(), b"old");
+    }
+
+    #[test]
+    fn restore_from_snapshot_in_skips_guard_when_safety_off() {
+        let backups = tempfile::tempdir().unwrap();
+        let snap_dir = backups
+            .path()
+            .join("switch_GAME_001_main")
+            .join("20260907T143100.000Z");
+        std::fs::create_dir_all(&snap_dir).unwrap();
+        std::fs::write(snap_dir.join("save.dat"), b"snapshot-data").unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        std::fs::write(dest.path().join("existing.dat"), b"old").unwrap();
+        let result = restore_from_snapshot_in(
+            backups.path(),
+            "switch/GAME_001/main",
+            "20260907T143100.000Z",
+            dest.path(),
+            false,
+        )
+        .unwrap();
+        assert!(result.is_none());
+        assert_eq!(
+            std::fs::read(dest.path().join("save.dat")).unwrap(),
+            b"snapshot-data"
+        );
+    }
+
+    #[test]
+    fn restore_from_snapshot_in_errors_on_missing_timestamp() {
+        let backups = tempfile::tempdir().unwrap();
+        let key_dir = backups.path().join("switch_GAME_001_main");
+        std::fs::create_dir_all(&key_dir).unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let result = restore_from_snapshot_in(
+            backups.path(),
+            "switch/GAME_001/main",
+            "20260101T000000.000Z",
+            dest.path(),
+            true,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
     }
 }

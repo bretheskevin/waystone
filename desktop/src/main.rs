@@ -79,6 +79,11 @@ enum Commands {
         #[command(subcommand)]
         action: HistoryCommands,
     },
+    /// Browse and restore local safety-backup snapshots (offline)
+    Snapshots {
+        #[command(subcommand)]
+        action: SnapshotCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -120,6 +125,39 @@ enum HistoryCommands {
     },
 }
 
+#[derive(Subcommand)]
+enum SnapshotCommands {
+    /// List local safety-backup snapshots
+    List {
+        /// Path to the save source directory
+        #[arg(long)]
+        source: PathBuf,
+        /// Adapter: jksv | mgba | twilight | checkpoint
+        #[arg(long)]
+        adapter: String,
+        /// System: switch | 3ds | nds | gba | gbc | gb
+        #[arg(long)]
+        system: String,
+    },
+    /// Restore a local snapshot to the save directory
+    Restore {
+        /// Path to write restored saves
+        #[arg(long)]
+        dest: PathBuf,
+        /// Adapter: jksv | mgba | twilight | checkpoint
+        #[arg(long)]
+        adapter: String,
+        /// System: switch | 3ds | nds | gba | gbc | gb
+        #[arg(long)]
+        system: String,
+        /// Restrict to a specific game key (required when multiple saves exist)
+        #[arg(long)]
+        game: Option<String>,
+        /// Timestamp selector (exact or prefix)
+        selector: String,
+    },
+}
+
 /// Resolve WebDAV credentials: username from arg > config; password from env > interactive prompt.
 fn resolve_webdav_credentials(
     username_arg: Option<String>,
@@ -154,6 +192,25 @@ fn resolve_history_selector<'a>(
         1 => Ok(matches[0]),
         n => anyhow::bail!(
             "ambiguous selector '{}': matches {} entries; be more specific",
+            selector,
+            n
+        ),
+    }
+}
+
+fn resolve_snapshot_selector<'a>(
+    entries: &'a [helpers::SnapshotEntry],
+    selector: &str,
+) -> Result<&'a helpers::SnapshotEntry> {
+    let matches: Vec<&helpers::SnapshotEntry> = entries
+        .iter()
+        .filter(|e| e.timestamp == selector || e.timestamp.starts_with(selector))
+        .collect();
+    match matches.len() {
+        0 => anyhow::bail!("no snapshot matches selector '{}'", selector),
+        1 => Ok(matches[0]),
+        n => anyhow::bail!(
+            "ambiguous selector '{}': matches {} snapshots; be more specific",
             selector,
             n
         ),
@@ -528,6 +585,100 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Commands::Snapshots { action } => {
+            let cfg = config::WaystoneConfig::load()?;
+            match action {
+                SnapshotCommands::List {
+                    source,
+                    adapter,
+                    system,
+                } => {
+                    let system_id = helpers::parse_system(&system)?;
+                    let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
+                    let raw = helpers::read_source_tree(&source)?;
+                    let saves = adapter_obj.normalize(&raw);
+                    for save in &saves {
+                        println!("{} / {}:", save.id.game.display_name, save.id.slot);
+                        let entries = helpers::list_snapshots(&save.group_key)?;
+                        if entries.is_empty() {
+                            println!("  (no snapshots)");
+                        } else {
+                            for e in &entries {
+                                println!(
+                                    "  {}  {} files  {}",
+                                    e.timestamp,
+                                    e.file_count,
+                                    helpers::human_size(e.total_bytes)
+                                );
+                            }
+                        }
+                        println!();
+                    }
+                    Ok(())
+                }
+                SnapshotCommands::Restore {
+                    dest,
+                    adapter,
+                    system,
+                    game,
+                    selector,
+                } => {
+                    let system_id = helpers::parse_system(&system)?;
+                    let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
+                    let raw = if dest.exists() {
+                        helpers::read_source_tree(&dest)?
+                    } else {
+                        waystone_core::model::RawTree { files: vec![] }
+                    };
+                    let saves = adapter_obj.normalize(&raw);
+                    if saves.is_empty() {
+                        anyhow::bail!(
+                            "no saves found at destination '{}'; nothing to restore",
+                            dest.display()
+                        );
+                    }
+                    let save = if saves.len() == 1 {
+                        &saves[0]
+                    } else if let Some(ref game_key) = game {
+                        saves
+                            .iter()
+                            .find(|s| s.id.game.key == *game_key)
+                            .ok_or_else(|| {
+                                let keys: Vec<&str> =
+                                    saves.iter().map(|s| s.id.game.key.as_str()).collect();
+                                anyhow::anyhow!(
+                                    "game key '{}' not found; available: {}",
+                                    game_key,
+                                    keys.join(", ")
+                                )
+                            })?
+                    } else {
+                        let keys: Vec<&str> =
+                            saves.iter().map(|s| s.id.game.key.as_str()).collect();
+                        anyhow::bail!(
+                            "multiple saves found; use --game to select one: {}",
+                            keys.join(", ")
+                        );
+                    };
+                    let entries = helpers::list_snapshots(&save.group_key)?;
+                    let entry = resolve_snapshot_selector(&entries, &selector)?;
+                    println!(
+                        "Restoring: {} / {} <- snapshot {}",
+                        save.id.game.display_name, save.id.slot, entry.timestamp
+                    );
+                    if let Some(p) = helpers::restore_from_snapshot(
+                        &save.group_key,
+                        &entry.timestamp,
+                        &dest,
+                        cfg.safety_backup,
+                    )? {
+                        println!("  safety backup -> {}", p.display());
+                    }
+                    println!("Restore complete.");
+                    Ok(())
+                }
+            }
+        }
     }
 }
 
@@ -590,5 +741,61 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("ambiguous"), "got: {err}");
+    }
+
+    // --- snapshot selector tests ---
+
+    use helpers::SnapshotEntry;
+
+    fn make_snapshot_entries() -> Vec<SnapshotEntry> {
+        vec![
+            SnapshotEntry {
+                timestamp: "20260907T143100.000Z".into(),
+                path: PathBuf::from("/backups/k/20260907T143100.000Z"),
+                file_count: 3,
+                total_bytes: 1024,
+            },
+            SnapshotEntry {
+                timestamp: "20260906T120000.000Z".into(),
+                path: PathBuf::from("/backups/k/20260906T120000.000Z"),
+                file_count: 2,
+                total_bytes: 512,
+            },
+        ]
+    }
+
+    #[test]
+    fn resolve_snapshot_selector_exact_timestamp() {
+        let entries = make_snapshot_entries();
+        let result = resolve_snapshot_selector(&entries, "20260907T143100.000Z").unwrap();
+        assert_eq!(result.timestamp, "20260907T143100.000Z");
+    }
+
+    #[test]
+    fn resolve_snapshot_selector_timestamp_prefix() {
+        let entries = make_snapshot_entries();
+        let result = resolve_snapshot_selector(&entries, "20260907").unwrap();
+        assert_eq!(result.timestamp, "20260907T143100.000Z");
+    }
+
+    #[test]
+    fn resolve_snapshot_selector_no_match() {
+        let entries = make_snapshot_entries();
+        let result = resolve_snapshot_selector(&entries, "20250101");
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("no snapshot matches")
+        );
+    }
+
+    #[test]
+    fn resolve_snapshot_selector_ambiguous() {
+        let entries = make_snapshot_entries();
+        let result = resolve_snapshot_selector(&entries, "2026090");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("ambiguous"));
     }
 }

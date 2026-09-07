@@ -13,6 +13,7 @@ pub enum Screen {
     Dashboard,
     Conflicts,
     History,
+    Snapshots,
     Setup,
     Settings,
 }
@@ -55,6 +56,14 @@ pub enum Cmd {
         target_id: usize,
         save_key: String,
         hash: String,
+    },
+    LoadSnapshots {
+        target_id: usize,
+    },
+    RestoreSnapshot {
+        target_id: usize,
+        save_key: String,
+        timestamp: String,
     },
 }
 
@@ -117,6 +126,19 @@ impl std::fmt::Debug for Cmd {
                 .field("target_id", target_id)
                 .field("save_key", save_key)
                 .finish(),
+            Self::LoadSnapshots { target_id } => f
+                .debug_struct("LoadSnapshots")
+                .field("target_id", target_id)
+                .finish(),
+            Self::RestoreSnapshot {
+                target_id,
+                save_key,
+                ..
+            } => f
+                .debug_struct("RestoreSnapshot")
+                .field("target_id", target_id)
+                .field("save_key", save_key)
+                .finish(),
         }
     }
 }
@@ -155,6 +177,16 @@ pub struct HistoryView {
     pub mtime: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotView {
+    pub target_id: usize,
+    pub save_key: String,
+    pub label: String,
+    pub timestamp: String,
+    pub file_count: usize,
+    pub total_bytes: u64,
+}
+
 pub enum Msg {
     Key(KeyEvent),
     Tick,
@@ -176,6 +208,9 @@ pub enum Msg {
     },
     History {
         entries: Vec<HistoryView>,
+    },
+    Snapshots {
+        entries: Vec<SnapshotView>,
     },
     UnlockOk {
         vault: Arc<Vault>,
@@ -402,6 +437,8 @@ pub struct App {
     pub settings: Option<SettingsForm>,
     pub history_entries: Vec<HistoryView>,
     pub history_selected: usize,
+    pub snapshot_entries: Vec<SnapshotView>,
+    pub snapshot_selected: usize,
 }
 
 impl App {
@@ -438,6 +475,8 @@ impl App {
             settings: None,
             history_entries: Vec::new(),
             history_selected: 0,
+            snapshot_entries: Vec::new(),
+            snapshot_selected: 0,
         }
     }
 
@@ -541,6 +580,13 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
             app.history_entries = entries;
             app.history_selected = 0;
             app.screen = Screen::History;
+            vec![]
+        }
+
+        Msg::Snapshots { entries } => {
+            app.snapshot_entries = entries;
+            app.snapshot_selected = 0;
+            app.screen = Screen::Snapshots;
             vec![]
         }
 
@@ -660,6 +706,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             Screen::Dashboard => handle_dashboard_key(app, key),
             Screen::Conflicts => handle_conflicts_key(app, key),
             Screen::History => handle_history_key(app, key),
+            Screen::Snapshots => handle_snapshots_key(app, key),
             Screen::Setup => handle_setup_key(app, key),
             Screen::Settings => handle_settings_key(app, key),
         },
@@ -803,6 +850,14 @@ fn handle_dashboard_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                 },
             )
         }
+        KeyCode::Char('b') => {
+            if app.targets.is_empty() {
+                return vec![];
+            }
+            vec![Cmd::LoadSnapshots {
+                target_id: app.selected,
+            }]
+        }
         _ => vec![],
     }
 }
@@ -899,6 +954,49 @@ fn handle_history_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                     target_id: entry.target_id,
                     save_key: entry.save_key.clone(),
                     hash: entry.hash.clone(),
+                }]
+            } else {
+                vec![]
+            }
+        }
+        _ => vec![],
+    }
+}
+
+fn handle_snapshots_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
+    use crossterm::event::KeyCode;
+
+    if app.busy.is_some() {
+        if key.code == KeyCode::Char('q') {
+            return vec![Cmd::Quit];
+        }
+        return vec![];
+    }
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.screen = Screen::Dashboard;
+            vec![]
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !app.snapshot_entries.is_empty() {
+                app.snapshot_selected =
+                    (app.snapshot_selected + 1).min(app.snapshot_entries.len() - 1);
+            }
+            vec![]
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.snapshot_selected > 0 {
+                app.snapshot_selected -= 1;
+            }
+            vec![]
+        }
+        KeyCode::Enter => {
+            if let Some(entry) = app.snapshot_entries.get(app.snapshot_selected) {
+                vec![Cmd::RestoreSnapshot {
+                    target_id: entry.target_id,
+                    save_key: entry.save_key.clone(),
+                    timestamp: entry.timestamp.clone(),
                 }]
             } else {
                 vec![]
@@ -2189,5 +2287,87 @@ mod tests {
         update(&mut app, Msg::History { entries: vec![] });
         assert_eq!(app.screen, Screen::History);
         assert!(app.history_entries.is_empty());
+    }
+
+    // --- Snapshots screen tests ---
+    fn make_snapshot_view(target_id: usize, idx: usize) -> SnapshotView {
+        SnapshotView {
+            target_id,
+            save_key: format!("switch/GAME_{}/main", idx),
+            label: format!("Target {} \u{00b7} Game_{}/main", target_id, idx),
+            timestamp: format!("20260907T14310{}.000Z", idx),
+            file_count: 3,
+            total_bytes: 1024,
+        }
+    }
+
+    #[test]
+    fn b_key_from_dashboard_emits_load_snapshots_directly() {
+        let mut app = test_app();
+        assert!(app.creds.is_none());
+        let cmds = update(&mut app, key(KeyCode::Char('b')));
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, Cmd::LoadSnapshots { target_id: 0 }))
+        );
+        assert!(matches!(app.overlay, Overlay::None));
+    }
+
+    #[test]
+    fn snapshots_msg_populates_entries_and_switches_screen() {
+        let mut app = test_app();
+        update(
+            &mut app,
+            Msg::Snapshots {
+                entries: vec![make_snapshot_view(0, 0), make_snapshot_view(0, 1)],
+            },
+        );
+        assert_eq!(app.screen, Screen::Snapshots);
+        assert_eq!(app.snapshot_entries.len(), 2);
+        assert_eq!(app.snapshot_selected, 0);
+    }
+
+    #[test]
+    fn snapshots_nav_clamps() {
+        let mut app = test_app();
+        app.screen = Screen::Snapshots;
+        app.snapshot_entries = vec![make_snapshot_view(0, 0), make_snapshot_view(0, 1)];
+        update(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.snapshot_selected, 1);
+        update(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.snapshot_selected, 1);
+        update(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.snapshot_selected, 0);
+        update(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.snapshot_selected, 0);
+    }
+
+    #[test]
+    fn snapshots_esc_returns_to_dashboard() {
+        let mut app = test_app();
+        app.screen = Screen::Snapshots;
+        update(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.screen, Screen::Dashboard);
+    }
+
+    #[test]
+    fn snapshots_enter_emits_restore_cmd() {
+        let mut app = test_app();
+        app.screen = Screen::Snapshots;
+        app.snapshot_entries = vec![make_snapshot_view(0, 0)];
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(cmds.iter().any(|c| matches!(
+            c,
+            Cmd::RestoreSnapshot { target_id: 0, save_key, timestamp }
+            if save_key == "switch/GAME_0/main" && timestamp == "20260907T143100.000Z"
+        )));
+    }
+
+    #[test]
+    fn snapshots_empty_msg_stays_on_snapshots_screen() {
+        let mut app = test_app();
+        update(&mut app, Msg::Snapshots { entries: vec![] });
+        assert_eq!(app.screen, Screen::Snapshots);
+        assert!(app.snapshot_entries.is_empty());
     }
 }

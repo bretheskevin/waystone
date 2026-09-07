@@ -434,6 +434,56 @@ async fn dispatch_cmd(
                 app.push_log(format!("Failed to save settings: {}", e));
             }
         },
+
+        Cmd::LoadSnapshots { target_id } => {
+            if let Some(target) = app.targets.get(target_id).cloned() {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    if let Err(e) =
+                        action::load_snapshots_target(&target, tx.clone(), target_id).await
+                    {
+                        let _ = tx
+                            .send(Msg::ActionDone {
+                                target_id,
+                                result: app::ActionResult::Err(e.to_string()),
+                            })
+                            .await;
+                    }
+                });
+            }
+        }
+
+        Cmd::RestoreSnapshot {
+            target_id,
+            save_key,
+            timestamp,
+        } => {
+            if let Some(target) = app.targets.get(target_id).cloned() {
+                app.busy = Some(target_id);
+                let safety_backup = config.safety_backup;
+                let tx_action = tx.clone();
+                let handle = tokio::spawn(async move {
+                    if let Err(e) = action::restore_snapshot(
+                        &target,
+                        save_key,
+                        timestamp,
+                        tx_action.clone(),
+                        target_id,
+                        safety_backup,
+                    )
+                    .await
+                    {
+                        let _ = tx_action
+                            .send(Msg::ActionDone {
+                                target_id,
+                                result: app::ActionResult::Err(e.to_string()),
+                            })
+                            .await;
+                    }
+                });
+                watch_busy_task(handle, tx.clone(), target_id);
+            }
+        }
     }
     Ok(())
 }

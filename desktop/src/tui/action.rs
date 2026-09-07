@@ -1,7 +1,8 @@
 use crate::config::{SyncTarget, WaystoneConfig};
 use crate::helpers;
 use crate::tui::app::{
-    ActionResult, ConflictEntry, HeadInfo, HistoryView, Msg, SessionCreds, SetupOk, TargetStatus,
+    ActionResult, ConflictEntry, HeadInfo, HistoryView, Msg, SessionCreds, SetupOk, SnapshotView,
+    TargetStatus,
 };
 use crate::webdav::{BlockingWebDav, WebDavClient};
 use anyhow::Result;
@@ -600,6 +601,80 @@ pub fn save_recovery_file(key: &str, device_id: &str) -> Result<std::path::PathB
         std::fs::write(&path, key)?;
     }
     Ok(path)
+}
+
+pub async fn load_snapshots_target(
+    target: &SyncTarget,
+    tx: mpsc::Sender<Msg>,
+    target_id: usize,
+) -> Result<()> {
+    let _ = tx
+        .send(Msg::Progress {
+            target_id,
+            phase: "loading snapshots".into(),
+        })
+        .await;
+
+    let saves: Vec<waystone_core::model::NormalizedSave> = load_target_saves(target)?;
+    let target_name = target.name.clone();
+
+    let entries = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<SnapshotView>> {
+        let mut result: Vec<SnapshotView> = Vec::new();
+        for save in &saves {
+            let snaps = helpers::list_snapshots(&save.group_key)?;
+            for snap in snaps {
+                result.push(SnapshotView {
+                    target_id,
+                    save_key: save.group_key.clone(),
+                    label: format!(
+                        "{} \u{00b7} {}/{}",
+                        target_name, save.id.game.display_name, save.id.slot
+                    ),
+                    timestamp: snap.timestamp,
+                    file_count: snap.file_count,
+                    total_bytes: snap.total_bytes,
+                });
+            }
+        }
+        Ok(result)
+    })
+    .await??;
+
+    let _ = tx.send(Msg::Snapshots { entries }).await;
+    Ok(())
+}
+
+pub async fn restore_snapshot(
+    target: &SyncTarget,
+    save_key: String,
+    timestamp: String,
+    tx: mpsc::Sender<Msg>,
+    target_id: usize,
+    safety_backup: bool,
+) -> Result<()> {
+    let _ = tx
+        .send(Msg::Progress {
+            target_id,
+            phase: format!("restoring snapshot {}...", timestamp),
+        })
+        .await;
+
+    let dest = target.path.clone();
+    let save_key_owned = save_key.clone();
+    let timestamp_owned = timestamp.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        helpers::restore_from_snapshot(&save_key_owned, &timestamp_owned, &dest, safety_backup)?;
+        Ok(())
+    })
+    .await??;
+
+    let _ = tx
+        .send(Msg::ActionDone {
+            target_id,
+            result: ActionResult::Ok(format!("restored snapshot {} for {}", timestamp, save_key)),
+        })
+        .await;
+    Ok(())
 }
 
 #[cfg(test)]
