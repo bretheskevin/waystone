@@ -125,6 +125,12 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   (device_id read-only); a server change clears session creds. Secrets masked, non-Debug, zeroized.
   **Deferred to v4**: content/file-level conflict diff, "keep both", destructive re-init /
   change-passphrase, recovery-key unlock in the TUI.
+- **Safety backup before restore**: a default-on `safety_backup` setting (toggle in the Settings
+  screen) snapshots the current local save to `<config_dir>/backups/<group_key>/<ts>/` before ANY
+  action that overwrites local (CLI/TUI pull + conflict "keep remote"); if the snapshot fails the
+  restore is **aborted** (hard precondition), so an un-pushed local can't be lost. Local-only,
+  offline-safe (shared `helpers::safety_snapshot`; `group_key` path-traversal-sanitized). Console
+  shells honor the same idea in-engine as a fast follow.
 
 ## Next
 - **M2 (remaining) — Switch shell: full UI + first on-hardware run**: the two-way save engine
