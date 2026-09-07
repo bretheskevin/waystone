@@ -214,6 +214,16 @@ int write_save_files(u64 title_id, const char* files_json) {
         return -1;
     }
 
+    // Wipe the archive root before writing so stale files from a previous
+    // backup do not survive (mirrors Checkpoint's DeleteDirectoryRecursively
+    // before copyTree). Non-fatal: an empty/fresh archive may return an error.
+    Result del_res = FSUSER_DeleteDirectoryRecursively(archive,
+                         fsMakePath(PATH_ASCII, "/"));
+    if (R_FAILED(del_res)) {
+        printf("  write_save_files: DeleteDirectoryRecursively returned 0x%08lX (non-fatal)\n",
+               (unsigned long)del_res);
+    }
+
     std::vector<std::string> entries = json_split_array(files_json);
     int ret = 0;
 
@@ -290,7 +300,14 @@ int write_save_files(u64 title_id, const char* files_json) {
         FSFILE_Close(fh);
     }
 
-    // REQUIRED: flush all pending writes to the underlying save filesystem.
+    // Do NOT commit a partial restore — a half-written committed save is worse
+    // than a failed restore (mirrors Checkpoint aborting on first copy failure).
+    if (ret != 0) {
+        FSUSER_CloseArchive(archive);
+        return -1;
+    }
+
+    // Flush all pending writes to the underlying save filesystem.
     if (R_FAILED(FSUSER_ControlArchive(archive, ARCHIVE_ACTION_COMMIT_SAVE_DATA,
                                        NULL, 0, NULL, 0))) {
         printf("  write_save_files: ARCHIVE_ACTION_COMMIT_SAVE_DATA failed\n");
@@ -298,5 +315,22 @@ int write_save_files(u64 title_id, const char* files_json) {
         return -1;
     }
     FSUSER_CloseArchive(archive);
-    return ret;
+
+    // Delete the console secure value so the game regenerates a fresh one
+    // instead of rejecting the restored save. Some titles store an anti-tamper
+    // value outside the archive; after overwriting the save it no longer
+    // matches. Mirrors Checkpoint's !isTwl block in io::restore(). Use raw
+    // title_id & 0xFFFFFF00ULL (NOT unique_id/0xFFFFF) to address the correct
+    // slot. Non-fatal: titles with no secure value error on delete.
+    u8 sv_out = 0;
+    u64 secure_value = ((u64)SECUREVALUE_SLOT_SD << 32) | (u64)(title_id & 0xFFFFFF00ULL);
+    Result sv = FSUSER_ControlSecureSave(SECURESAVE_ACTION_DELETE,
+                    &secure_value, sizeof(secure_value),
+                    &sv_out, sizeof(sv_out));
+    if (R_FAILED(sv)) {
+        printf("  write_save_files: ControlSecureSave delete returned 0x%08lX (non-fatal)\n",
+               (unsigned long)sv);
+    }
+
+    return 0;
 }
