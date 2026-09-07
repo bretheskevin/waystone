@@ -129,8 +129,10 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   screen) snapshots the current local save to `<config_dir>/backups/<group_key>/<ts>/` before ANY
   action that overwrites local (CLI/TUI pull + conflict "keep remote"); if the snapshot fails the
   restore is **aborted** (hard precondition), so an un-pushed local can't be lost. Local-only,
-  offline-safe (shared `helpers::safety_snapshot`; `group_key` path-traversal-sanitized). Console
-  shells honor the same idea in-engine as a fast follow.
+  offline-safe (shared `helpers::safety_snapshot`; `group_key` path-traversal-sanitized). **Switch +
+  3DS honor the same** in-engine: a shared `shell-common/snapshot.cpp` snapshots the current save to
+  `sdmc:/waystone/backups/<key>/<ts>/` before `write_save_files` in each `pull_title` (always-on,
+  skip-that-title on failure) — compile+link verified on both.
 
 ## Next
 - **M2 (remaining) — Switch shell: full UI + first on-hardware run**: the two-way save engine
