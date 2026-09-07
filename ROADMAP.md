@@ -124,7 +124,7 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   then zeroized). A **Settings** screen (`Screen::Settings`, `S`) edits server/policy/username
   (device_id read-only); a server change clears session creds. Secrets masked, non-Debug, zeroized.
   **Deferred to v4**: content/file-level conflict diff, "keep both", destructive re-init /
-  change-passphrase, recovery-key unlock in the TUI.
+  change-passphrase. _(recovery-key unlock in the TUI — done, see below.)_
 - **Safety backup before restore**: a default-on `safety_backup` setting (toggle in the Settings
   screen) snapshots the current local save to `<config_dir>/backups/<group_key>/<ts>/` before ANY
   action that overwrites local (CLI/TUI pull + conflict "keep remote"); if the snapshot fails the
@@ -156,6 +156,14 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   `sanitize_group_key` + `copy_tree` extracted from `snapshot_save_dir` and single-sourced across
   writer/reader; hermetic testable cores take an explicit `backups_root`. Host-verified: `cargo test
   --workspace` green (19 new tests: 9 helpers + 4 CLI + 6 TUI), clippy/fmt clean, reviewed CLEAN (0 findings).
+- **Recovery-key unlock in the TUI**: the TUI unlock overlay can now unlock with the **recovery key**, not
+  just the passphrase — closing a lockout gap (a forgotten passphrase previously locked you out of the TUI
+  even though the recovery key was generated + saved at setup). A **Ctrl+R** toggle swaps the secret field
+  between _Passphrase_ and _Recovery key_ (same overlay, same WebDAV field, same flow; the key is masked);
+  `Cmd::AttemptUnlock`/`try_unlock` gained a `recovery` flag that branches to the existing tested
+  `core::crypto::unlock_with_recovery`. No core changes; secret zeroized on toggle/cancel/submit. Just-unlock
+  (setting a new passphrase stays the deferred change-passphrase feature). Host-verified: `cargo test
+  -p waystone-desktop` green (4 new reducer tests), clippy/fmt clean, reviewed CLEAN (0 findings).
 
 ## Next
 - **M2 (remaining) — Switch shell: full UI + first on-hardware run**: the two-way save engine
