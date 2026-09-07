@@ -304,6 +304,7 @@ pub struct SettingsForm {
     pub server_url: String,
     pub conflict_policy: waystone_core::conflict::ConflictPolicy,
     pub username: String,
+    pub safety_backup: bool,
     pub field: usize,
     pub error: Option<String>,
 }
@@ -357,6 +358,7 @@ pub struct App {
     pub conflict_sel: usize,
     pub device_id: String,
     pub conflict_policy: waystone_core::conflict::ConflictPolicy,
+    pub safety_backup: bool,
     pub setup: Option<SetupForm>,
     pub settings: Option<SettingsForm>,
 }
@@ -386,6 +388,7 @@ impl App {
             conflict_sel: 0,
             device_id: config.device_id.clone(),
             conflict_policy: config.conflict_policy,
+            safety_backup: config.safety_backup,
             setup: if first_run {
                 Some(SetupForm::default())
             } else {
@@ -413,6 +416,7 @@ impl App {
             conflict_policy: self.conflict_policy,
             username: self.username.clone(),
             targets: self.targets.clone(),
+            safety_backup: self.safety_backup,
         }
     }
 }
@@ -729,6 +733,7 @@ fn handle_dashboard_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                 server_url: app.server_url.clone(),
                 conflict_policy: app.conflict_policy,
                 username: app.username.clone().unwrap_or_default(),
+                safety_backup: app.safety_backup,
                 field: 0,
                 error: None,
             });
@@ -1113,12 +1118,14 @@ fn submit_settings(app: &mut App) -> Vec<Cmd> {
         Some(form.username.clone())
     };
     app.conflict_policy = form.conflict_policy;
+    app.safety_backup = form.safety_backup;
     let cfg = WaystoneConfig {
         device_id: app.device_id.clone(),
         server_url: app.server_url.clone(),
         conflict_policy: app.conflict_policy,
         username: app.username.clone(),
         targets: app.targets.clone(),
+        safety_backup: app.safety_backup,
     };
     if server_changed {
         app.creds = None;
@@ -1137,7 +1144,9 @@ fn handle_settings_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     let Some(ref mut form) = app.settings else {
         return vec![];
     };
-    let max_field: usize = 2;
+    // Fields: 0=server_url, 1=conflict_policy, 2=safety_backup, 3=username
+    // Device ID is read-only and not a field index
+    let max_field: usize = 3;
 
     match key.code {
         KeyCode::Esc => {
@@ -1160,7 +1169,7 @@ fn handle_settings_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                 0 => {
                     form.server_url.pop();
                 }
-                1 => {}
+                1 | 2 => {}
                 _ => {
                     form.username.pop();
                 }
@@ -1178,10 +1187,14 @@ fn handle_settings_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             };
             vec![]
         }
+        KeyCode::Char(' ') if form.field == 2 => {
+            form.safety_backup = !form.safety_backup;
+            vec![]
+        }
         KeyCode::Char(c) => {
             match form.field {
                 0 => form.server_url.push(c),
-                1 => {}
+                1 | 2 => {}
                 _ => form.username.push(c),
             }
             vec![]
@@ -1250,6 +1263,7 @@ mod tests {
                     system: "nds".into(),
                 },
             ],
+            safety_backup: true,
         };
         App::new(&config)
     }
@@ -1655,6 +1669,7 @@ mod tests {
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
             username: None,
             targets: vec![],
+            safety_backup: true,
         }
     }
 
@@ -1831,6 +1846,7 @@ mod tests {
             server_url: "http://changed".into(),
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
             username: "bob".into(),
+            safety_backup: true,
             field: 0,
             error: None,
         });
@@ -1848,6 +1864,7 @@ mod tests {
             server_url: "http://localhost".into(),
             conflict_policy: waystone_core::conflict::ConflictPolicy::Prompt,
             username: "alice".into(),
+            safety_backup: true,
             field: 0,
             error: None,
         });
@@ -1873,6 +1890,7 @@ mod tests {
             server_url: "http://different-server".into(),
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
             username: String::new(),
+            safety_backup: true,
             field: 0,
             error: None,
         });
@@ -1890,6 +1908,7 @@ mod tests {
             server_url: "http://localhost".into(),
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
             username: String::new(),
+            safety_backup: true,
             field: 1,
             error: None,
         });
@@ -1903,6 +1922,57 @@ mod tests {
             app.settings.as_ref().unwrap().conflict_policy,
             waystone_core::conflict::ConflictPolicy::NewestWins
         );
+    }
+
+    #[test]
+    fn settings_form_includes_safety_backup() {
+        let mut app = test_app();
+        update(&mut app, key(KeyCode::Char('S')));
+        assert!(app.settings.as_ref().unwrap().safety_backup);
+    }
+
+    #[test]
+    fn settings_toggle_safety_backup() {
+        let mut app = test_app();
+        app.screen = Screen::Settings;
+        app.settings = Some(SettingsForm {
+            server_url: "http://localhost".into(),
+            conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
+            username: String::new(),
+            safety_backup: true,
+            field: 2,
+            error: None,
+        });
+        update(&mut app, key(KeyCode::Char(' ')));
+        assert!(!app.settings.as_ref().unwrap().safety_backup);
+        update(&mut app, key(KeyCode::Char(' ')));
+        assert!(app.settings.as_ref().unwrap().safety_backup);
+    }
+
+    #[test]
+    fn settings_save_carries_safety_backup_false() {
+        let mut app = test_app();
+        app.screen = Screen::Settings;
+        app.settings = Some(SettingsForm {
+            server_url: "http://localhost".into(),
+            conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
+            username: String::new(),
+            safety_backup: false,
+            field: 0,
+            error: None,
+        });
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        let save_cmd = cmds
+            .iter()
+            .find_map(|c| {
+                if let Cmd::SaveSettings(cfg) = c {
+                    Some(cfg)
+                } else {
+                    None
+                }
+            })
+            .expect("should emit SaveSettings");
+        assert!(!save_cmd.safety_backup);
     }
 
     #[test]

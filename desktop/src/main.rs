@@ -102,6 +102,7 @@ fn do_pull_save(
     system_name: &str,
     device_id: &str,
     policy: waystone_core::conflict::ConflictPolicy,
+    safety_backup: bool,
 ) -> Result<()> {
     let all_heads = waystone_sync::read_remote_heads(vault, save, dav)?;
     let (entry, _) = waystone_core::packaging::package(save);
@@ -126,6 +127,21 @@ fn do_pull_save(
     match pull_hash {
         Some(hash) => {
             println!("Pulling: {} / {}", save.id.game.display_name, save.id.slot);
+            if safety_backup {
+                let backups_root = config::WaystoneConfig::config_dir()?.join("backups");
+                match helpers::snapshot_save_dir(dest, &backups_root, &save.group_key) {
+                    Ok(Some(p)) => println!("  safety backup -> {}", p.display()),
+                    Ok(None) => {}
+                    Err(e) => {
+                        anyhow::bail!(
+                            "safety backup failed for {}/{}: {}; restore aborted",
+                            save.id.game.display_name,
+                            save.id.slot,
+                            e
+                        );
+                    }
+                }
+            }
             let zip_bytes = waystone_sync::fetch_blob(vault, save, &hash, dav)?;
             helpers::restore_save_from_blob(&zip_bytes, save, dest, adapter_name, system_name)?;
         }
@@ -252,6 +268,7 @@ async fn main() -> Result<()> {
             let blocking_dav = webdav::BlockingWebDav::new(&cfg.server_url, wdav_user, wdav_pass);
             let device_id = cfg.device_id.clone();
             let policy = cfg.conflict_policy;
+            let safety_backup = cfg.safety_backup;
 
             for save in &local_saves {
                 do_pull_save(
@@ -263,6 +280,7 @@ async fn main() -> Result<()> {
                     &system,
                     &device_id,
                     policy,
+                    safety_backup,
                 )?;
             }
 

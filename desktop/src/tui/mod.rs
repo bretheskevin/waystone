@@ -147,6 +147,7 @@ async fn dispatch_cmd(
                 let dav = creds.dav.clone();
                 let blocking_dav = creds.blocking_dav.clone();
                 let cfg = config.clone();
+                let safety_backup = config.safety_backup;
                 let tx_action = tx.clone();
                 let handle = tokio::spawn(async move {
                     let creds = app::SessionCreds {
@@ -154,9 +155,15 @@ async fn dispatch_cmd(
                         dav,
                         blocking_dav,
                     };
-                    if let Err(e) =
-                        action::pull_target(&target, &creds, &cfg, tx_action.clone(), target_id)
-                            .await
+                    if let Err(e) = action::pull_target(
+                        &target,
+                        &creds,
+                        &cfg,
+                        tx_action.clone(),
+                        target_id,
+                        safety_backup,
+                    )
+                    .await
                     {
                         let _ = tx_action
                             .send(Msg::ActionDone {
@@ -290,6 +297,7 @@ async fn dispatch_cmd(
                 let vault = creds.vault.clone();
                 let dav = creds.dav.clone();
                 let blocking_dav = creds.blocking_dav.clone();
+                let safety_backup = config.safety_backup;
                 let tx_action = tx.clone();
                 let handle = tokio::spawn(async move {
                     let creds = app::SessionCreds {
@@ -304,6 +312,7 @@ async fn dispatch_cmd(
                         &creds,
                         tx_action.clone(),
                         target_id,
+                        safety_backup,
                     )
                     .await
                     {

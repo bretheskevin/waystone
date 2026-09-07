@@ -601,11 +601,18 @@ fn render_settings(frame: &mut Frame, app: &App) {
         waystone_core::conflict::ConflictPolicy::Prompt => "prompt",
     };
 
+    let safety_label = if form.safety_backup { "ON" } else { "OFF" };
+
     let fields: Vec<(&str, String, bool)> = vec![
         ("Server URL", form.server_url.clone(), false),
         (
             "Conflict Policy",
             format!("< {} > (space to toggle)", policy_label),
+            false,
+        ),
+        (
+            "Safety Backup",
+            format!("< {} > (space to toggle)", safety_label),
             false,
         ),
         ("Username", form.username.clone(), false),
@@ -661,7 +668,7 @@ fn render_settings(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(lines).block(block), chunks[1]);
 
     let footer = Line::from(vec![Span::styled(
-        "Enter=save  Esc=discard  Tab=next field  Space=toggle (on policy)",
+        "Enter=save  Esc=discard  Tab=next field  Space=toggle (on policy/safety)",
         Style::default().fg(theme::NEUTRAL_500),
     )]);
     frame.render_widget(Paragraph::new(footer), chunks[2]);

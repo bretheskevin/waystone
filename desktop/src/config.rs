@@ -35,6 +35,10 @@ pub fn validate_sync_target(t: &SyncTarget) -> Result<()> {
     Ok(())
 }
 
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WaystoneConfig {
     pub device_id: String,
@@ -44,6 +48,8 @@ pub struct WaystoneConfig {
     pub username: Option<String>,
     #[serde(default)]
     pub targets: Vec<SyncTarget>,
+    #[serde(default = "default_true")]
+    pub safety_backup: bool,
 }
 
 impl Default for WaystoneConfig {
@@ -54,6 +60,7 @@ impl Default for WaystoneConfig {
             conflict_policy: ConflictPolicy::NewestWins,
             username: None,
             targets: Vec::new(),
+            safety_backup: true,
         }
     }
 }
@@ -130,6 +137,7 @@ mod tests {
                 adapter: "jksv".into(),
                 system: "switch".into(),
             }],
+            safety_backup: true,
         };
         let json = serde_json::to_string_pretty(&cfg).unwrap();
         let cfg2: WaystoneConfig = serde_json::from_str(&json).unwrap();
@@ -190,6 +198,7 @@ mod tests {
             waystone_core::conflict::ConflictPolicy::NewestWins
         );
         assert!(cfg.username.is_none());
+        assert!(cfg.safety_backup);
     }
 
     #[test]
@@ -200,6 +209,7 @@ mod tests {
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
             username: Some("alice".into()),
             targets: vec![],
+            safety_backup: true,
         };
         let json = serde_json::to_string_pretty(&cfg).unwrap();
         let cfg2: WaystoneConfig = serde_json::from_str(&json).unwrap();
@@ -216,8 +226,28 @@ mod tests {
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
             username: None,
             targets: vec![],
+            safety_backup: true,
         };
         let json = serde_json::to_string_pretty(&cfg).unwrap();
         assert!(!json.contains("username"));
+    }
+
+    #[test]
+    fn config_without_safety_backup_deserializes_as_true() {
+        let json =
+            r#"{"device_id":"dev","server_url":"http://srv","conflict_policy":"newest-wins"}"#;
+        let cfg: WaystoneConfig = serde_json::from_str(json).unwrap();
+        assert!(cfg.safety_backup);
+    }
+
+    #[test]
+    fn config_with_safety_backup_false_round_trips() {
+        let cfg = WaystoneConfig {
+            safety_backup: false,
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let cfg2: WaystoneConfig = serde_json::from_str(&json).unwrap();
+        assert!(!cfg2.safety_backup);
     }
 }
