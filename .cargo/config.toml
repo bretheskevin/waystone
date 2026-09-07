@@ -1,2 +1,5 @@
 [target.aarch64-nintendo-switch-freestanding]
 rustflags = ["-Cpanic=abort"]
+
+[target.armv6k-nintendo-3ds]
+rustflags = ["-Cpanic=abort"]

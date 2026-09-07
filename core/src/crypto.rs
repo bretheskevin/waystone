@@ -240,8 +240,8 @@ impl Drop for Vault {
     }
 }
 
-#[cfg(feature = "switch")]
-mod switch_entropy {
+#[cfg(any(feature = "switch", feature = "3ds"))]
+mod console_entropy {
     use getrandom::register_custom_getrandom;
 
     fn nx_entropy(buf: &mut [u8]) -> Result<(), getrandom::Error> {

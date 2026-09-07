@@ -1,4 +1,4 @@
-#![cfg_attr(feature = "switch", no_std)]
+#![cfg_attr(any(feature = "switch", feature = "3ds"), no_std)]
 // All pub unsafe extern "C" ffi boundary functions share the same contract:
 // every pointer argument must be valid or null (null is always checked and returns an error).
 // Annotating each individually adds noise without clarity.
@@ -6,11 +6,11 @@
 
 extern crate alloc;
 
-#[cfg(all(feature = "switch", test))]
+#[cfg(all(any(feature = "switch", feature = "3ds"), test))]
 extern crate std;
 
-#[cfg(feature = "switch")]
-mod switch_runtime {
+#[cfg(any(feature = "switch", feature = "3ds"))]
+mod console_runtime {
     use core::alloc::{GlobalAlloc, Layout};
 
     struct NewlibAllocator;

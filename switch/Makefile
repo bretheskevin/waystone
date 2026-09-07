@@ -13,7 +13,7 @@ include $(DEVKITPRO)/libnx/switch_rules
 TARGET		:=	waystone-spike
 BUILD		:=	build
 DATA		:=	data
-INCLUDES	:=	../ffi/include source
+INCLUDES	:=	../ffi/include source ../shell-common
 ROMFS		:=	romfs
 
 # WAYSTONE_TARGET selects which cross-compiled libwaystone_ffi.a to link.
@@ -29,10 +29,10 @@ WAYSTONE_TARGET	?=	aarch64-nintendo-switch-freestanding
 #     Entry point: source/main.cpp.  source/app_main.cpp excluded.
 #
 ifeq ($(CONSOLE),1)
-SOURCES		:=	source
+SOURCES		:=	source ../shell-common
 EXCLUDES	:=	source/app_main.cpp
 else
-SOURCES		:=	source source/ui
+SOURCES		:=	source source/ui ../shell-common
 EXCLUDES	:=	source/main.cpp
 ROMFS_ASSETS	:=	romfs-assets
 # Path to the borealis repo root (relative to TOPDIR = switch/).
