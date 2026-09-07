@@ -1,6 +1,6 @@
 # Waystone — Status & Roadmap
 
-_Last updated: 2026-09-02_
+_Last updated: 2026-09-07_
 
 Cross-platform game-save sync (backup **and** cross-device sync) spanning emulator
 saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
@@ -133,6 +133,18 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   3DS honor the same** in-engine: a shared `shell-common/snapshot.cpp` snapshots the current save to
   `sdmc:/waystone/backups/<key>/<ts>/` before `write_save_files` in each `pull_title` (always-on,
   skip-that-title on failure) — compile+link verified on both.
+- **History-restore (browse & restore any past version)**: the append-only server `history/` is now
+  **readable and recoverable**, closing the gap where history was written on every push but never read.
+  A shared **`waystone_sync::list_history`** (PROPFIND `history/` + `decrypt_heads`, mirroring
+  `read_remote_heads`) lists every past `{timestamp, device_id, hash, mtime}` newest-first (timestamp
+  parsed from the `{ts}-{device_id}.json` filename). Both desktop surfaces restore any version **locally**
+  — remote heads/history untouched; a later explicit push propagates it — through the safety-backup guard:
+  a new CLI **`waystone history list|restore`** (path-based like `pull`/`status`, `<ts|hash-prefix>`
+  selector via a pure `resolve_history_selector`) and a TUI **`Screen::History`** picker (`h` on the
+  dashboard, mirroring the conflict inbox). The restore tail is now **DRY-unified**: one
+  `helpers::guarded_restore` (safety-snapshot → fetch-blob → restore) backs CLI pull, TUI pull, conflict
+  keep-remote, **and** both new history-restore paths — 3 open-coded copies collapsed to 1. Host-verified:
+  `cargo test --workspace` green (14 new tests), clippy/fmt clean, reviewed CLEAN (0 findings).
 
 ## Next
 - **M2 (remaining) — Switch shell: full UI + first on-hardware run**: the two-way save engine
