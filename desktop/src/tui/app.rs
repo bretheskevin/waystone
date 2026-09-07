@@ -26,6 +26,7 @@ pub enum Cmd {
     AttemptUnlock {
         passphrase: String,
         webdav_password: Option<String>,
+        recovery: bool,
     },
     SaveConfig,
     Quit,
@@ -74,10 +75,11 @@ impl std::fmt::Debug for Cmd {
             Self::SpawnPull(id) => f.debug_tuple("SpawnPull").field(id).finish(),
             Self::RefreshStatus(id) => f.debug_tuple("RefreshStatus").field(id).finish(),
             Self::RefreshAllStatuses => write!(f, "RefreshAllStatuses"),
-            Self::AttemptUnlock { .. } => f
+            Self::AttemptUnlock { recovery, .. } => f
                 .debug_struct("AttemptUnlock")
                 .field("passphrase", &"[REDACTED]")
                 .field("webdav_password", &"[REDACTED]")
+                .field("recovery", recovery)
                 .finish(),
             Self::SaveConfig => write!(f, "SaveConfig"),
             Self::Quit => write!(f, "Quit"),
@@ -263,12 +265,14 @@ pub enum FormMode {
 pub enum Overlay {
     None,
     Unlock {
+        /// Holds passphrase in normal mode, or the recovery key when recovery_mode is true.
         passphrase: String,
         webdav_password: String,
         needs_webdav: bool,
         field_index: usize,
         error: Option<String>,
         then: Option<PendingCmd>,
+        recovery_mode: bool,
     },
     TargetForm {
         mode: FormMode,
@@ -298,6 +302,7 @@ impl std::fmt::Debug for Overlay {
                 field_index,
                 error,
                 then,
+                recovery_mode,
                 ..
             } => f
                 .debug_struct("Unlock")
@@ -307,6 +312,7 @@ impl std::fmt::Debug for Overlay {
                 .field("field_index", field_index)
                 .field("error", error)
                 .field("then", then)
+                .field("recovery_mode", recovery_mode)
                 .finish(),
             Self::TargetForm {
                 mode,
@@ -1018,6 +1024,7 @@ pub(crate) fn ensure_creds_then(app: &mut App, pending: PendingCmd) -> Vec<Cmd> 
             field_index: 0,
             error: Option::None,
             then: Some(pending),
+            recovery_mode: false,
         };
         vec![]
     }
@@ -1025,6 +1032,7 @@ pub(crate) fn ensure_creds_then(app: &mut App, pending: PendingCmd) -> Vec<Cmd> 
 
 fn handle_unlock_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     use crossterm::event::KeyCode;
+    use crossterm::event::KeyModifiers;
 
     let Overlay::Unlock {
         ref mut passphrase,
@@ -1032,6 +1040,7 @@ fn handle_unlock_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         needs_webdav,
         ref mut field_index,
         ref mut error,
+        ref mut recovery_mode,
         ..
     } = app.overlay
     else {
@@ -1057,7 +1066,14 @@ fn handle_unlock_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         KeyCode::Enter => {
             *error = Option::None;
             if passphrase.is_empty() {
-                *error = Some("Passphrase is required.".into());
+                *error = Some(
+                    if *recovery_mode {
+                        "Recovery key is required."
+                    } else {
+                        "Passphrase is required."
+                    }
+                    .into(),
+                );
                 return vec![];
             }
             let pass_clone = passphrase.clone();
@@ -1074,7 +1090,15 @@ fn handle_unlock_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             vec![Cmd::AttemptUnlock {
                 passphrase: pass_clone,
                 webdav_password: wdav_clone,
+                recovery: *recovery_mode,
             }]
+        }
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            *recovery_mode = !*recovery_mode;
+            passphrase.zeroize();
+            *field_index = 0;
+            *error = None;
+            vec![]
         }
         KeyCode::Backspace => {
             let field = if *field_index == 0 {
@@ -2369,5 +2393,106 @@ mod tests {
         update(&mut app, Msg::Snapshots { entries: vec![] });
         assert_eq!(app.screen, Screen::Snapshots);
         assert!(app.snapshot_entries.is_empty());
+    }
+
+    // --- Recovery-mode unlock tests ---
+
+    fn key_ctrl(c: char) -> Msg {
+        Msg::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL))
+    }
+
+    fn app_with_unlock_overlay() -> App {
+        let mut app = test_app();
+        update(&mut app, key(KeyCode::Char('p')));
+        assert!(matches!(app.overlay, Overlay::Unlock { .. }));
+        app
+    }
+
+    #[test]
+    fn ctrl_r_toggles_recovery_mode() {
+        let mut app = app_with_unlock_overlay();
+        // type 2 chars into passphrase first
+        update(&mut app, key(KeyCode::Char('x')));
+        update(&mut app, key(KeyCode::Char('y')));
+        // toggle to recovery mode — passphrase should be cleared
+        update(&mut app, key_ctrl('r'));
+        let Overlay::Unlock {
+            ref recovery_mode,
+            ref passphrase,
+            ..
+        } = app.overlay
+        else {
+            panic!("expected Unlock overlay");
+        };
+        assert!(*recovery_mode, "recovery_mode should be true after Ctrl+R");
+        assert!(passphrase.is_empty(), "passphrase cleared on toggle");
+        // toggle back to passphrase mode
+        update(&mut app, key_ctrl('r'));
+        let Overlay::Unlock {
+            ref recovery_mode, ..
+        } = app.overlay
+        else {
+            panic!("expected Unlock overlay");
+        };
+        assert!(
+            !*recovery_mode,
+            "recovery_mode should be false after second Ctrl+R"
+        );
+    }
+
+    #[test]
+    fn unlock_enter_recovery_mode_emits_attempt_unlock_recovery_true() {
+        let mut app = app_with_unlock_overlay();
+        update(&mut app, key_ctrl('r'));
+        // type a char into the secret (field 0, holds recovery key in this mode)
+        update(&mut app, key(KeyCode::Char('k')));
+        // fill webdav field too if needed (Tab + char)
+        update(&mut app, key(KeyCode::Tab));
+        update(&mut app, key(KeyCode::Char('w')));
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, Cmd::AttemptUnlock { recovery: true, .. })),
+            "should emit AttemptUnlock with recovery: true"
+        );
+    }
+
+    #[test]
+    fn unlock_enter_passphrase_mode_recovery_false() {
+        let mut app = app_with_unlock_overlay();
+        // type a passphrase char (field 0)
+        update(&mut app, key(KeyCode::Char('p')));
+        // fill webdav field too if needed
+        update(&mut app, key(KeyCode::Tab));
+        update(&mut app, key(KeyCode::Char('w')));
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                Cmd::AttemptUnlock {
+                    recovery: false,
+                    ..
+                }
+            )),
+            "should emit AttemptUnlock with recovery: false"
+        );
+    }
+
+    #[test]
+    fn unlock_recovery_empty_shows_recovery_required_error() {
+        let mut app = app_with_unlock_overlay();
+        update(&mut app, key_ctrl('r'));
+        // Enter with empty secret
+        update(&mut app, key(KeyCode::Enter));
+        let Overlay::Unlock { ref error, .. } = app.overlay else {
+            panic!("expected Unlock overlay");
+        };
+        assert!(
+            error
+                .as_ref()
+                .map(|e| e.contains("Recovery key"))
+                .unwrap_or(false),
+            "error should mention Recovery key"
+        );
     }
 }

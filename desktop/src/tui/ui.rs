@@ -529,24 +529,40 @@ fn render_unlock_overlay(frame: &mut Frame, app: &App) {
         needs_webdav,
         field_index,
         ref error,
+        recovery_mode,
         ..
     } = app.overlay
     else {
         return;
     };
-    let height = if needs_webdav { 10 } else { 8 };
+    let height = if needs_webdav { 11 } else { 9 };
     let area = centered_rect(50, height, frame.area());
     frame.render_widget(Clear, area);
 
+    let title = if recovery_mode {
+        " Unlock Session (Recovery Key) "
+    } else {
+        " Unlock Session "
+    };
     let mut lines = vec![
         Line::styled(
-            "Unlock Session",
+            if recovery_mode {
+                "Unlock with recovery key"
+            } else {
+                "Unlock Session"
+            },
             Style::default()
                 .fg(theme::PRIMARY)
                 .add_modifier(Modifier::BOLD),
         ),
         Line::raw(""),
     ];
+    // passphrase field also holds the recovery key when recovery_mode is true; always masked
+    let secret_label = if recovery_mode {
+        "Recovery key: "
+    } else {
+        "Passphrase: "
+    };
     let pass_display: String = if passphrase.is_empty() {
         " ".into()
     } else {
@@ -560,7 +576,7 @@ fn render_unlock_overlay(frame: &mut Frame, app: &App) {
         Style::default().fg(theme::NEUTRAL_400)
     };
     lines.push(Line::from(vec![
-        Span::raw("Passphrase: "),
+        Span::raw(secret_label),
         Span::styled(pass_display, pass_style),
     ]));
 
@@ -591,15 +607,17 @@ fn render_unlock_overlay(frame: &mut Frame, app: &App) {
         ));
     }
     lines.push(Line::raw(""));
-    lines.push(Line::styled(
-        "Enter=submit  Esc=cancel  Tab=next field",
-        Style::default().fg(theme::NEUTRAL_500),
-    ));
+    let hint = if recovery_mode {
+        "Enter=submit  Esc=cancel  Tab=next field  Ctrl+R=use passphrase"
+    } else {
+        "Enter=submit  Esc=cancel  Tab=next field  Ctrl+R=use recovery key"
+    };
+    lines.push(Line::styled(hint, Style::default().fg(theme::NEUTRAL_500)));
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::PRIMARY))
-        .title(" Unlock ");
+        .title(title);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 

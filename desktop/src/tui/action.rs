@@ -479,12 +479,13 @@ fn worst_status(a: TargetStatus, b: TargetStatus) -> TargetStatus {
 pub async fn attempt_unlock(
     server_url: String,
     username: Option<String>,
-    mut passphrase: String,
+    mut secret: String,
     webdav_password: Option<String>,
+    recovery: bool,
     tx: mpsc::Sender<Msg>,
 ) {
-    let result = try_unlock(&server_url, username, &passphrase, webdav_password).await;
-    passphrase.zeroize();
+    let result = try_unlock(&server_url, username, &secret, webdav_password, recovery).await;
+    secret.zeroize();
     match result {
         Ok((vault, dav, blocking_dav)) => {
             let _ = tx
@@ -499,21 +500,26 @@ pub async fn attempt_unlock(
             let _ = tx.send(Msg::UnlockFailed(e.to_string())).await;
         }
     }
-    // webdav_password moved into WebDavClient (zeroized on its drop); passphrase zeroized above
+    // webdav_password moved into WebDavClient (zeroized on its drop); secret zeroized above
 }
 
 async fn try_unlock(
     server_url: &str,
     username: Option<String>,
-    passphrase: &str,
+    secret: &str,
     webdav_password: Option<String>,
+    recovery: bool,
 ) -> Result<(Vault, WebDavClient, BlockingWebDav)> {
     let dav = WebDavClient::new(server_url, username.clone(), webdav_password.clone());
     let keys_data = dav
         .get("/keys.json")
         .await?
         .ok_or_else(|| anyhow::anyhow!("no keys.json on server -- run `waystone init` first"))?;
-    let vault = Vault::unlock_with_passphrase(passphrase, &keys_data)?;
+    let vault = if recovery {
+        Vault::unlock_with_recovery(secret, &keys_data)?
+    } else {
+        Vault::unlock_with_passphrase(secret, &keys_data)?
+    };
     let blocking_dav = BlockingWebDav::new(server_url, username, webdav_password);
     Ok((vault, dav, blocking_dav))
 }

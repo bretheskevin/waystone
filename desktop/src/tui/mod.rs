@@ -239,12 +239,21 @@ async fn dispatch_cmd(
         Cmd::AttemptUnlock {
             passphrase,
             webdav_password,
+            recovery,
         } => {
             let server_url = app.server_url.clone();
             let username = app.username.clone();
             let tx = tx.clone();
             tokio::spawn(async move {
-                action::attempt_unlock(server_url, username, passphrase, webdav_password, tx).await;
+                action::attempt_unlock(
+                    server_url,
+                    username,
+                    passphrase,
+                    webdav_password,
+                    recovery,
+                    tx,
+                )
+                .await;
             });
         }
 
