@@ -101,6 +101,62 @@ pub fn read_remote_heads(
     Ok(heads)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryEntry {
+    pub timestamp: String,
+    pub device_id: String,
+    pub hash: String,
+    pub mtime: String,
+}
+
+pub fn list_history(
+    vault: &Vault,
+    save: &NormalizedSave,
+    dav: &dyn WebDav,
+) -> Result<Vec<HistoryEntry>> {
+    let base_path = remote_path(vault, save);
+    let history_path = format!("{}/history", base_path);
+    let hrefs = dav.propfind(&history_path)?;
+
+    let mut entries = Vec::new();
+    for href in hrefs {
+        let filename = href.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+        if filename.is_empty() || !filename.ends_with(".json") {
+            continue;
+        }
+        let stem = filename.trim_end_matches(".json");
+        // ts format "%Y%m%dT%H%M%SZ" has NO '-'; device_id (uuid) may -> split_once('-')
+        let Some((ts, _dev)) = stem.split_once('-') else {
+            continue;
+        };
+
+        // propfind may return full paths (real WebDAV) or just filenames (mocks)
+        let path = if href.contains('/') {
+            href.clone()
+        } else {
+            format!("{}/{}", history_path, filename)
+        };
+        let Some(encrypted) = dav.get(&path)? else {
+            continue;
+        };
+        let Ok(json) = vault.decrypt_heads(&encrypted) else {
+            continue;
+        };
+        let Ok(head) = serde_json::from_slice::<DeviceHead>(&json) else {
+            continue;
+        };
+
+        entries.push(HistoryEntry {
+            timestamp: ts.to_string(),
+            device_id: head.device_id,
+            hash: head.hash,
+            mtime: head.mtime,
+        });
+    }
+    entries.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    Ok(entries)
+}
+
 pub fn fetch_blob(
     vault: &Vault,
     save: &NormalizedSave,

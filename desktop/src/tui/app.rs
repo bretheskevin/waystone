@@ -12,6 +12,7 @@ const MAX_LOG_LINES: usize = 200;
 pub enum Screen {
     Dashboard,
     Conflicts,
+    History,
     Setup,
     Settings,
 }
@@ -47,6 +48,14 @@ pub enum Cmd {
         device_id: String,
     },
     SaveSettings(WaystoneConfig),
+    LoadHistory {
+        target_id: usize,
+    },
+    RestoreHistory {
+        target_id: usize,
+        save_key: String,
+        hash: String,
+    },
 }
 
 impl std::fmt::Debug for Cmd {
@@ -95,6 +104,19 @@ impl std::fmt::Debug for Cmd {
                 .debug_struct("SaveSettings")
                 .field("server_url", &cfg.server_url)
                 .finish(),
+            Self::LoadHistory { target_id } => f
+                .debug_struct("LoadHistory")
+                .field("target_id", target_id)
+                .finish(),
+            Self::RestoreHistory {
+                target_id,
+                save_key,
+                ..
+            } => f
+                .debug_struct("RestoreHistory")
+                .field("target_id", target_id)
+                .field("save_key", save_key)
+                .finish(),
         }
     }
 }
@@ -122,6 +144,17 @@ pub struct ConflictEntry {
     pub remote_hash: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HistoryView {
+    pub target_id: usize,
+    pub save_key: String,
+    pub label: String,
+    pub timestamp: String,
+    pub device_id: String,
+    pub hash: String,
+    pub mtime: String,
+}
+
 pub enum Msg {
     Key(KeyEvent),
     Tick,
@@ -140,6 +173,9 @@ pub enum Msg {
     Conflicts {
         target_id: usize,
         entries: Vec<ConflictEntry>,
+    },
+    History {
+        entries: Vec<HistoryView>,
     },
     UnlockOk {
         vault: Arc<Vault>,
@@ -333,6 +369,9 @@ pub enum PendingCmd {
         save_key: String,
         remote_hash: String,
     },
+    LoadHistory {
+        target_id: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -361,6 +400,8 @@ pub struct App {
     pub safety_backup: bool,
     pub setup: Option<SetupForm>,
     pub settings: Option<SettingsForm>,
+    pub history_entries: Vec<HistoryView>,
+    pub history_selected: usize,
 }
 
 impl App {
@@ -395,6 +436,8 @@ impl App {
                 None
             },
             settings: None,
+            history_entries: Vec::new(),
+            history_selected: 0,
         }
     }
 
@@ -491,6 +534,13 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
             if app.conflicts.is_empty() {
                 app.conflict_sel = 0;
             }
+            vec![]
+        }
+
+        Msg::History { entries } => {
+            app.history_entries = entries;
+            app.history_selected = 0;
+            app.screen = Screen::History;
             vec![]
         }
 
@@ -600,6 +650,7 @@ fn pending_to_cmd(p: PendingCmd) -> Cmd {
             save_key,
             remote_hash,
         },
+        PendingCmd::LoadHistory { target_id } => Cmd::LoadHistory { target_id },
     }
 }
 
@@ -608,6 +659,7 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         Overlay::None => match app.screen {
             Screen::Dashboard => handle_dashboard_key(app, key),
             Screen::Conflicts => handle_conflicts_key(app, key),
+            Screen::History => handle_history_key(app, key),
             Screen::Setup => handle_setup_key(app, key),
             Screen::Settings => handle_settings_key(app, key),
         },
@@ -740,6 +792,17 @@ fn handle_dashboard_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             app.screen = Screen::Settings;
             vec![]
         }
+        KeyCode::Char('h') => {
+            if app.targets.is_empty() {
+                return vec![];
+            }
+            ensure_creds_then(
+                app,
+                PendingCmd::LoadHistory {
+                    target_id: app.selected,
+                },
+            )
+        }
         _ => vec![],
     }
 }
@@ -794,6 +857,49 @@ fn handle_conflicts_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                         remote_hash: entry.remote_hash.clone(),
                     },
                 )
+            } else {
+                vec![]
+            }
+        }
+        _ => vec![],
+    }
+}
+
+fn handle_history_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
+    use crossterm::event::KeyCode;
+
+    if app.busy.is_some() {
+        if key.code == KeyCode::Char('q') {
+            return vec![Cmd::Quit];
+        }
+        return vec![];
+    }
+
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            app.screen = Screen::Dashboard;
+            vec![]
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !app.history_entries.is_empty() {
+                app.history_selected =
+                    (app.history_selected + 1).min(app.history_entries.len() - 1);
+            }
+            vec![]
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.history_selected > 0 {
+                app.history_selected -= 1;
+            }
+            vec![]
+        }
+        KeyCode::Enter => {
+            if let Some(entry) = app.history_entries.get(app.history_selected) {
+                vec![Cmd::RestoreHistory {
+                    target_id: entry.target_id,
+                    save_key: entry.save_key.clone(),
+                    hash: entry.hash.clone(),
+                }]
             } else {
                 vec![]
             }
@@ -1980,5 +2086,108 @@ mod tests {
         let mut app = App::new(&setup_config());
         let cmds = update(&mut app, key(KeyCode::Esc));
         assert!(cmds.iter().any(|c| matches!(c, Cmd::Quit)));
+    }
+
+    // --- History screen tests ---
+    fn make_history_view(target_id: usize, idx: usize) -> HistoryView {
+        HistoryView {
+            target_id,
+            save_key: format!("switch/GAME_{}/main", idx),
+            label: format!("Target {} \u{00b7} Game_{}/main", target_id, idx),
+            timestamp: format!("20260907T14310{}Z", idx),
+            device_id: "dev1".into(),
+            hash: format!("hash_{:064}", idx),
+            mtime: format!("2026-09-07T14:31:0{}Z", idx),
+        }
+    }
+
+    #[test]
+    fn h_key_from_dashboard_emits_load_history() {
+        let mut app = test_app();
+        let (vault, _) = waystone_core::crypto::Vault::init("test").unwrap();
+        let dav = crate::webdav::WebDavClient::new("http://localhost", None, None);
+        app.creds = Some(SessionCreds {
+            vault: Arc::new(vault),
+            dav: Arc::new(dav),
+            blocking_dav: Arc::new(BlockingWebDav::new("http://localhost", None, None)),
+        });
+        let cmds = update(&mut app, key(KeyCode::Char('h')));
+        assert!(
+            cmds.iter()
+                .any(|c| matches!(c, Cmd::LoadHistory { target_id: 0 }))
+        );
+    }
+
+    #[test]
+    fn h_key_without_creds_opens_unlock() {
+        let mut app = test_app();
+        update(&mut app, key(KeyCode::Char('h')));
+        assert!(matches!(app.overlay, Overlay::Unlock { .. }));
+    }
+
+    #[test]
+    fn history_msg_populates_entries_and_switches_screen() {
+        let mut app = test_app();
+        let entries = vec![make_history_view(0, 0), make_history_view(0, 1)];
+        update(
+            &mut app,
+            Msg::History {
+                entries: entries.clone(),
+            },
+        );
+        assert_eq!(app.screen, Screen::History);
+        assert_eq!(app.history_entries.len(), 2);
+        assert_eq!(app.history_selected, 0);
+    }
+
+    #[test]
+    fn history_nav_clamps() {
+        let mut app = test_app();
+        app.screen = Screen::History;
+        app.history_entries = vec![make_history_view(0, 0), make_history_view(0, 1)];
+        update(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.history_selected, 1);
+        update(&mut app, key(KeyCode::Char('j')));
+        assert_eq!(app.history_selected, 1);
+        update(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.history_selected, 0);
+        update(&mut app, key(KeyCode::Char('k')));
+        assert_eq!(app.history_selected, 0);
+    }
+
+    #[test]
+    fn history_esc_returns_to_dashboard() {
+        let mut app = test_app();
+        app.screen = Screen::History;
+        update(&mut app, key(KeyCode::Esc));
+        assert_eq!(app.screen, Screen::Dashboard);
+    }
+
+    #[test]
+    fn history_enter_emits_restore_cmd() {
+        let mut app = test_app();
+        app.screen = Screen::History;
+        let (vault, _) = waystone_core::crypto::Vault::init("test").unwrap();
+        let dav = crate::webdav::WebDavClient::new("http://localhost", None, None);
+        app.creds = Some(SessionCreds {
+            vault: Arc::new(vault),
+            dav: Arc::new(dav),
+            blocking_dav: Arc::new(BlockingWebDav::new("http://localhost", None, None)),
+        });
+        app.history_entries = vec![make_history_view(0, 0)];
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(cmds.iter().any(|c| matches!(
+            c,
+            Cmd::RestoreHistory { target_id: 0, save_key, hash }
+            if save_key == "switch/GAME_0/main" && *hash == format!("hash_{:064}", 0)
+        )));
+    }
+
+    #[test]
+    fn history_empty_msg_stays_on_history_screen() {
+        let mut app = test_app();
+        update(&mut app, Msg::History { entries: vec![] });
+        assert_eq!(app.screen, Screen::History);
+        assert!(app.history_entries.is_empty());
     }
 }

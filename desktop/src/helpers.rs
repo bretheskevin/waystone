@@ -108,6 +108,26 @@ pub fn safety_snapshot(
         .with_context(|| format!("safety backup failed for {group_key}; restore aborted"))
 }
 
+/// Perform a guarded restore: safety-snapshot the destination, fetch the blob,
+/// and restore it to the local save directory. Returns the snapshot path if a
+/// backup was taken.
+#[allow(clippy::too_many_arguments)]
+pub fn guarded_restore(
+    vault: &waystone_core::crypto::Vault,
+    dav: &dyn waystone_sync::WebDav,
+    save: &waystone_core::model::NormalizedSave,
+    hash: &str,
+    dest: &Path,
+    adapter_name: &str,
+    system_name: &str,
+    safety_backup: bool,
+) -> Result<Option<PathBuf>> {
+    let snap = safety_snapshot(dest, &save.group_key, safety_backup)?;
+    let zip_bytes = waystone_sync::fetch_blob(vault, save, hash, dav)?;
+    restore_save_from_blob(&zip_bytes, save, dest, adapter_name, system_name)?;
+    Ok(snap)
+}
+
 /// Unzips `zip_bytes`, converts files to native adapter layout, and writes them under `dest`.
 ///
 /// Creates parent directories as needed. The adapter is constructed internally so no

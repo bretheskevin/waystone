@@ -1,7 +1,7 @@
 use crate::config::{SyncTarget, WaystoneConfig};
 use crate::helpers;
 use crate::tui::app::{
-    ActionResult, ConflictEntry, HeadInfo, Msg, SessionCreds, SetupOk, TargetStatus,
+    ActionResult, ConflictEntry, HeadInfo, HistoryView, Msg, SessionCreds, SetupOk, TargetStatus,
 };
 use crate::webdav::{BlockingWebDav, WebDavClient};
 use anyhow::Result;
@@ -126,14 +126,15 @@ pub async fn pull_target(
             };
 
             if let Some(hash) = pull_hash {
-                helpers::safety_snapshot(&dest, &save.group_key, safety_backup)?;
-                let zip_bytes = waystone_sync::fetch_blob(&vault, save, &hash, dav.as_ref())?;
-                helpers::restore_save_from_blob(
-                    &zip_bytes,
+                helpers::guarded_restore(
+                    &vault,
+                    dav.as_ref(),
                     save,
+                    &hash,
                     &dest,
                     &adapter_name,
                     &system_name,
+                    safety_backup,
                 )?;
                 pulled += 1;
             }
@@ -336,9 +337,16 @@ pub async fn resolve_keep_remote(
     let save_key_owned = save_key.to_string();
 
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        helpers::safety_snapshot(&dest, &save.group_key, safety_backup)?;
-        let zip_bytes = waystone_sync::fetch_blob(&vault, &save, &hash, dav.as_ref())?;
-        helpers::restore_save_from_blob(&zip_bytes, &save, &dest, &adapter_name, &system_name)?;
+        helpers::guarded_restore(
+            &vault,
+            dav.as_ref(),
+            &save,
+            &hash,
+            &dest,
+            &adapter_name,
+            &system_name,
+            safety_backup,
+        )?;
         Ok(())
     })
     .await??;
@@ -347,6 +355,106 @@ pub async fn resolve_keep_remote(
         .send(Msg::ActionDone {
             target_id,
             result: ActionResult::Ok(format!("kept remote for {}", save_key_owned)),
+        })
+        .await;
+
+    Ok(())
+}
+
+pub async fn load_history_target(
+    target: &SyncTarget,
+    creds: &SessionCreds,
+    tx: mpsc::Sender<Msg>,
+    target_id: usize,
+) -> Result<()> {
+    let _ = tx
+        .send(Msg::Progress {
+            target_id,
+            phase: "loading history".into(),
+        })
+        .await;
+
+    let saves: Vec<NormalizedSave> = load_target_saves(target)?;
+
+    let vault = Arc::clone(&creds.vault);
+    let dav = Arc::clone(&creds.blocking_dav);
+    let target_name = target.name.clone();
+
+    let entries = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<HistoryView>> {
+        let mut result: Vec<HistoryView> = Vec::new();
+        for save in &saves {
+            let history = waystone_sync::list_history(&vault, save, dav.as_ref())?;
+            for entry in history {
+                result.push(HistoryView {
+                    target_id,
+                    save_key: save.group_key.clone(),
+                    label: format!(
+                        "{} \u{00b7} {}/{}",
+                        target_name, save.id.game.display_name, save.id.slot
+                    ),
+                    timestamp: entry.timestamp,
+                    device_id: entry.device_id,
+                    hash: entry.hash,
+                    mtime: entry.mtime,
+                });
+            }
+        }
+        Ok(result)
+    })
+    .await??;
+
+    let _ = tx.send(Msg::History { entries }).await;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn restore_history(
+    target: &SyncTarget,
+    save_key: String,
+    hash: String,
+    creds: &SessionCreds,
+    tx: mpsc::Sender<Msg>,
+    target_id: usize,
+    safety_backup: bool,
+) -> Result<()> {
+    let _ = tx
+        .send(Msg::Progress {
+            target_id,
+            phase: format!("restoring {}...", &hash[..12.min(hash.len())]),
+        })
+        .await;
+
+    let saves: Vec<NormalizedSave> = load_target_saves(target)?;
+    let save = saves
+        .iter()
+        .find(|s| s.group_key == save_key)
+        .ok_or_else(|| anyhow::anyhow!("save '{}' not found in target", save_key))?
+        .clone();
+
+    let vault = Arc::clone(&creds.vault);
+    let dav = Arc::clone(&creds.blocking_dav);
+    let dest = target.path.clone();
+    let adapter_name = target.adapter.clone();
+    let system_name = target.system.clone();
+    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        helpers::guarded_restore(
+            &vault,
+            dav.as_ref(),
+            &save,
+            &hash,
+            &dest,
+            &adapter_name,
+            &system_name,
+            safety_backup,
+        )?;
+        Ok(())
+    })
+    .await??;
+
+    let _ = tx
+        .send(Msg::ActionDone {
+            target_id,
+            result: ActionResult::Ok(format!("restored history entry for {}", save_key)),
         })
         .await;
 

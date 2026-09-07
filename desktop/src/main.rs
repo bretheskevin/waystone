@@ -74,6 +74,50 @@ enum Commands {
         #[arg(long)]
         username: Option<String>,
     },
+    /// Browse and restore save history from the server
+    History {
+        #[command(subcommand)]
+        action: HistoryCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum HistoryCommands {
+    /// List history entries for saves under a source path
+    List {
+        /// Path to the save source directory
+        #[arg(long)]
+        source: PathBuf,
+        /// Adapter: jksv | mgba | twilight | checkpoint
+        #[arg(long)]
+        adapter: String,
+        /// System: switch | 3ds | nds | gba | gbc | gb
+        #[arg(long)]
+        system: String,
+        /// WebDAV username override
+        #[arg(long)]
+        username: Option<String>,
+    },
+    /// Restore a specific history version to the local save directory
+    Restore {
+        /// Path to write restored saves
+        #[arg(long)]
+        dest: PathBuf,
+        /// Adapter: jksv | mgba | twilight | checkpoint
+        #[arg(long)]
+        adapter: String,
+        /// System: switch | 3ds | nds | gba | gbc | gb
+        #[arg(long)]
+        system: String,
+        /// WebDAV username override
+        #[arg(long)]
+        username: Option<String>,
+        /// Restrict to a specific game key (required when multiple saves exist)
+        #[arg(long)]
+        game: Option<String>,
+        /// Version selector: timestamp, timestamp prefix, or hash prefix
+        selector: String,
+    },
 }
 
 /// Resolve WebDAV credentials: username from arg > config; password from env > interactive prompt.
@@ -89,6 +133,30 @@ fn resolve_webdav_credentials(
         Ok((Some(u.clone()), password))
     } else {
         Ok((None, None))
+    }
+}
+
+fn resolve_history_selector<'a>(
+    entries: &'a [waystone_sync::HistoryEntry],
+    selector: &str,
+) -> Result<&'a waystone_sync::HistoryEntry> {
+    let matches: Vec<&waystone_sync::HistoryEntry> = entries
+        .iter()
+        .filter(|e| {
+            e.timestamp == selector
+                || e.timestamp.starts_with(selector)
+                || e.hash.starts_with(selector)
+        })
+        .collect();
+
+    match matches.len() {
+        0 => anyhow::bail!("no history entry matches selector '{}'", selector),
+        1 => Ok(matches[0]),
+        n => anyhow::bail!(
+            "ambiguous selector '{}': matches {} entries; be more specific",
+            selector,
+            n
+        ),
     }
 }
 
@@ -127,11 +195,18 @@ fn do_pull_save(
     match pull_hash {
         Some(hash) => {
             println!("Pulling: {} / {}", save.id.game.display_name, save.id.slot);
-            if let Some(p) = helpers::safety_snapshot(dest, &save.group_key, safety_backup)? {
+            if let Some(p) = helpers::guarded_restore(
+                vault,
+                dav,
+                save,
+                &hash,
+                dest,
+                adapter_name,
+                system_name,
+                safety_backup,
+            )? {
                 println!("  safety backup -> {}", p.display());
             }
-            let zip_bytes = waystone_sync::fetch_blob(vault, save, &hash, dav)?;
-            helpers::restore_save_from_blob(&zip_bytes, save, dest, adapter_name, system_name)?;
         }
         None => match decision {
             SyncDecision::InSync => {
@@ -313,5 +388,207 @@ async fn main() -> Result<()> {
             }
             Ok(())
         }
+
+        Commands::History { action } => {
+            let cfg = config::WaystoneConfig::load()?;
+            match action {
+                HistoryCommands::List {
+                    source,
+                    adapter,
+                    system,
+                    username,
+                } => {
+                    let passphrase = rpassword::prompt_password("Passphrase: ")?;
+                    let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
+                    let dav = webdav::WebDavClient::new(
+                        &cfg.server_url,
+                        wdav_user.clone(),
+                        wdav_pass.clone(),
+                    );
+                    let keys_data = dav
+                        .get("/keys.json")
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("no keys.json on server"))?;
+                    let vault = waystone_core::crypto::Vault::unlock_with_passphrase(
+                        &passphrase,
+                        &keys_data,
+                    )?;
+
+                    let system_id = helpers::parse_system(&system)?;
+                    let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
+                    let raw = helpers::read_source_tree(&source)?;
+                    let saves = adapter_obj.normalize(&raw);
+
+                    let blocking_dav =
+                        webdav::BlockingWebDav::new(&cfg.server_url, wdav_user, wdav_pass);
+                    for save in &saves {
+                        println!("{} / {}:", save.id.game.display_name, save.id.slot);
+                        let entries = waystone_sync::list_history(&vault, save, &blocking_dav)?;
+                        if entries.is_empty() {
+                            println!("  (no history yet)");
+                        } else {
+                            for e in &entries {
+                                println!(
+                                    "  {}  {}  {}  mtime={}",
+                                    e.timestamp,
+                                    e.device_id,
+                                    &e.hash[..12.min(e.hash.len())],
+                                    e.mtime
+                                );
+                            }
+                        }
+                        println!();
+                    }
+                    Ok(())
+                }
+                HistoryCommands::Restore {
+                    dest,
+                    adapter,
+                    system,
+                    username,
+                    game,
+                    selector,
+                } => {
+                    let passphrase = rpassword::prompt_password("Passphrase: ")?;
+                    let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
+                    let dav = webdav::WebDavClient::new(
+                        &cfg.server_url,
+                        wdav_user.clone(),
+                        wdav_pass.clone(),
+                    );
+                    let keys_data = dav
+                        .get("/keys.json")
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("no keys.json on server"))?;
+                    let vault = waystone_core::crypto::Vault::unlock_with_passphrase(
+                        &passphrase,
+                        &keys_data,
+                    )?;
+
+                    let system_id = helpers::parse_system(&system)?;
+                    let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
+                    let raw = if dest.exists() {
+                        helpers::read_source_tree(&dest)?
+                    } else {
+                        waystone_core::model::RawTree { files: vec![] }
+                    };
+                    let saves = adapter_obj.normalize(&raw);
+
+                    let save = if saves.len() == 1 {
+                        &saves[0]
+                    } else if let Some(ref game_key) = game {
+                        saves
+                            .iter()
+                            .find(|s| s.id.game.key == *game_key)
+                            .ok_or_else(|| {
+                                let keys: Vec<&str> =
+                                    saves.iter().map(|s| s.id.game.key.as_str()).collect();
+                                anyhow::anyhow!(
+                                    "game key '{}' not found; available: {}",
+                                    game_key,
+                                    keys.join(", ")
+                                )
+                            })?
+                    } else {
+                        let keys: Vec<&str> =
+                            saves.iter().map(|s| s.id.game.key.as_str()).collect();
+                        anyhow::bail!(
+                            "multiple saves found; use --game to select one: {}",
+                            keys.join(", ")
+                        );
+                    };
+
+                    let blocking_dav =
+                        webdav::BlockingWebDav::new(&cfg.server_url, wdav_user, wdav_pass);
+                    let entries = waystone_sync::list_history(&vault, save, &blocking_dav)?;
+                    let entry = resolve_history_selector(&entries, &selector)?;
+
+                    println!(
+                        "Restoring: {} / {} <- version {} ({})",
+                        save.id.game.display_name,
+                        save.id.slot,
+                        entry.timestamp,
+                        &entry.hash[..12.min(entry.hash.len())]
+                    );
+
+                    if let Some(p) = helpers::guarded_restore(
+                        &vault,
+                        &blocking_dav,
+                        save,
+                        &entry.hash,
+                        &dest,
+                        &adapter,
+                        &system,
+                        cfg.safety_backup,
+                    )? {
+                        println!("  safety backup -> {}", p.display());
+                    }
+                    println!("Restore complete.");
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use waystone_sync::HistoryEntry;
+
+    fn make_entries() -> Vec<HistoryEntry> {
+        vec![
+            HistoryEntry {
+                timestamp: "20260907T143100Z".into(),
+                device_id: "dev1".into(),
+                hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".into(),
+                mtime: "2026-09-07T14:31:00Z".into(),
+            },
+            HistoryEntry {
+                timestamp: "20260906T120000Z".into(),
+                device_id: "dev2".into(),
+                hash: "1111111122222222333333334444444455555555666666667777777788888888".into(),
+                mtime: "2026-09-06T12:00:00Z".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn resolve_history_selector_exact_timestamp() {
+        let entries = make_entries();
+        let result = resolve_history_selector(&entries, "20260907T143100Z").unwrap();
+        assert_eq!(result.timestamp, "20260907T143100Z");
+    }
+
+    #[test]
+    fn resolve_history_selector_timestamp_prefix() {
+        let entries = make_entries();
+        let result = resolve_history_selector(&entries, "20260907").unwrap();
+        assert_eq!(result.timestamp, "20260907T143100Z");
+    }
+
+    #[test]
+    fn resolve_history_selector_hash_prefix() {
+        let entries = make_entries();
+        let result = resolve_history_selector(&entries, "abcdef").unwrap();
+        assert_eq!(result.device_id, "dev1");
+    }
+
+    #[test]
+    fn resolve_history_selector_no_match() {
+        let entries = make_entries();
+        let result = resolve_history_selector(&entries, "zzzzzzz");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("no history entry matches"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_history_selector_ambiguous() {
+        let entries = make_entries();
+        let result = resolve_history_selector(&entries, "2026090");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("ambiguous"), "got: {err}");
     }
 }

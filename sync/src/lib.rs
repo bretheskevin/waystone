@@ -54,5 +54,6 @@ pub trait WebDav {
 }
 
 pub use orchestration::{
-    PullOutcome, PushOutcome, fetch_blob, pull_one, push_one, read_remote_heads,
+    HistoryEntry, PullOutcome, PushOutcome, fetch_blob, list_history, pull_one, push_one,
+    read_remote_heads,
 };

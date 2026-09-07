@@ -12,6 +12,7 @@ pub fn ui(frame: &mut Frame, app: &App) {
     match app.screen {
         Screen::Dashboard => render_dashboard(frame, app),
         Screen::Conflicts => render_conflicts_screen(frame, app),
+        Screen::History => render_history_screen(frame, app),
         Screen::Setup => render_setup(frame, app),
         Screen::Settings => render_settings(frame, app),
     }
@@ -160,6 +161,116 @@ fn render_conflicts_screen(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(footer), chunks[2]);
 }
 
+fn render_history_screen(frame: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(5),
+            Constraint::Length(3),
+        ])
+        .split(frame.area());
+
+    let spinner = if app.busy.is_some() {
+        SPINNER_FRAMES[app.spinner as usize % SPINNER_FRAMES.len()]
+    } else {
+        ' '
+    };
+    let header_line = Line::from(vec![
+        Span::styled(
+            " waystone ",
+            Style::default()
+                .fg(theme::PRIMARY)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "History",
+            Style::default()
+                .fg(theme::SYNC)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(format!(
+            " | {} version(s) {} ",
+            app.history_entries.len(),
+            spinner,
+        )),
+    ]);
+    frame.render_widget(Paragraph::new(header_line), chunks[0]);
+
+    if app.history_entries.is_empty() {
+        let empty = Paragraph::new(Line::raw("  No history yet")).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::NEUTRAL_700))
+                .title(" History "),
+        );
+        frame.render_widget(empty, chunks[1]);
+    } else {
+        let items: Vec<ListItem> = app
+            .history_entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let is_selected = i == app.history_selected;
+                let detail = if is_selected {
+                    let hash_short = &entry.hash[..12.min(entry.hash.len())];
+                    vec![
+                        Line::from(vec![Span::styled(
+                            &entry.label,
+                            Style::default().fg(theme::NEUTRAL_50),
+                        )]),
+                        Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(hash_short, Style::default().fg(theme::SYNC)),
+                            Span::raw(format!(
+                                "  {}  {}  mtime={}",
+                                entry.timestamp, entry.device_id, entry.mtime
+                            )),
+                        ]),
+                    ]
+                } else {
+                    vec![Line::from(vec![Span::styled(
+                        &entry.label,
+                        Style::default().fg(theme::NEUTRAL_300),
+                    )])]
+                };
+                ListItem::new(detail)
+            })
+            .collect();
+
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(theme::SYNC))
+                    .title(" History "),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(theme::PRIMARY_800)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("> ");
+
+        let mut state = ratatui::widgets::ListState::default();
+        state.select(Some(app.history_selected));
+        frame.render_stateful_widget(list, chunks[1], &mut state);
+    }
+
+    let footer = Line::from(vec![
+        Span::styled(
+            " [\u{2191}\u{2193}] ",
+            Style::default().fg(theme::NEUTRAL_50),
+        ),
+        Span::styled("select", Style::default().fg(theme::NEUTRAL_400)),
+        Span::styled(" [enter] ", Style::default().fg(theme::NEUTRAL_50)),
+        Span::styled("restore", Style::default().fg(theme::SYNC)),
+        Span::styled(" [esc] ", Style::default().fg(theme::NEUTRAL_50)),
+        Span::styled("back", Style::default().fg(theme::NEUTRAL_400)),
+    ]);
+    frame.render_widget(Paragraph::new(footer), chunks[2]);
+}
+
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     let spinner = if app.busy.is_some() {
         SPINNER_FRAMES[app.spinner as usize % SPINNER_FRAMES.len()]
@@ -262,7 +373,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 }
 
 fn render_help_overlay(frame: &mut Frame) {
-    let area = centered_rect(50, 16, frame.area());
+    let area = centered_rect(50, 17, frame.area());
     frame.render_widget(Clear, area);
     let text = vec![
         Line::styled(
@@ -277,6 +388,7 @@ fn render_help_overlay(frame: &mut Frame) {
         Line::raw("P              Pull selected"),
         Line::raw("r              Refresh status"),
         Line::raw("C              Conflicts inbox"),
+        Line::raw("h              History"),
         Line::raw("S              Settings"),
         Line::raw("a              Add target"),
         Line::raw("e              Edit target"),

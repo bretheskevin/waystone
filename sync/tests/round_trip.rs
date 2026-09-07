@@ -228,3 +228,49 @@ fn conflict_needs_input_when_both_devices_diverged() {
     );
     assert!(outcome.files.is_none(), "no files when conflict unresolved");
 }
+
+#[test]
+fn list_history_after_push() {
+    let (vault, _) = Vault::init("test-pass").unwrap();
+    let dav = InMemoryDav::new();
+
+    // Use distinct device_ids so the history filenames ({ts}-{device_id}.json) differ
+    // even when both pushes land within the same clock-second.
+    let save_v1 = make_test_save(b"content-v1", "2026-01-01T00:00:00Z");
+    waystone_sync::push_one(&vault, &save_v1, "dev1", &dav).unwrap();
+
+    let save_v2 = make_test_save(b"content-v2", "2026-01-02T00:00:00Z");
+    waystone_sync::push_one(&vault, &save_v2, "dev2", &dav).unwrap();
+
+    let entries = waystone_sync::list_history(&vault, &save_v1, &dav).unwrap();
+    assert_eq!(
+        entries.len(),
+        2,
+        "two pushes should create two history entries"
+    );
+    assert!(
+        entries[0].timestamp >= entries[1].timestamp,
+        "entries should be sorted newest-first: {} vs {}",
+        entries[0].timestamp,
+        entries[1].timestamp
+    );
+    let dev_ids: Vec<&str> = entries.iter().map(|e| e.device_id.as_str()).collect();
+    assert!(dev_ids.contains(&"dev1"), "dev1 should appear in history");
+    assert!(dev_ids.contains(&"dev2"), "dev2 should appear in history");
+    assert_ne!(
+        entries[0].hash, entries[1].hash,
+        "different content means different hashes"
+    );
+    assert!(entries[0].timestamp.contains('T'));
+    assert!(entries[0].timestamp.ends_with('Z'));
+}
+
+#[test]
+fn list_history_empty_when_no_push() {
+    let (vault, _) = Vault::init("test-pass").unwrap();
+    let dav = InMemoryDav::new();
+    let save = make_test_save(b"content", "2026-01-01T00:00:00Z");
+
+    let entries = waystone_sync::list_history(&vault, &save, &dav).unwrap();
+    assert!(entries.is_empty(), "no push means no history");
+}

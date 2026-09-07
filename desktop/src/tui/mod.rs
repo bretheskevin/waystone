@@ -328,6 +328,73 @@ async fn dispatch_cmd(
             }
         }
 
+        Cmd::LoadHistory { target_id } => {
+            if let (Some(creds), Some(target)) = (&app.creds, app.targets.get(target_id).cloned()) {
+                let vault = creds.vault.clone();
+                let dav = creds.dav.clone();
+                let blocking_dav = creds.blocking_dav.clone();
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let creds = app::SessionCreds {
+                        vault,
+                        dav,
+                        blocking_dav,
+                    };
+                    if let Err(e) =
+                        action::load_history_target(&target, &creds, tx.clone(), target_id).await
+                    {
+                        let _ = tx
+                            .send(Msg::ActionDone {
+                                target_id,
+                                result: app::ActionResult::Err(e.to_string()),
+                            })
+                            .await;
+                    }
+                });
+            }
+        }
+
+        Cmd::RestoreHistory {
+            target_id,
+            save_key,
+            hash,
+        } => {
+            if let (Some(creds), Some(target)) = (&app.creds, app.targets.get(target_id).cloned()) {
+                app.busy = Some(target_id);
+                let vault = creds.vault.clone();
+                let dav = creds.dav.clone();
+                let blocking_dav = creds.blocking_dav.clone();
+                let safety_backup = config.safety_backup;
+                let tx_action = tx.clone();
+                let handle = tokio::spawn(async move {
+                    let creds = app::SessionCreds {
+                        vault,
+                        dav,
+                        blocking_dav,
+                    };
+                    if let Err(e) = action::restore_history(
+                        &target,
+                        save_key,
+                        hash,
+                        &creds,
+                        tx_action.clone(),
+                        target_id,
+                        safety_backup,
+                    )
+                    .await
+                    {
+                        let _ = tx_action
+                            .send(Msg::ActionDone {
+                                target_id,
+                                result: app::ActionResult::Err(e.to_string()),
+                            })
+                            .await;
+                    }
+                });
+                watch_busy_task(handle, tx.clone(), target_id);
+            }
+        }
+
         Cmd::RunSetup {
             server_url,
             username,
