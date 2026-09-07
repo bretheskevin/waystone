@@ -1,4 +1,5 @@
 #include <3ds.h>
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <sys/types.h>  /* ssize_t */
@@ -20,10 +21,14 @@ void nx_getrandom(uint8_t *buf, size_t len) {
  * Signature matches libc::getrandom as declared in
  * libc/src/unix/newlib/horizon/mod.rs:
  *   pub fn getrandom(buf: *mut c_void, buflen: size_t, flags: c_uint) -> ssize_t
- * flags are ignored (no /dev/random pool distinction on 3DS). */
+ * flags are ignored (no /dev/random pool distinction on 3DS).
+ * On PS failure sets errno = EIO (deterministic, non-EINTR) so getrandom()
+ * reports a clean error without triggering sys_fill_exact's EINTR retry loop. */
 ssize_t getrandom(void *buf, size_t buflen, unsigned int flags) {
     (void)flags;
-    if (ctr_fill_random(buf, buflen) != 0)
+    if (ctr_fill_random(buf, buflen) != 0) {
+        errno = EIO;            /* deterministic, non-EINTR: getrandom() returns Err, no retry loop */
         return (ssize_t)-1;
+    }
     return (ssize_t)buflen;
 }
