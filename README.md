@@ -20,10 +20,10 @@ v1 adapters: **jksv** (Switch/3DS native) and **mgba** (GBA/GBC/GB battery saves
 
 | Milestone | Scope | Status |
 |---|---|---|
-| **M1** | `core` library + `desktop` CLI + `dufs` backend | In progress |
-| **M2** | Switch shell (C++/libnx + borealis) | Planned |
-| **M3** | Android shell (Kotlin/Compose, core via UniFFI) | Planned |
-| **M4** | 3DS shell (C++/libctru + citro2d) | Planned |
+| **M1** | `core` library + `desktop` CLI/TUI + `dufs` backend | Done |
+| **M2** | Switch shell (C++/libnx + borealis) | Two-way engine + borealis GUI vertical slice — host-verified (compile+link); not yet run on hardware |
+| **M3** | Android shell (Kotlin/Compose, core via UniFFI) | UniFFI binding foundation (`sync/` + `mobile/` crates) — host-verified; Kotlin/Compose app not yet built |
+| **M4** | 3DS shell (C++/libctru + citro2d) | Not started |
 
 M1 is buildable and testable on any desktop (no console hardware needed).
 
@@ -55,6 +55,18 @@ cargo run -p waystone-desktop -- push --source ~/JKSV --adapter jksv --system sw
 # Pull saves on another device
 cargo run -p waystone-desktop -- pull --dest ~/JKSV-restore --adapter jksv --system switch
 ```
+
+## Crates
+
+Cargo workspace members: `core`, `desktop`, `ffi`, `sync`, `mobile`.
+
+| Crate | Purpose |
+|---|---|
+| `core` | Pure Rust, no_std — model, crypto, packaging, conflict |
+| `ffi` | C ABI wrapper (cbindgen) for Switch/3DS shells |
+| `sync` | Shared sync orchestration (WebDav trait + push/pull) — used by desktop and mobile |
+| `mobile` | UniFFI 0.32 Kotlin binding layer (Android) |
+| `desktop` | CLI/TUI shell (reqwest + ratatui) |
 
 ## Architecture
 

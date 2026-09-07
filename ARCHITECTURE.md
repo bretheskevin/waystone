@@ -44,11 +44,11 @@
                      ▲          ▲          ▲          ▲
    native shells own ALL I/O + networking + UI + extraction:
    ┌──────────────┐ ┌──────────┐ ┌────────────┐ ┌─────────────┐
-   │ switch/      │ │ 3ds/     │ │ android/   │ │ desktop/    │
+   │ switch/      │ │ 3ds/     │ │ mobile/    │ │ desktop/    │
    │ C++/libnx    │ │ C++/     │ │ Kotlin +   │ │ Rust CLI/TUI│
-   │ calls ffi/   │ │ libctru  │ │ Compose,   │ │ (uses core  │
-   │ via waystone │ │ calls    │ │ SAF+OkHttp │ │  directly,  │
-   │ .h C ABI     │ │ ffi/ too │ │ →core via  │ │  no FFI)    │
+   │ calls ffi/   │ │ libctru  │ │ Compose,   │ │ (via sync/  │
+   │ via waystone │ │ calls    │ │ SAF+OkHttp │ │  crate; no  │
+   │ .h C ABI     │ │ ffi/ too │ │ →core via  │ │  C FFI)     │
    │              │ │          │ │ UniFFI     │ │             │
    └──────────────┘ └──────────┘ └────────────┘ └─────────────┘
                      │ WiFi / HTTPS
@@ -73,6 +73,26 @@ strings for structured data, `{ptr,len}` byte buffers for binary, and an opaque
 `WsVault*` handle. A cbindgen-generated header (`ffi/include/waystone.h`) is
 committed and tested for freshness. The Switch and 3DS C++ shells link against
 this staticlib.
+
+**Sync crate (`sync/`):** `waystone-sync` is the shared, I/O-free sync
+orchestration layer consumed by **both** `desktop` and `mobile` (single source
+of truth — DRY). It defines a synchronous `WebDav` trait
+(`get`/`put`/`exists`/`propfind`/`mkdir_p`) and provides the top-level
+orchestration functions (`push_one`, `pull_one`, `read_remote_heads`,
+`fetch_blob`) on top of `core`'s crypto/packaging/conflict logic. `desktop`
+implements this trait via `BlockingWebDav` (reqwest blocking); async callers
+wrap it in `tokio::task::spawn_blocking`. Tested with an in-memory mock
+(5 round-trip and conflict tests).
+
+**Mobile crate (`mobile/`):** `waystone-mobile` is the Android UniFFI 0.32
+(proc-macro) binding foundation. It exposes a vertical slice to Kotlin: a
+`Vault` object, records, a `SyncDecision` enum, `WaystoneError`, a foreign
+`WebDav` trait (Kotlin implements it via OkHttp, bridged to
+`waystone_sync::WebDav` by a `WebDavBridge` newtype), and free functions
+`jksv_normalize`/`push_one`/`pull_one`. Committed generated Kotlin bindings are
+kept honest by an up-to-date freshness test. **Host-verified (compile+link
+only)** — the Kotlin/Compose app and SAF/OkHttp implementations are not yet
+built (require Android SDK/NDK).
 
 ---
 
@@ -275,8 +295,19 @@ source consumed/ported by each shell.
   `design/tokens.json`.
 
 **M2 — Switch shell** (C++/libnx + borealis; save-mount extraction; core via C ABI).
+**Done (host-verified):** two-way sync engine (push + pull + verified HTTPS/TLS)
+is complete; a borealis GUI vertical slice (title list + live sync, deko3d
+backend) compiles and links with romfs embedded. **Not yet run on hardware**
+(UI unverifiable without a display; save-mount requires administrator permissions
+at runtime on real hardware).
+
 **M3 — Android shell** (Kotlin/Compose; core via UniFFI; SAF + OkHttp).
-**M4 — 3DS shell** (C++/libctru + citro2d; core via C ABI).
+**UniFFI binding foundation done (host-verified):** `waystone-sync` and
+`waystone-mobile` crates landed; Kotlin bindings generated and kept current by a
+freshness test. Kotlin/Compose app, SAF storage, and OkHttp `WebDav`
+implementation **not yet built** (require Android SDK/NDK).
+
+**M4 — 3DS shell** (C++/libctru + citro2d; core via C ABI). Not started.
 
 Every shell targets the same server format + golden vectors, so they interoperate
 the moment they land.
