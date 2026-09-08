@@ -4,7 +4,7 @@ use crate::tui::app::{
     ActionResult, ConflictEntry, HeadInfo, HistoryView, Msg, SessionCreds, SetupOk, SnapshotView,
     TargetStatus,
 };
-use crate::webdav::{BlockingWebDav, WebDavClient};
+use crate::webdav::{BlockingWebDav, WebDavClient, make_blocking_dav};
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -520,11 +520,7 @@ async fn try_unlock(
     } else {
         Vault::unlock_with_passphrase(secret, &keys_data)?
     };
-    let server_url_owned = server_url.to_owned();
-    let blocking_dav = tokio::task::spawn_blocking(move || {
-        BlockingWebDav::new(&server_url_owned, username, webdav_password)
-    })
-    .await?;
+    let blocking_dav = make_blocking_dav(server_url, username, webdav_password).await?;
     Ok((vault, dav, blocking_dav))
 }
 
@@ -586,10 +582,7 @@ async fn try_setup(
     dav.mkdir_p("/").await?;
     dav.put("/keys.json", keys_json).await?;
 
-    let server_url_owned = server_url.to_owned();
-    let blocking_dav =
-        tokio::task::spawn_blocking(move || BlockingWebDav::new(&server_url_owned, user, pass))
-            .await?;
+    let blocking_dav = make_blocking_dav(server_url, user, pass).await?;
     Ok((vault, dav, blocking_dav, recovery_key))
 }
 

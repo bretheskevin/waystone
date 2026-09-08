@@ -387,11 +387,8 @@ async fn main() -> Result<()> {
             };
             let local_saves = adapter_obj.normalize(&raw);
 
-            let server_url_owned = cfg.server_url.clone();
-            let blocking_dav = tokio::task::spawn_blocking(move || {
-                webdav::BlockingWebDav::new(&server_url_owned, wdav_user, wdav_pass)
-            })
-            .await?;
+            let blocking_dav =
+                webdav::make_blocking_dav(&cfg.server_url, wdav_user, wdav_pass).await?;
             let device_id = cfg.device_id.clone();
             let policy = cfg.conflict_policy;
             let safety_backup = cfg.safety_backup;
@@ -482,11 +479,8 @@ async fn main() -> Result<()> {
                     let raw = helpers::read_source_tree(&source)?;
                     let saves = adapter_obj.normalize(&raw);
 
-                    let server_url_owned = cfg.server_url.clone();
-                    let blocking_dav = tokio::task::spawn_blocking(move || {
-                        webdav::BlockingWebDav::new(&server_url_owned, wdav_user, wdav_pass)
-                    })
-                    .await?;
+                    let blocking_dav =
+                        webdav::make_blocking_dav(&cfg.server_url, wdav_user, wdav_pass).await?;
                     for save in &saves {
                         println!("{} / {}:", save.id.game.display_name, save.id.slot);
                         let entries = waystone_sync::list_history(&vault, save, &blocking_dav)?;
@@ -564,11 +558,8 @@ async fn main() -> Result<()> {
                         );
                     };
 
-                    let server_url_owned = cfg.server_url.clone();
-                    let blocking_dav = tokio::task::spawn_blocking(move || {
-                        webdav::BlockingWebDav::new(&server_url_owned, wdav_user, wdav_pass)
-                    })
-                    .await?;
+                    let blocking_dav =
+                        webdav::make_blocking_dav(&cfg.server_url, wdav_user, wdav_pass).await?;
                     let entries = waystone_sync::list_history(&vault, save, &blocking_dav)?;
                     let entry = resolve_history_selector(&entries, &selector)?;
 

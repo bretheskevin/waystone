@@ -211,6 +211,23 @@ impl BlockingWebDav {
     }
 }
 
+/// Constructs a [] from within an async context.
+///
+/// [] must not be built on a tokio worker thread directly
+/// (it creates/drops an inner runtime, causing a panic). This helper offloads
+/// construction to a blocking thread via [].
+pub(crate) async fn make_blocking_dav(
+    url: &str,
+    username: Option<String>,
+    password: Option<String>,
+) -> anyhow::Result<BlockingWebDav> {
+    let url_owned = url.to_owned();
+    Ok(
+        tokio::task::spawn_blocking(move || BlockingWebDav::new(&url_owned, username, password))
+            .await?,
+    )
+}
+
 impl Drop for BlockingWebDav {
     fn drop(&mut self) {
         self.password.zeroize();
@@ -383,5 +400,19 @@ mod tests {
     fn blocking_webdav_implements_sync_trait() {
         let dav = BlockingWebDav::new("http://localhost:5099", None, None);
         let _trait_obj: &dyn waystone_sync::WebDav = &dav;
+    }
+
+    /// Regression test: BlockingWebDav must be constructed via spawn_blocking when called
+    /// from within a tokio async context. reqwest::blocking::Client creates/drops an inner
+    /// runtime internally, which panics if done on a tokio worker thread.
+    /// The existing blocking_webdav_implements_sync_trait test runs in a plain #[test]
+    /// (no runtime), which is why it never caught this.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn blocking_webdav_constructed_via_spawn_blocking_does_not_panic() {
+        // Exercises make_blocking_dav, the canonical async-safe constructor.
+        let dav = super::make_blocking_dav("http://localhost:5099", None, None)
+            .await
+            .expect("make_blocking_dav failed");
+        let _: &dyn waystone_sync::WebDav = &dav;
     }
 }
