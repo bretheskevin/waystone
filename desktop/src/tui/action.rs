@@ -16,14 +16,10 @@ use zeroize::Zeroize;
 
 /// Builds the normalized save list for `target` synchronously.
 ///
-/// `Box<dyn Adapter>` is `!Send`. The adapter is created and dropped inside
-/// this function so the returned `Vec<NormalizedSave>` is `Send` and callers
-/// can hold it across `.await` points without triggering a `!Send` error.
+/// Delegates to [`helpers::load_saves`], which keeps the `!Send` adapter
+/// confined so the returned `Vec<NormalizedSave>` is `Send`.
 pub(crate) fn load_target_saves(target: &SyncTarget) -> anyhow::Result<Vec<NormalizedSave>> {
-    let system = helpers::parse_system(&target.system)?;
-    let adapter = helpers::make_adapter(&target.adapter, system)?;
-    let raw = helpers::read_source_tree(&target.path)?;
-    Ok(adapter.normalize(&raw))
+    helpers::load_saves(&target.adapter, &target.system, &target.path)
 }
 
 pub async fn push_target(

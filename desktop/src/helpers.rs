@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 use waystone_core::adapters::Adapter;
-use waystone_core::model::{RawFile, RawTree, SystemId};
+use waystone_core::model::{NormalizedSave, RawFile, RawTree, SystemId};
 
 pub fn parse_system(s: &str) -> Result<SystemId> {
     match s {
@@ -42,6 +42,22 @@ pub fn read_source_tree(path: &Path) -> Result<RawTree> {
         files.push(RawFile { path: rel, content });
     }
     Ok(RawTree { files })
+}
+
+/// Load and normalize saves from `source` using the given adapter and system.
+///
+/// The `Box<dyn Adapter>` is created and dropped inside this function so the
+/// returned `Vec<NormalizedSave>` is `Send`. A missing or empty `source`
+/// directory normalizes to zero saves, not an error.
+pub fn load_saves(
+    adapter_name: &str,
+    system_name: &str,
+    source: &Path,
+) -> Result<Vec<NormalizedSave>> {
+    let system = parse_system(system_name)?;
+    let adapter = make_adapter(adapter_name, system)?;
+    let raw = read_source_tree(source)?;
+    Ok(adapter.normalize(&raw))
 }
 
 pub fn walkdir(dir: &Path) -> Result<Vec<PathBuf>> {
@@ -289,6 +305,31 @@ mod tests {
             mtime: "2026-01-01T00:00:00Z".into(),
             files: vec![("save.dat".into(), b"original-content".to_vec())],
         }
+    }
+
+    #[test]
+    fn load_saves_on_missing_path_returns_empty() {
+        let saves = load_saves(
+            "jksv",
+            "switch",
+            Path::new("/nonexistent_xyz_load_saves_99"),
+        )
+        .unwrap();
+        assert!(saves.is_empty());
+    }
+
+    #[test]
+    fn load_saves_unknown_adapter_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = load_saves("bogus_adapter", "switch", tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("unknown adapter"), "got: {err}");
+    }
+
+    #[test]
+    fn load_saves_unknown_system_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = load_saves("jksv", "bogus_system", tmp.path()).unwrap_err();
+        assert!(err.to_string().contains("unknown system"), "got: {err}");
     }
 
     #[test]

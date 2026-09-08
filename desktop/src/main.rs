@@ -353,8 +353,6 @@ async fn main() -> Result<()> {
             username,
         } => {
             let cfg = config::WaystoneConfig::load()?;
-            let system = helpers::parse_system(&system)?;
-            let adapter = helpers::make_adapter(&adapter, system)?;
 
             let passphrase = rpassword::prompt_password("Passphrase: ")?;
             let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
@@ -366,22 +364,20 @@ async fn main() -> Result<()> {
             let vault =
                 waystone_core::crypto::Vault::unlock_with_passphrase(&passphrase, &keys_data)?;
 
-            let raw = helpers::read_source_tree(&source)?;
-            let saves = adapter.normalize(&raw);
-            let count = saves.len();
-
             let vault_arc = std::sync::Arc::new(vault);
             let device_id = cfg.device_id.clone();
             let server_url_owned = cfg.server_url.clone();
 
-            tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let count = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
                 let blocking_dav =
                     webdav::BlockingWebDav::new(&server_url_owned, wdav_user, wdav_pass);
+                let saves = helpers::load_saves(&adapter, &system, &source)?;
+                let count = saves.len();
                 for save in &saves {
                     println!("Pushing: {} / {}", save.id.game.display_name, save.id.slot);
                     waystone_sync::push_one(&vault_arc, save, &device_id, &blocking_dav)?;
                 }
-                Ok(())
+                Ok(count)
             })
             .await??;
 
@@ -416,15 +412,7 @@ async fn main() -> Result<()> {
             let safety_backup = cfg.safety_backup;
 
             tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                let system_id = helpers::parse_system(&system)?;
-                let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
-                let raw = if dest.exists() {
-                    helpers::read_source_tree(&dest)?
-                } else {
-                    waystone_core::model::RawTree { files: vec![] }
-                };
-                let local_saves = adapter_obj.normalize(&raw);
-                drop(adapter_obj);
+                let local_saves = helpers::load_saves(&adapter, &system, &dest)?;
                 for save in &local_saves {
                     do_pull_save(
                         &vault_arc,
@@ -463,11 +451,7 @@ async fn main() -> Result<()> {
             let server_url = cfg.server_url.clone();
 
             tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                let system_id = helpers::parse_system(&system)?;
-                let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
-                let raw = helpers::read_source_tree(&source)?;
-                let saves = adapter_obj.normalize(&raw);
-                drop(adapter_obj);
+                let saves = helpers::load_saves(&adapter, &system, &source)?;
 
                 println!("Device: {}", device_id);
                 println!("Server: {}", server_url);
@@ -522,11 +506,7 @@ async fn main() -> Result<()> {
                         webdav::make_blocking_dav(&cfg.server_url, wdav_user, wdav_pass).await?;
 
                     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                        let system_id = helpers::parse_system(&system)?;
-                        let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
-                        let raw = helpers::read_source_tree(&source)?;
-                        let saves = adapter_obj.normalize(&raw);
-                        drop(adapter_obj);
+                        let saves = helpers::load_saves(&adapter, &system, &source)?;
 
                         for save in &saves {
                             println!("{} / {}:", save.id.game.display_name, save.id.slot);
@@ -582,15 +562,7 @@ async fn main() -> Result<()> {
                     let safety_backup = cfg.safety_backup;
 
                     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                        let system_id = helpers::parse_system(&system)?;
-                        let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
-                        let raw = if dest.exists() {
-                            helpers::read_source_tree(&dest)?
-                        } else {
-                            waystone_core::model::RawTree { files: vec![] }
-                        };
-                        let saves = adapter_obj.normalize(&raw);
-                        drop(adapter_obj);
+                        let saves = helpers::load_saves(&adapter, &system, &dest)?;
 
                         let save = resolve_save_by_game(&saves, game.as_deref())?;
 
@@ -634,11 +606,7 @@ async fn main() -> Result<()> {
                     system,
                 } => {
                     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                        let system_id = helpers::parse_system(&system)?;
-                        let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
-                        let raw = helpers::read_source_tree(&source)?;
-                        let saves = adapter_obj.normalize(&raw);
-                        drop(adapter_obj);
+                        let saves = helpers::load_saves(&adapter, &system, &source)?;
                         for save in &saves {
                             println!("{} / {}:", save.id.game.display_name, save.id.slot);
                             let entries = helpers::list_snapshots(&save.group_key)?;
@@ -670,15 +638,7 @@ async fn main() -> Result<()> {
                 } => {
                     let safety_backup = cfg.safety_backup;
                     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                        let system_id = helpers::parse_system(&system)?;
-                        let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
-                        let raw = if dest.exists() {
-                            helpers::read_source_tree(&dest)?
-                        } else {
-                            waystone_core::model::RawTree { files: vec![] }
-                        };
-                        let saves = adapter_obj.normalize(&raw);
-                        drop(adapter_obj);
+                        let saves = helpers::load_saves(&adapter, &system, &dest)?;
                         if saves.is_empty() {
                             anyhow::bail!(
                                 "no saves found at destination '{}'; nothing to restore",
