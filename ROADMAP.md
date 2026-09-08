@@ -218,8 +218,13 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   --romfs`, `romfsInit`/`romfsExit` in `main.cpp`; `3dsxtool` needs `--smdh` alongside `--romfs`). CA
   bundle bytes confirmed embedded in the `.3dsx`. **Compile+link verified; not yet run on hardware
   (clock must be correct for cert date validation).** Remaining for M4: the citro2d GUI and a first
-  on-hardware run. _Follow-up (DRY):_ `3ds/source/net.cpp` and `switch/source/net.cpp` are now
-  near-identical (~170 lines, differing only in a `sys/select.h` include) — extract to `shell-common/`.
+  on-hardware run.
+- **Shared WebDAV net layer (DRY)**: the duplicate libcurl WebDAV client (`net.h`/`net.cpp`, incl. the
+  shared `curl_apply_tls`) was extracted from both console shells into a single **`shell-common/net.{h,cpp}`**
+  consumed by both via the existing `../shell-common` Makefile glob (no Makefile change needed — `net.o`
+  basename already in the Switch `OUR_ENGINE_OBJS`). Zero logic change; all three builds green (Switch GUI +
+  `CONSOLE=1`, 3DS). The shared file keeps `#include <sys/select.h>` — required by devkitARM's `curl/multi.h`
+  (`fd_set`), harmless on devkitA64.
 
 All shells share one design system (`design/tokens.json`), rendered natively per
 platform — premium and platform-appropriate, not a forced single skin.
