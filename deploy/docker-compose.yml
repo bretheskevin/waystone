@@ -9,8 +9,10 @@ services:
       - waystone-data:/data
     ports:
       - "${WAYSTONE_PORT:-5005}:5000"
-    environment:
-      - DUFS_AUTH=${WAYSTONE_AUTH:-}
+    # NOTE: local quick-start runs anonymous (--allow-all). Do NOT set an empty
+    # DUFS_AUTH — dufs treats an empty-but-present auth value as "auth required,
+    # no valid users" and returns 401 to everyone. For a real (production)
+    # deployment, enable auth explicitly and drop --allow-all (see README).
     healthcheck:
       test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:5000/ || exit 1"]
       interval: 30s
