@@ -209,7 +209,17 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   `any(feature = "switch", feature = "3ds")`) and `json`/`jsmn`/`base64` extracted to a shared
   `shell-common/` consumed by both console shells; the Switch build stayed green throughout.
   Cross-compiles to `armv6k-nintendo-3ds` into a `.3dsx` (with a 3DS `getrandom` shim over
-  `PS_GenerateRandomBytes`). Remaining: TLS/HTTPS, the citro2d GUI, and a first on-hardware run.
+  `PS_GenerateRandomBytes`).
+- **3DS verified HTTPS/TLS (compile+link)**: the 3DS WebDAV client now uses verified HTTPS, mirroring
+  the Switch TLS slice exactly — `curl_apply_tls` (`SSL_VERIFYPEER=1`, `SSL_VERIFYHOST=2`,
+  `CAINFO=romfs:/cacert.pem`) on every handle. The 3DS `3ds-curl` port is built against `3ds-mbedtls`,
+  so the Mozilla CA bundle (reused byte-for-byte from `switch/romfs/cacert.pem`) is read directly from
+  romfs — no system-store augmentation. Added romfs to the 3DS build (`ROMFS := romfs`, `_3DSXFLAGS
+  --romfs`, `romfsInit`/`romfsExit` in `main.cpp`; `3dsxtool` needs `--smdh` alongside `--romfs`). CA
+  bundle bytes confirmed embedded in the `.3dsx`. **Compile+link verified; not yet run on hardware
+  (clock must be correct for cert date validation).** Remaining for M4: the citro2d GUI and a first
+  on-hardware run. _Follow-up (DRY):_ `3ds/source/net.cpp` and `switch/source/net.cpp` are now
+  near-identical (~170 lines, differing only in a `sys/select.h` include) — extract to `shell-common/`.
 
 All shells share one design system (`design/tokens.json`), rendered natively per
 platform — premium and platform-appropriate, not a forced single skin.

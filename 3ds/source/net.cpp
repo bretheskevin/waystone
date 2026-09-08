@@ -27,7 +27,14 @@ static size_t read_cb(char* dest, size_t size, size_t nmemb, void* userdata) {
 
 // ---- Helpers ----
 
+static void curl_apply_tls(CURL* c) {
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYPEER, 1L);
+    curl_easy_setopt(c, CURLOPT_SSL_VERIFYHOST, 2L);
+    curl_easy_setopt(c, CURLOPT_CAINFO, "romfs:/cacert.pem");
+}
+
 static void set_auth(CURL* c, const WebDavCfg& cfg) {
+    curl_apply_tls(c);
     if (cfg.user && cfg.pass) {
         std::string userpwd = std::string(cfg.user) + ":" + cfg.pass;
         curl_easy_setopt(c, CURLOPT_USERPWD, userpwd.c_str());

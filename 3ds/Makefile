@@ -15,6 +15,7 @@ BUILD		:=	build
 SOURCES		:=	source ../shell-common
 DATA		:=	data
 INCLUDES	:=	../ffi/include source ../shell-common
+ROMFS		:=	romfs
 
 # WAYSTONE_TARGET selects which cross-compiled libwaystone_ffi.a to link.
 # build.sh overrides it to armv6k-none-eabi for the custom-target fallback.
@@ -80,6 +81,10 @@ export INCLUDE	:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 export LIBPATHS	:=	-L$(CURDIR)/../target/$(WAYSTONE_TARGET)/release \
 			$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
+ifneq ($(strip $(ROMFS)),)
+	export _3DSXFLAGS += --romfs=$(TOPDIR)/$(ROMFS) --smdh=$(OUTPUT).smdh
+endif
+
 .PHONY: $(BUILD) clean all
 
 #---------------------------------------------------------------------------------
@@ -103,7 +108,7 @@ DEPENDS	:=	$(OFILES:.o=.d)
 #---------------------------------------------------------------------------------
 all	:	$(OUTPUT).3dsx
 
-$(OUTPUT).3dsx	:	$(OUTPUT).elf
+$(OUTPUT).3dsx	:	$(OUTPUT).elf $(OUTPUT).smdh
 $(OUTPUT).elf	:	$(OFILES)
 
 -include $(DEPENDS)

@@ -36,6 +36,7 @@ int main(int argc, char* argv[]) {
     WsVault* vault  = nullptr;
     bool ps_ok      = false;
     bool soc_ok     = false;
+    bool romfs_ok   = false;
     bool curl_ok    = false;
 
     gfxInitDefault();
@@ -59,6 +60,12 @@ int main(int argc, char* argv[]) {
         goto cleanup;
     }
     soc_ok = true;
+
+    if (romfsInit() != 0) {
+        printf("FATAL: romfsInit failed\n");
+        goto cleanup;
+    }
+    romfs_ok = true;
 
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
         printf("FATAL: curl_global_init failed\n");
@@ -154,6 +161,7 @@ cleanup:
     ws_buf_free(keys);
     if (vault) ws_vault_free(vault);
     if (curl_ok) curl_global_cleanup();
+    if (romfs_ok) romfsExit();
     if (soc_ok) socExit();
     if (ps_ok) psExit();
     free(SOC_buffer);
