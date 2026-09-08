@@ -1,20 +1,18 @@
 # deploy/docker-compose.yml
 services:
   webdav:
-    image: sigoden/dufs:latest
+    build: .
     container_name: waystone-webdav
     restart: unless-stopped
-    command: /data --allow-all --enable-cors
+    # Auth is controlled by deploy/entrypoint.sh — see deploy/README.md.
+    environment:
+      - "WAYSTONE_AUTH=${WAYSTONE_AUTH:-}"
     volumes:
       - waystone-data:/data
     ports:
       - "${WAYSTONE_PORT:-5005}:5000"
-    # NOTE: local quick-start runs anonymous (--allow-all). Do NOT set an empty
-    # DUFS_AUTH — dufs treats an empty-but-present auth value as "auth required,
-    # no valid users" and returns 401 to everyone. For a real (production)
-    # deployment, enable auth explicitly and drop --allow-all (see README).
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO /dev/null http://localhost:5000/ || exit 1"]
+      test: ["CMD-SHELL", "wget -S -q -O /dev/null http://localhost:5000/ 2>&1 | grep -qE ' (200|401) '"]
       interval: 30s
       timeout: 5s
       retries: 3
