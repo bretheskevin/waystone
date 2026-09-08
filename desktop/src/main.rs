@@ -377,35 +377,39 @@ async fn main() -> Result<()> {
             let vault =
                 waystone_core::crypto::Vault::unlock_with_passphrase(&passphrase, &keys_data)?;
 
-            let system_id = helpers::parse_system(&system)?;
-            let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
-
-            let raw = if dest.exists() {
-                helpers::read_source_tree(&dest)?
-            } else {
-                waystone_core::model::RawTree { files: vec![] }
-            };
-            let local_saves = adapter_obj.normalize(&raw);
-
+            let vault_arc = std::sync::Arc::new(vault);
             let blocking_dav =
                 webdav::make_blocking_dav(&cfg.server_url, wdav_user, wdav_pass).await?;
             let device_id = cfg.device_id.clone();
             let policy = cfg.conflict_policy;
             let safety_backup = cfg.safety_backup;
 
-            for save in &local_saves {
-                do_pull_save(
-                    &vault,
-                    &blocking_dav,
-                    save,
-                    &dest,
-                    &adapter,
-                    &system,
-                    &device_id,
-                    policy,
-                    safety_backup,
-                )?;
-            }
+            tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                let system_id = helpers::parse_system(&system)?;
+                let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
+                let raw = if dest.exists() {
+                    helpers::read_source_tree(&dest)?
+                } else {
+                    waystone_core::model::RawTree { files: vec![] }
+                };
+                let local_saves = adapter_obj.normalize(&raw);
+                drop(adapter_obj);
+                for save in &local_saves {
+                    do_pull_save(
+                        &vault_arc,
+                        &blocking_dav,
+                        save,
+                        &dest,
+                        &adapter,
+                        &system,
+                        &device_id,
+                        policy,
+                        safety_backup,
+                    )?;
+                }
+                Ok(())
+            })
+            .await??;
 
             println!("Pull complete.");
             Ok(())
@@ -424,28 +428,36 @@ async fn main() -> Result<()> {
             username: _,
         } => {
             let cfg = config::WaystoneConfig::load()?;
-            let system = helpers::parse_system(&system)?;
-            let adapter = helpers::make_adapter(&adapter, system)?;
-            let raw = helpers::read_source_tree(&source)?;
-            let saves = adapter.normalize(&raw);
+            let device_id = cfg.device_id.clone();
+            let server_url = cfg.server_url.clone();
 
-            println!("Device: {}", cfg.device_id);
-            println!("Server: {}", cfg.server_url);
-            println!("Found {} local save(s):", saves.len());
-            for save in &saves {
-                let (entry, _) = waystone_core::packaging::package(save);
-                println!(
-                    "  {} / {} [{}] hash={}...",
-                    save.id.game.display_name,
-                    save.id.slot,
-                    match save.id.kind {
-                        waystone_core::model::SaveKind::Battery => "battery",
-                        waystone_core::model::SaveKind::SaveState => "savestate",
-                        waystone_core::model::SaveKind::Native => "native",
-                    },
-                    &entry.content.hash[..12],
-                );
-            }
+            tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                let system_id = helpers::parse_system(&system)?;
+                let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
+                let raw = helpers::read_source_tree(&source)?;
+                let saves = adapter_obj.normalize(&raw);
+                drop(adapter_obj);
+
+                println!("Device: {}", device_id);
+                println!("Server: {}", server_url);
+                println!("Found {} local save(s):", saves.len());
+                for save in &saves {
+                    let (entry, _) = waystone_core::packaging::package(save);
+                    println!(
+                        "  {} / {} [{}] hash={}...",
+                        save.id.game.display_name,
+                        save.id.slot,
+                        match save.id.kind {
+                            waystone_core::model::SaveKind::Battery => "battery",
+                            waystone_core::model::SaveKind::SaveState => "savestate",
+                            waystone_core::model::SaveKind::Native => "native",
+                        },
+                        &entry.content.hash[..12],
+                    );
+                }
+                Ok(())
+            })
+            .await??;
             Ok(())
         }
 
@@ -474,31 +486,39 @@ async fn main() -> Result<()> {
                         &keys_data,
                     )?;
 
-                    let system_id = helpers::parse_system(&system)?;
-                    let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
-                    let raw = helpers::read_source_tree(&source)?;
-                    let saves = adapter_obj.normalize(&raw);
-
+                    let vault_arc = std::sync::Arc::new(vault);
                     let blocking_dav =
                         webdav::make_blocking_dav(&cfg.server_url, wdav_user, wdav_pass).await?;
-                    for save in &saves {
-                        println!("{} / {}:", save.id.game.display_name, save.id.slot);
-                        let entries = waystone_sync::list_history(&vault, save, &blocking_dav)?;
-                        if entries.is_empty() {
-                            println!("  (no history yet)");
-                        } else {
-                            for e in &entries {
-                                println!(
-                                    "  {}  {}  {}  mtime={}",
-                                    e.timestamp,
-                                    e.device_id,
-                                    &e.hash[..12.min(e.hash.len())],
-                                    e.mtime
-                                );
+
+                    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                        let system_id = helpers::parse_system(&system)?;
+                        let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
+                        let raw = helpers::read_source_tree(&source)?;
+                        let saves = adapter_obj.normalize(&raw);
+                        drop(adapter_obj);
+
+                        for save in &saves {
+                            println!("{} / {}:", save.id.game.display_name, save.id.slot);
+                            let entries =
+                                waystone_sync::list_history(&vault_arc, save, &blocking_dav)?;
+                            if entries.is_empty() {
+                                println!("  (no history yet)");
+                            } else {
+                                for e in &entries {
+                                    println!(
+                                        "  {}  {}  {}  mtime={}",
+                                        e.timestamp,
+                                        e.device_id,
+                                        &e.hash[..12.min(e.hash.len())],
+                                        e.mtime
+                                    );
+                                }
                             }
+                            println!();
                         }
-                        println!();
-                    }
+                        Ok(())
+                    })
+                    .await??;
                     Ok(())
                 }
                 HistoryCommands::Restore {
@@ -525,65 +545,73 @@ async fn main() -> Result<()> {
                         &keys_data,
                     )?;
 
-                    let system_id = helpers::parse_system(&system)?;
-                    let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
-                    let raw = if dest.exists() {
-                        helpers::read_source_tree(&dest)?
-                    } else {
-                        waystone_core::model::RawTree { files: vec![] }
-                    };
-                    let saves = adapter_obj.normalize(&raw);
-
-                    let save = if saves.len() == 1 {
-                        &saves[0]
-                    } else if let Some(ref game_key) = game {
-                        saves
-                            .iter()
-                            .find(|s| s.id.game.key == *game_key)
-                            .ok_or_else(|| {
-                                let keys: Vec<&str> =
-                                    saves.iter().map(|s| s.id.game.key.as_str()).collect();
-                                anyhow::anyhow!(
-                                    "game key '{}' not found; available: {}",
-                                    game_key,
-                                    keys.join(", ")
-                                )
-                            })?
-                    } else {
-                        let keys: Vec<&str> =
-                            saves.iter().map(|s| s.id.game.key.as_str()).collect();
-                        anyhow::bail!(
-                            "multiple saves found; use --game to select one: {}",
-                            keys.join(", ")
-                        );
-                    };
-
+                    let vault_arc = std::sync::Arc::new(vault);
                     let blocking_dav =
                         webdav::make_blocking_dav(&cfg.server_url, wdav_user, wdav_pass).await?;
-                    let entries = waystone_sync::list_history(&vault, save, &blocking_dav)?;
-                    let entry = resolve_history_selector(&entries, &selector)?;
+                    let safety_backup = cfg.safety_backup;
 
-                    println!(
-                        "Restoring: {} / {} <- version {} ({})",
-                        save.id.game.display_name,
-                        save.id.slot,
-                        entry.timestamp,
-                        &entry.hash[..12.min(entry.hash.len())]
-                    );
+                    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                        let system_id = helpers::parse_system(&system)?;
+                        let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
+                        let raw = if dest.exists() {
+                            helpers::read_source_tree(&dest)?
+                        } else {
+                            waystone_core::model::RawTree { files: vec![] }
+                        };
+                        let saves = adapter_obj.normalize(&raw);
+                        drop(adapter_obj);
 
-                    if let Some(p) = helpers::guarded_restore(
-                        &vault,
-                        &blocking_dav,
-                        save,
-                        &entry.hash,
-                        &dest,
-                        &adapter,
-                        &system,
-                        cfg.safety_backup,
-                    )? {
-                        println!("  safety backup -> {}", p.display());
-                    }
-                    println!("Restore complete.");
+                        let save = if saves.len() == 1 {
+                            &saves[0]
+                        } else if let Some(ref game_key) = game {
+                            saves
+                                .iter()
+                                .find(|s| s.id.game.key == *game_key)
+                                .ok_or_else(|| {
+                                    let keys: Vec<&str> =
+                                        saves.iter().map(|s| s.id.game.key.as_str()).collect();
+                                    anyhow::anyhow!(
+                                        "game key '{}' not found; available: {}",
+                                        game_key,
+                                        keys.join(", ")
+                                    )
+                                })?
+                        } else {
+                            let keys: Vec<&str> =
+                                saves.iter().map(|s| s.id.game.key.as_str()).collect();
+                            anyhow::bail!(
+                                "multiple saves found; use --game to select one: {}",
+                                keys.join(", ")
+                            );
+                        };
+
+                        let entries = waystone_sync::list_history(&vault_arc, save, &blocking_dav)?;
+                        let entry = resolve_history_selector(&entries, &selector)?;
+
+                        println!(
+                            "Restoring: {} / {} <- version {} ({})",
+                            save.id.game.display_name,
+                            save.id.slot,
+                            entry.timestamp,
+                            &entry.hash[..12.min(entry.hash.len())]
+                        );
+
+                        if let Some(p) = helpers::guarded_restore(
+                            &vault_arc,
+                            &blocking_dav,
+                            save,
+                            &entry.hash,
+                            &dest,
+                            &adapter,
+                            &system,
+                            safety_backup,
+                        )? {
+                            println!("  safety backup -> {}", p.display());
+                        }
+                        println!("Restore complete.");
+                        Ok(())
+                    })
+                    .await??;
                     Ok(())
                 }
             }
@@ -596,27 +624,32 @@ async fn main() -> Result<()> {
                     adapter,
                     system,
                 } => {
-                    let system_id = helpers::parse_system(&system)?;
-                    let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
-                    let raw = helpers::read_source_tree(&source)?;
-                    let saves = adapter_obj.normalize(&raw);
-                    for save in &saves {
-                        println!("{} / {}:", save.id.game.display_name, save.id.slot);
-                        let entries = helpers::list_snapshots(&save.group_key)?;
-                        if entries.is_empty() {
-                            println!("  (no snapshots)");
-                        } else {
-                            for e in &entries {
-                                println!(
-                                    "  {}  {} files  {}",
-                                    e.timestamp,
-                                    e.file_count,
-                                    helpers::human_size(e.total_bytes)
-                                );
+                    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                        let system_id = helpers::parse_system(&system)?;
+                        let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
+                        let raw = helpers::read_source_tree(&source)?;
+                        let saves = adapter_obj.normalize(&raw);
+                        drop(adapter_obj);
+                        for save in &saves {
+                            println!("{} / {}:", save.id.game.display_name, save.id.slot);
+                            let entries = helpers::list_snapshots(&save.group_key)?;
+                            if entries.is_empty() {
+                                println!("  (no snapshots)");
+                            } else {
+                                for e in &entries {
+                                    println!(
+                                        "  {}  {} files  {}",
+                                        e.timestamp,
+                                        e.file_count,
+                                        helpers::human_size(e.total_bytes)
+                                    );
+                                }
                             }
+                            println!();
                         }
-                        println!();
-                    }
+                        Ok(())
+                    })
+                    .await??;
                     Ok(())
                 }
                 SnapshotCommands::Restore {
@@ -626,58 +659,64 @@ async fn main() -> Result<()> {
                     game,
                     selector,
                 } => {
-                    let system_id = helpers::parse_system(&system)?;
-                    let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
-                    let raw = if dest.exists() {
-                        helpers::read_source_tree(&dest)?
-                    } else {
-                        waystone_core::model::RawTree { files: vec![] }
-                    };
-                    let saves = adapter_obj.normalize(&raw);
-                    if saves.is_empty() {
-                        anyhow::bail!(
-                            "no saves found at destination '{}'; nothing to restore",
-                            dest.display()
+                    let safety_backup = cfg.safety_backup;
+                    tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                        let system_id = helpers::parse_system(&system)?;
+                        let adapter_obj = helpers::make_adapter(&adapter, system_id)?;
+                        let raw = if dest.exists() {
+                            helpers::read_source_tree(&dest)?
+                        } else {
+                            waystone_core::model::RawTree { files: vec![] }
+                        };
+                        let saves = adapter_obj.normalize(&raw);
+                        drop(adapter_obj);
+                        if saves.is_empty() {
+                            anyhow::bail!(
+                                "no saves found at destination '{}'; nothing to restore",
+                                dest.display()
+                            );
+                        }
+                        let save = if saves.len() == 1 {
+                            &saves[0]
+                        } else if let Some(ref game_key) = game {
+                            saves
+                                .iter()
+                                .find(|s| s.id.game.key == *game_key)
+                                .ok_or_else(|| {
+                                    let keys: Vec<&str> =
+                                        saves.iter().map(|s| s.id.game.key.as_str()).collect();
+                                    anyhow::anyhow!(
+                                        "game key '{}' not found; available: {}",
+                                        game_key,
+                                        keys.join(", ")
+                                    )
+                                })?
+                        } else {
+                            let keys: Vec<&str> =
+                                saves.iter().map(|s| s.id.game.key.as_str()).collect();
+                            anyhow::bail!(
+                                "multiple saves found; use --game to select one: {}",
+                                keys.join(", ")
+                            );
+                        };
+                        let entries = helpers::list_snapshots(&save.group_key)?;
+                        let entry = resolve_snapshot_selector(&entries, &selector)?;
+                        println!(
+                            "Restoring: {} / {} <- snapshot {}",
+                            save.id.game.display_name, save.id.slot, entry.timestamp
                         );
-                    }
-                    let save = if saves.len() == 1 {
-                        &saves[0]
-                    } else if let Some(ref game_key) = game {
-                        saves
-                            .iter()
-                            .find(|s| s.id.game.key == *game_key)
-                            .ok_or_else(|| {
-                                let keys: Vec<&str> =
-                                    saves.iter().map(|s| s.id.game.key.as_str()).collect();
-                                anyhow::anyhow!(
-                                    "game key '{}' not found; available: {}",
-                                    game_key,
-                                    keys.join(", ")
-                                )
-                            })?
-                    } else {
-                        let keys: Vec<&str> =
-                            saves.iter().map(|s| s.id.game.key.as_str()).collect();
-                        anyhow::bail!(
-                            "multiple saves found; use --game to select one: {}",
-                            keys.join(", ")
-                        );
-                    };
-                    let entries = helpers::list_snapshots(&save.group_key)?;
-                    let entry = resolve_snapshot_selector(&entries, &selector)?;
-                    println!(
-                        "Restoring: {} / {} <- snapshot {}",
-                        save.id.game.display_name, save.id.slot, entry.timestamp
-                    );
-                    if let Some(p) = helpers::restore_from_snapshot(
-                        &save.group_key,
-                        &entry.timestamp,
-                        &dest,
-                        cfg.safety_backup,
-                    )? {
-                        println!("  safety backup -> {}", p.display());
-                    }
-                    println!("Restore complete.");
+                        if let Some(p) = helpers::restore_from_snapshot(
+                            &save.group_key,
+                            &entry.timestamp,
+                            &dest,
+                            safety_backup,
+                        )? {
+                            println!("  safety backup -> {}", p.display());
+                        }
+                        println!("Restore complete.");
+                        Ok(())
+                    })
+                    .await??;
                     Ok(())
                 }
             }
