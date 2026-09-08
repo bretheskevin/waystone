@@ -520,7 +520,11 @@ async fn try_unlock(
     } else {
         Vault::unlock_with_passphrase(secret, &keys_data)?
     };
-    let blocking_dav = BlockingWebDav::new(server_url, username, webdav_password);
+    let server_url_owned = server_url.to_owned();
+    let blocking_dav = tokio::task::spawn_blocking(move || {
+        BlockingWebDav::new(&server_url_owned, username, webdav_password)
+    })
+    .await?;
     Ok((vault, dav, blocking_dav))
 }
 
@@ -582,7 +586,10 @@ async fn try_setup(
     dav.mkdir_p("/").await?;
     dav.put("/keys.json", keys_json).await?;
 
-    let blocking_dav = BlockingWebDav::new(server_url, user, pass);
+    let server_url_owned = server_url.to_owned();
+    let blocking_dav =
+        tokio::task::spawn_blocking(move || BlockingWebDav::new(&server_url_owned, user, pass))
+            .await?;
     Ok((vault, dav, blocking_dav, recovery_key))
 }
 
