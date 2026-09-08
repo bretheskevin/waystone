@@ -8,7 +8,6 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn two_device_push_pull_round_trip() {
-        use crate::webdav::BlockingWebDav;
         use std::sync::Arc;
         use waystone_core::conflict::{ConflictPolicy, ConflictWinner, SyncDecision, fold_heads};
         use waystone_core::crypto::Vault;
@@ -45,8 +44,12 @@ mod tests {
 
         let vault2 = Vault::unlock_with_passphrase("integration-test", &keys_json).unwrap();
 
-        let dav1 = BlockingWebDav::new(server, None, None);
-        let dav2 = BlockingWebDav::new(server, None, None);
+        let dav1 = crate::webdav::make_blocking_dav(server, None, None)
+            .await
+            .unwrap();
+        let dav2 = crate::webdav::make_blocking_dav(server, None, None)
+            .await
+            .unwrap();
         let vault1 = Arc::new(vault1);
         let vault2 = Arc::new(vault2);
 

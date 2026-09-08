@@ -211,11 +211,11 @@ impl BlockingWebDav {
     }
 }
 
-/// Constructs a [] from within an async context.
+/// Constructs a [`BlockingWebDav`] from within an async context.
 ///
-/// [] must not be built on a tokio worker thread directly
+/// [`BlockingWebDav`] must not be built on a tokio worker thread directly
 /// (it creates/drops an inner runtime, causing a panic). This helper offloads
-/// construction to a blocking thread via [].
+/// construction to a blocking thread via [`tokio::task::spawn_blocking`].
 pub(crate) async fn make_blocking_dav(
     url: &str,
     username: Option<String>,
