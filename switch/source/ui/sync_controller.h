@@ -33,6 +33,9 @@ private:
     WsVault* vault_;
     AccountUid uid_;
     std::string device_id_;
+    std::string dav_url_;
+    std::string dav_user_;
+    std::string dav_pass_;
     WebDavCfg dav_;
     std::vector<TitleInfo> titles_;
     std::atomic<SyncPhase> phase_{SyncPhase::Idle};

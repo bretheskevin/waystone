@@ -30,10 +30,10 @@ WAYSTONE_TARGET	?=	aarch64-nintendo-switch-freestanding
 #
 ifeq ($(CONSOLE),1)
 SOURCES		:=	source ../shell-common
-EXCLUDES	:=	source/app_main.cpp
+EXCLUDES	:=	source/app_main.cpp ../shell-common/test_wsconfig.cpp
 else
 SOURCES		:=	source source/ui ../shell-common
-EXCLUDES	:=	source/main.cpp
+EXCLUDES	:=	source/main.cpp ../shell-common/test_wsconfig.cpp
 ROMFS_ASSETS	:=	romfs-assets
 # Path to the borealis repo root (relative to TOPDIR = switch/).
 BOREALIS_PATH	:=	lib/borealis
@@ -229,7 +229,7 @@ DEPENDS	:=	$(OFILES:.o=.d)
 # it must NOT have -fno-rtti; it inherits global CXXFLAGS (RTTI enabled).
 # CONSOLE=1: flags are already in global CXXFLAGS; this block is skipped.
 ifneq ($(CONSOLE),1)
-OUR_ENGINE_OBJS := saves.o sync.o net.o json.o base64.o
+OUR_ENGINE_OBJS := saves.o sync.o net.o json.o base64.o snapshot.o wsconfig.o
 $(OUR_ENGINE_OBJS): CXXFLAGS += -fno-rtti -fno-exceptions
 endif
 

@@ -1,6 +1,6 @@
 # Waystone — Status & Roadmap
 
-_Last updated: 2026-09-07_
+_Last updated: 2026-09-08_
 
 Cross-platform game-save sync (backup **and** cross-device sync) spanning emulator
 saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
@@ -93,6 +93,22 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   `make CONSOLE=1`. **Compile+link verified in both modes and romfs embedding confirmed via the
   packaging log; the UI cannot be rendered on the host — not yet eyeballed on hardware.**
 
+- **Switch full-parity screens (compile+link)**: the borealis shell is now **self-sufficient** — every
+  compile-time credential `#define` is gone, replaced by a runtime **session model** mirroring the desktop
+  TUI. `app_main` routes by `keys.json` presence: first-run **Setup** (server / username / WebDAV password /
+  vault passphrase via a thin libnx **`swkbd`** wrapper; overwrite guard; `ws_vault_init`; recovery key →
+  `sdmc:/waystone/recovery-<device>.txt`) vs. returning-user **Unlock** (passphrase or recovery key + WebDAV
+  password). A **Settings** screen (server / conflict-policy / safety-backup / username; device_id read-only)
+  persists `config.json`, and a **Conflict inbox** runs a dedicated scan (`ws_decide_pull` with **Prompt**
+  policy, collecting the `conflict_needs_input` cases the engine previously skipped) resolved keep-local /
+  keep-remote on a worker thread. Native borealis look, **Waystone-tinted** (indigo/cyan theme override — a
+  one-line borealis `ThemeValues::addColor` override fix is required; the excluded `swkbd.cpp` is left
+  untouched). New shared **`shell-common/wsconfig`** (config load/save, reusable by 3DS) + a DRY refactor of
+  `sync.cpp` (`scan_save_decision` + `restore_remote_save` shared by `pull_title` and the conflict controller);
+  secrets are RAM-only and zeroized (shared `secure_clear`). Compile+link verified in **both GUI and
+  `CONSOLE=1`** modes; 3DS build unaffected; `waystone.h` unchanged; reviewed (two rounds, DRY + concurrency +
+  secret-hygiene). **Not yet run on hardware.**
+
 **Quality:** 103 tests pass (11 new checkpoint core tests + 3 checkpoint FFI tests), clippy clean.
 
 ### Adapter source references
@@ -166,12 +182,13 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   -p waystone-desktop` green (4 new reducer tests), clippy/fmt clean, reviewed CLEAN (0 findings).
 
 ## Next
-- **M2 (remaining) — Switch shell: full UI + first on-hardware run**: the two-way save engine
-  (push + pull/restore), verified HTTPS, and a **borealis GUI vertical slice** (title list + live
-  sync; console driver kept behind `CONSOLE=1`) are built and compile+link-verified end-to-end.
-  Remaining: eyeball the borealis UI on Switch hardware (first on-hardware run), then the full-parity
-  screens — runtime setup / credential entry via swkbd (re-enables the excluded `swkbd.cpp`),
-  conflict-resolution inbox, and settings — mirroring the desktop TUI.
+- **M2 (remaining) — Switch shell: first on-hardware run**: the two-way save engine (push +
+  pull/restore), verified HTTPS, the **borealis GUI vertical slice**, and the **full-parity screens**
+  (runtime Setup / Unlock via swkbd, Settings, and the conflict inbox — see Done) are all built and
+  compile+link-verified end-to-end in both GUI and `CONSOLE=1`. Remaining: the **first on-hardware run** —
+  eyeball the borealis UI and exercise setup / unlock / sync / conflict-resolution on real Switch hardware.
+  _Follow-up:_ the Waystone theme tint currently relies on a one-line working-tree patch to the pinned
+  borealis submodule (`ThemeValues::addColor`); persist it reproducibly (build-time patch) or upstream it.
 - **M3 (foundation landed) — Android shell**: the **UniFFI binding foundation** is built and
   host-verified. A new shared **`waystone-sync`** crate owns the sync orchestration (a sync `WebDav`
   trait + `push_one`/`pull_one`/`fetch_blob`, reusing `core`); **desktop was refactored** to delegate

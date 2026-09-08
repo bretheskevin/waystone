@@ -1,4 +1,5 @@
 #include "sync_controller.h"
+#include "session.h"
 #include <cstdio>
 extern "C" {
 #include "waystone.h"
@@ -12,11 +13,13 @@ SyncController::SyncController(WsVault* vault, AccountUid uid,
     : vault_(vault),
       uid_(uid),
       device_id_(std::move(device_id)),
-      dav_(dav),
+      dav_url_(dav.base_url), dav_user_(dav.user), dav_pass_(dav.pass),
+      dav_{dav_url_.c_str(), dav_user_.c_str(), dav_pass_.c_str()},
       titles_(std::move(titles)) {}
 
 SyncController::~SyncController() {
     join();
+    zeroize_string(dav_pass_);
 }
 
 void SyncController::start() {

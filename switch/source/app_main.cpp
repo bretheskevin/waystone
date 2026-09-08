@@ -13,109 +13,76 @@ extern "C" {
 
 #include "net.h"
 #include "saves.h"
-#include "ui/sync_controller.h"
-#include "ui/title_list_activity.h"
-
-#ifndef WAYSTONE_WEBDAV_URL
-#define WAYSTONE_WEBDAV_URL "https://CHANGEME"
-#endif
-#ifndef WAYSTONE_WEBDAV_USER
-#define WAYSTONE_WEBDAV_USER "changeme"
-#endif
-#ifndef WAYSTONE_WEBDAV_PASS
-#define WAYSTONE_WEBDAV_PASS "changeme"
-#endif
-#ifndef WAYSTONE_VAULT_PASS
-#define WAYSTONE_VAULT_PASS "changeme"
-#endif
+#include "wsconfig.h"
+#include "ui/session.h"
+#include "ui/theme_tint.h"
+#include "ui/setup_activity.h"
+#include "ui/unlock_activity.h"
 
 int main(int argc, char* argv[])
 {
     socketInitializeDefault();
     romfsInit();
-    if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK)
-    {
+    if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
         romfsExit();
         socketExit();
         return 1;
     }
 
-    WsBuf recovery = {nullptr, 0};
-    WsBuf keys     = {nullptr, 0};
-    WsVault* vault = nullptr;
+    Session session;
+    session.config_path = "sdmc:/waystone/config.json";
+    session.config = wsconfig_load(session.config_path.c_str());
 
-    const char* keys_path = "sdmc:/waystone/keys.json";
-    FILE* kf = fopen(keys_path, "rb");
-    if (kf)
-    {
-        fseek(kf, 0, SEEK_END);
-        long klen = ftell(kf);
-        fseek(kf, 0, SEEK_SET);
-        if (klen > 0)
-        {
-            uint8_t* kbuf = static_cast<uint8_t*>(malloc(static_cast<size_t>(klen)));
-            if (kbuf)
-            {
-                size_t got = fread(kbuf, 1, static_cast<size_t>(klen), kf);
-                if (got == static_cast<size_t>(klen))
-                    vault = ws_vault_unlock_pass(WAYSTONE_VAULT_PASS, kbuf, got);
-                free(kbuf);
+    if (!get_active_account(&session.uid))
+        goto cleanup;
+    session.device_id = get_device_id();
+    if (session.device_id.empty())
+        goto cleanup;
+
+    apply_waystone_tint();
+
+    if (brls::Application::init()) {
+        brls::Application::createWindow("Waystone");
+        brls::Application::setGlobalQuit(true);
+
+        const char* keys_path = "sdmc:/waystone/keys.json";
+        FILE* kf = fopen(keys_path, "rb");
+        if (kf) {
+            fseek(kf, 0, SEEK_END);
+            long klen = ftell(kf);
+            fseek(kf, 0, SEEK_SET);
+            uint8_t* kbuf = nullptr;
+            if (klen > 0) {
+                kbuf = static_cast<uint8_t*>(malloc(static_cast<size_t>(klen)));
+                if (kbuf) {
+                    size_t got = fread(kbuf, 1, static_cast<size_t>(klen), kf);
+                    if (got != static_cast<size_t>(klen)) {
+                        free(kbuf);
+                        kbuf = nullptr;
+                        klen = 0;
+                    }
+                }
             }
-        }
-        fclose(kf);
-    }
-
-    if (!vault)
-    {
-        vault = ws_vault_init(WAYSTONE_VAULT_PASS, &recovery, &keys);
-        if (!vault)
-            goto cleanup;
-        mkdir("sdmc:/waystone", 0755);
-        FILE* wf = fopen(keys_path, "wb");
-        if (wf)
-        {
-            fwrite(keys.ptr, 1, keys.len, wf);
-            fclose(wf);
-        }
-    }
-
-    {
-        AccountUid uid = {};
-        if (!get_active_account(&uid))
-            goto cleanup;
-
-        std::string device_id = get_device_id();
-        if (device_id.empty())
-            goto cleanup;
-
-        WebDavCfg dav = {
-            WAYSTONE_WEBDAV_URL,
-            WAYSTONE_WEBDAV_USER,
-            WAYSTONE_WEBDAV_PASS
-        };
-
-        std::vector<TitleInfo> titles = list_titles();
-        SyncController ctrl(vault, uid, device_id, dav, std::move(titles));
-
-        if (brls::Application::init())
-        {
-            brls::Application::createWindow("Waystone");
-            brls::Application::setGlobalQuit(true);
-            brls::Application::pushActivity(new TitleListActivity(&ctrl));
+            fclose(kf);
+            if (kbuf && klen > 0) {
+                brls::Application::pushActivity(
+                    new UnlockActivity(&session, kbuf, static_cast<size_t>(klen)));
+            } else {
+                brls::Application::pushActivity(new SetupActivity(&session));
+            }
+            while (brls::Application::mainLoop()) {}
+            free(kbuf);
+        } else {
+            brls::Application::pushActivity(new SetupActivity(&session));
             while (brls::Application::mainLoop()) {}
         }
-
-        ctrl.join();
     }
 
 cleanup:
-    ws_buf_free(recovery);
-    ws_buf_free(keys);
-    if (vault)
-        ws_vault_free(vault);
+    if (session.vault) ws_vault_free(session.vault);
+    session.vault = nullptr;
     curl_global_cleanup();
     romfsExit();
     socketExit();
-
     return 0;
 }
