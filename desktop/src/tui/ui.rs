@@ -10,6 +10,17 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 const SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
 
 pub fn ui(frame: &mut Frame, app: &App) {
+    // Paint the entire terminal area with the app's dark base background so the
+    // dark-theme palette renders correctly regardless of the terminal's own bg color.
+    frame.render_widget(
+        Block::default().style(
+            Style::default()
+                .bg(theme::NEUTRAL_900)
+                .fg(theme::NEUTRAL_50),
+        ),
+        frame.area(),
+    );
+
     match app.screen {
         Screen::Dashboard => render_dashboard(frame, app),
         Screen::Conflicts => render_conflicts_screen(frame, app),
@@ -518,6 +529,7 @@ fn render_help_overlay(frame: &mut Frame) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::PRIMARY))
+        .style(Style::default().bg(theme::NEUTRAL_900))
         .title(" Help ");
     frame.render_widget(Paragraph::new(text).block(block), area);
 }
@@ -557,7 +569,6 @@ fn render_unlock_overlay(frame: &mut Frame, app: &App) {
         ),
         Line::raw(""),
     ];
-    // passphrase field also holds the recovery key when recovery_mode is true; always masked
     let secret_label = if recovery_mode {
         "Recovery key: "
     } else {
@@ -617,6 +628,7 @@ fn render_unlock_overlay(frame: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::PRIMARY))
+        .style(Style::default().bg(theme::NEUTRAL_900))
         .title(title);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -685,6 +697,7 @@ fn render_form_overlay(frame: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::PRIMARY))
+        .style(Style::default().bg(theme::NEUTRAL_900))
         .title(title);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -703,6 +716,7 @@ fn render_confirm_overlay(frame: &mut Frame, message: &str) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::WARNING))
+        .style(Style::default().bg(theme::NEUTRAL_900))
         .title(" Confirm ");
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -954,6 +968,46 @@ fn render_recovery_key_overlay(frame: &mut Frame, app: &App) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::WARNING))
+        .style(Style::default().bg(theme::NEUTRAL_900))
         .title(" Recovery Key ");
     frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{SyncTarget, WaystoneConfig};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn ui_test_app() -> App {
+        let config = WaystoneConfig {
+            device_id: "test-dev".into(),
+            server_url: "http://localhost".into(),
+            conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
+            username: None,
+            targets: vec![SyncTarget {
+                name: "Switch JKSV".into(),
+                path: "/saves/jksv".into(),
+                adapter: "jksv".into(),
+                system: "switch".into(),
+            }],
+            safety_backup: false,
+        };
+        App::new(&config)
+    }
+
+    #[test]
+    fn ui_paints_dark_base_background() {
+        let app = ui_test_app();
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| ui(frame, &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        assert_eq!(
+            buffer[(0, 0)].bg,
+            theme::NEUTRAL_900,
+            "base background must be NEUTRAL_900 so dark-theme text reads on any terminal"
+        );
+    }
 }
