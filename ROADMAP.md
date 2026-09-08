@@ -102,8 +102,9 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   persists `config.json`, and a **Conflict inbox** runs a dedicated scan (`ws_decide_pull` with **Prompt**
   policy, collecting the `conflict_needs_input` cases the engine previously skipped) resolved keep-local /
   keep-remote on a worker thread. Native borealis look, **Waystone-tinted** (indigo/cyan theme override — a
-  one-line borealis `ThemeValues::addColor` override fix is required; the excluded `swkbd.cpp` is left
-  untouched). New shared **`shell-common/wsconfig`** (config load/save, reusable by 3DS) + a DRY refactor of
+  one-line borealis `ThemeValues::addColor` override, applied via a committed build-time patch
+  (`switch/patches/borealis-theme-tint.patch`, idempotently applied by the Makefile — submodule stays
+  pinned + clean); the excluded `swkbd.cpp` is left untouched). New shared **`shell-common/wsconfig`** (config load/save, reusable by 3DS) + a DRY refactor of
   `sync.cpp` (`scan_save_decision` + `restore_remote_save` shared by `pull_title` and the conflict controller);
   secrets are RAM-only and zeroized (shared `secure_clear`). Compile+link verified in **both GUI and
   `CONSOLE=1`** modes; 3DS build unaffected; `waystone.h` unchanged; reviewed (two rounds, DRY + concurrency +
@@ -187,8 +188,6 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   (runtime Setup / Unlock via swkbd, Settings, and the conflict inbox — see Done) are all built and
   compile+link-verified end-to-end in both GUI and `CONSOLE=1`. Remaining: the **first on-hardware run** —
   eyeball the borealis UI and exercise setup / unlock / sync / conflict-resolution on real Switch hardware.
-  _Follow-up:_ the Waystone theme tint currently relies on a one-line working-tree patch to the pinned
-  borealis submodule (`ThemeValues::addColor`); persist it reproducibly (build-time patch) or upstream it.
 - **M3 (foundation landed) — Android shell**: the **UniFFI binding foundation** is built and
   host-verified. A new shared **`waystone-sync`** crate owns the sync orchestration (a sync `WebDav`
   trait + `push_one`/`pull_one`/`fetch_blob`, reusing `core`); **desktop was refactored** to delegate
