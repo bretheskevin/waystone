@@ -188,16 +188,14 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   (runtime Setup / Unlock via swkbd, Settings, and the conflict inbox — see Done) are all built and
   compile+link-verified end-to-end in both GUI and `CONSOLE=1`. Remaining: the **first on-hardware run** —
   eyeball the borealis UI and exercise setup / unlock / sync / conflict-resolution on real Switch hardware.
-- **M3 (foundation landed) — Android shell**: the **UniFFI binding foundation** is built and
-  host-verified. A new shared **`waystone-sync`** crate owns the sync orchestration (a sync `WebDav`
-  trait + `push_one`/`pull_one`/`fetch_blob`, reusing `core`); **desktop was refactored** to delegate
-  to it (blocking bridge via `spawn_blocking`, 64 tests still green); and a new **`waystone-mobile`**
-  UniFFI crate (uniffi 0.32) exposes a vertical slice to Kotlin — `Vault`, records, `SyncDecision`,
-  a foreign `WebDav` trait (Kotlin implements OkHttp), and `jksv_normalize`/`push_one`/`pull_one`,
-  with committed generated Kotlin kept honest by an up-to-date test. `cargo test/clippy/fmt` green
-  workspace-wide. Remaining: the Kotlin/Compose UI + Kotlin SAF (storage) & OkHttp (WebDAV) trait
-  impls; then full-parity surface (all adapters, packaging, a policy parameter on `pull_one`, richer
-  `NormalizedSave` fidelity) and a first on-device run.
+- **M3 (adapter parity landed) — Android shell**: the **UniFFI binding foundation** is built and
+  host-verified. A shared **`waystone-sync`** crate owns sync orchestration; **desktop** delegates to
+  it; and **`waystone-mobile`** (uniffi 0.32) exposes a complete vertical slice to Kotlin — `Vault`,
+  records, `SyncDecision`, a foreign `WebDav` trait (for OkHttp), `push_one`/`pull_one` (with
+  `ConflictPolicy`), and **full adapter parity**: `jksv`/`mgba`/`twilight`/`checkpoint` normalize +
+  to_native, with lossless `NormalizedSave` fidelity (`serial`/`rom_crc`/`confidence`). Committed
+  Kotlin binding kept honest by an up-to-date test. Remaining: the **Kotlin/Compose UI** + Kotlin SAF
+  (storage) & OkHttp (WebDAV) trait impls, and a first on-device run.
 - **M4 (engine foundation landed) — 3DS shell**: the 3DS save-sync ENGINE is built and
   host-verified (compile+link via a new devkitARM Docker image `waystone-3ds`). A new `3ds/` shell
   (devkitARM/libctru) mirrors the Switch M2 engine console-driven: libctru title enumeration +

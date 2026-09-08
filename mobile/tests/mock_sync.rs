@@ -153,7 +153,7 @@ fn jksv_normalize_produces_saves() {
             content: vec![0xCA, 0xFE],
         }],
     };
-    let saves = jksv_normalize(raw);
+    let saves = jksv_normalize("switch".into(), raw).unwrap();
     assert_eq!(saves.len(), 1);
     assert_eq!(saves[0].system, "switch");
     assert_eq!(saves[0].slot, "slot0");
@@ -276,7 +276,7 @@ fn jksv_normalize_populates_confidence_from_adapter() {
             content: vec![0xCA, 0xFE],
         }],
     };
-    let saves = jksv_normalize(raw_strong);
+    let saves = jksv_normalize("switch".into(), raw_strong).unwrap();
     assert_eq!(saves.len(), 1);
     assert!(
         matches!(saves[0].confidence, Confidence::Strong),
@@ -293,7 +293,7 @@ fn jksv_normalize_populates_confidence_from_adapter() {
             content: vec![0xBE, 0xEF],
         }],
     };
-    let saves_weak = jksv_normalize(raw_weak);
+    let saves_weak = jksv_normalize("switch".into(), raw_weak).unwrap();
     assert_eq!(saves_weak.len(), 1);
     assert!(
         matches!(saves_weak[0].confidence, Confidence::Weak),

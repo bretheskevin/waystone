@@ -719,11 +719,25 @@ internal object IntegrityCheckingUniffiLib {
         uniffiCheckContractApiVersion(this)
         uniffiCheckApiChecksums(this)
     }
+    external fun uniffi_waystone_mobile_checksum_func_checkpoint_normalize(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_func_checkpoint_to_native(
+    ): Int
     external fun uniffi_waystone_mobile_checksum_func_jksv_normalize(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_func_jksv_to_native(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_func_mgba_normalize(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_func_mgba_to_native(
     ): Int
     external fun uniffi_waystone_mobile_checksum_func_pull_one(
     ): Int
     external fun uniffi_waystone_mobile_checksum_func_push_one(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_func_twilight_normalize(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_func_twilight_to_native(
     ): Int
     external fun uniffi_waystone_mobile_checksum_func_vault_init(
     ): Int
@@ -812,11 +826,25 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_method_webdav_mkdir_p(`ptr`: Long,`path`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
-    external fun uniffi_waystone_mobile_fn_func_jksv_normalize(`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_waystone_mobile_fn_func_checkpoint_normalize(`system`: RustBuffer.ByValue,`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_checkpoint_to_native(`save`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_jksv_normalize(`system`: RustBuffer.ByValue,`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_jksv_to_native(`save`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_mgba_normalize(`system`: RustBuffer.ByValue,`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_mgba_to_native(`save`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_pull_one(`vault`: Long,`save`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,`dav`: Long,`policy`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_push_one(`vault`: Long,`save`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,`dav`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_twilight_normalize(`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_twilight_to_native(`save`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_vault_init(`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -939,13 +967,34 @@ private fun uniffiCheckContractApiVersion(lib: IntegrityCheckingUniffiLib) {
 }
 @Suppress("UNUSED_PARAMETER")
 private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
-    if (lib.uniffi_waystone_mobile_checksum_func_jksv_normalize() != 59127) {
+    if (lib.uniffi_waystone_mobile_checksum_func_checkpoint_normalize() != 58482) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_checkpoint_to_native() != 19389) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_jksv_normalize() != 1358) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_jksv_to_native() != 53317) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_mgba_normalize() != 43884) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_mgba_to_native() != 56709) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_func_pull_one() != 46026) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_func_push_one() != 31616) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_twilight_normalize() != 56064) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_twilight_to_native() != 57659) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_func_vault_init() != 27030) {
@@ -3079,13 +3128,77 @@ public object FfiConverterSequenceTypeRawFileEntry: FfiConverterRustBuffer<List<
             FfiConverterTypeRawFileEntry.write(it, buf)
         }
     }
-} fun `jksvNormalize`(`raw`: RawTree): List<NormalizedSave> {
+}
+    @Throws(WaystoneException::class) fun `checkpointNormalize`(`system`: kotlin.String, `raw`: RawTree): List<NormalizedSave> {
             return FfiConverterSequenceTypeNormalizedSave.lift(
-    uniffiRustCall() { _status ->
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_checkpoint_normalize(
+    
+        
+        FfiConverterString.lower(`system`),
+        FfiConverterTypeRawTree.lower(`raw`),_status)
+}
+    )
+    }
+    
+
+    @Throws(WaystoneException::class) fun `checkpointToNative`(`save`: NormalizedSave): RawTree {
+            return FfiConverterTypeRawTree.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_checkpoint_to_native(
+    
+        
+        FfiConverterTypeNormalizedSave.lower(`save`),_status)
+}
+    )
+    }
+    
+
+    @Throws(WaystoneException::class) fun `jksvNormalize`(`system`: kotlin.String, `raw`: RawTree): List<NormalizedSave> {
+            return FfiConverterSequenceTypeNormalizedSave.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
     UniffiLib.uniffi_waystone_mobile_fn_func_jksv_normalize(
     
         
+        FfiConverterString.lower(`system`),
         FfiConverterTypeRawTree.lower(`raw`),_status)
+}
+    )
+    }
+    
+
+    @Throws(WaystoneException::class) fun `jksvToNative`(`save`: NormalizedSave): RawTree {
+            return FfiConverterTypeRawTree.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_jksv_to_native(
+    
+        
+        FfiConverterTypeNormalizedSave.lower(`save`),_status)
+}
+    )
+    }
+    
+
+    @Throws(WaystoneException::class) fun `mgbaNormalize`(`system`: kotlin.String, `raw`: RawTree): List<NormalizedSave> {
+            return FfiConverterSequenceTypeNormalizedSave.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_mgba_normalize(
+    
+        
+        FfiConverterString.lower(`system`),
+        FfiConverterTypeRawTree.lower(`raw`),_status)
+}
+    )
+    }
+    
+
+    @Throws(WaystoneException::class) fun `mgbaToNative`(`save`: NormalizedSave): RawTree {
+            return FfiConverterTypeRawTree.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_mgba_to_native(
+    
+        
+        FfiConverterTypeNormalizedSave.lower(`save`),_status)
 }
     )
     }
@@ -3117,6 +3230,29 @@ public object FfiConverterSequenceTypeRawFileEntry: FfiConverterRustBuffer<List<
         FfiConverterTypeNormalizedSave.lower(`save`),
         FfiConverterString.lower(`deviceId`),
         FfiConverterTypeWebDav.lower(`dav`),_status)
+}
+    )
+    }
+    
+ fun `twilightNormalize`(`raw`: RawTree): List<NormalizedSave> {
+            return FfiConverterSequenceTypeNormalizedSave.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_twilight_normalize(
+    
+        
+        FfiConverterTypeRawTree.lower(`raw`),_status)
+}
+    )
+    }
+    
+
+    @Throws(WaystoneException::class) fun `twilightToNative`(`save`: NormalizedSave): RawTree {
+            return FfiConverterTypeRawTree.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_twilight_to_native(
+    
+        
+        FfiConverterTypeNormalizedSave.lower(`save`),_status)
 }
     )
     }

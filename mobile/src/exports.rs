@@ -1,11 +1,14 @@
 use crate::decision::{ConflictPolicy, PullOutcome, PushOutcome, SyncDecision};
 use crate::error::WaystoneError;
-use crate::types::{Confidence, FileEntry, NormalizedSave, RawTree};
+use crate::types::{Confidence, FileEntry, NormalizedSave, RawFileEntry, RawTree};
 use crate::vault::Vault;
 use crate::webdav::{WebDav, WebDavBridge};
 use std::sync::Arc;
 use waystone_core::adapters::Adapter;
+use waystone_core::adapters::checkpoint::CheckpointAdapter;
 use waystone_core::adapters::jksv::JksvAdapter;
+use waystone_core::adapters::mgba::MgbaAdapter;
+use waystone_core::adapters::twilight::TwilightAdapter;
 use waystone_core::model as core_model;
 
 fn to_core_save(save: &NormalizedSave) -> Result<core_model::NormalizedSave, WaystoneError> {
@@ -127,9 +130,8 @@ fn map_conflict_policy(policy: ConflictPolicy) -> waystone_core::conflict::Confl
     }
 }
 
-#[uniffi::export]
-pub fn jksv_normalize(raw: RawTree) -> Vec<NormalizedSave> {
-    let core_raw = core_model::RawTree {
+fn to_core_raw(raw: RawTree) -> core_model::RawTree {
+    core_model::RawTree {
         files: raw
             .files
             .into_iter()
@@ -138,13 +140,91 @@ pub fn jksv_normalize(raw: RawTree) -> Vec<NormalizedSave> {
                 content: f.content,
             })
             .collect(),
-    };
-    let adapter = JksvAdapter::new(core_model::SystemId::Switch);
-    adapter
+    }
+}
+
+fn from_core_raw(raw: core_model::RawTree) -> RawTree {
+    RawTree {
+        files: raw
+            .files
+            .into_iter()
+            .map(|f| RawFileEntry {
+                path: f.path,
+                content: f.content,
+            })
+            .collect(),
+    }
+}
+
+fn normalize_via<A: Adapter>(
+    system: &str,
+    raw: RawTree,
+    build: impl FnOnce(core_model::SystemId) -> A,
+) -> Result<Vec<NormalizedSave>, WaystoneError> {
+    let sys = parse_system(system)?;
+    let adapter = build(sys);
+    let core_raw = to_core_raw(raw);
+    Ok(adapter
+        .normalize(&core_raw)
+        .iter()
+        .map(from_core_save)
+        .collect())
+}
+
+fn to_native_via(
+    save: NormalizedSave,
+    run: impl FnOnce(&core_model::NormalizedSave) -> core_model::RawTree,
+) -> Result<RawTree, WaystoneError> {
+    let core_save = to_core_save(&save)?;
+    Ok(from_core_raw(run(&core_save)))
+}
+
+#[uniffi::export]
+pub fn jksv_normalize(system: String, raw: RawTree) -> Result<Vec<NormalizedSave>, WaystoneError> {
+    normalize_via(&system, raw, JksvAdapter::new)
+}
+
+#[uniffi::export]
+pub fn jksv_to_native(save: NormalizedSave) -> Result<RawTree, WaystoneError> {
+    to_native_via(save, |s| JksvAdapter::new(s.id.system).to_native(s))
+}
+
+#[uniffi::export]
+pub fn mgba_normalize(system: String, raw: RawTree) -> Result<Vec<NormalizedSave>, WaystoneError> {
+    normalize_via(&system, raw, MgbaAdapter::new)
+}
+
+#[uniffi::export]
+pub fn mgba_to_native(save: NormalizedSave) -> Result<RawTree, WaystoneError> {
+    to_native_via(save, |s| MgbaAdapter::new(s.id.system).to_native(s))
+}
+
+#[uniffi::export]
+pub fn twilight_normalize(raw: RawTree) -> Vec<NormalizedSave> {
+    let core_raw = to_core_raw(raw);
+    TwilightAdapter::new()
         .normalize(&core_raw)
         .iter()
         .map(from_core_save)
         .collect()
+}
+
+#[uniffi::export]
+pub fn twilight_to_native(save: NormalizedSave) -> Result<RawTree, WaystoneError> {
+    to_native_via(save, |s| TwilightAdapter::new().to_native(s))
+}
+
+#[uniffi::export]
+pub fn checkpoint_normalize(
+    system: String,
+    raw: RawTree,
+) -> Result<Vec<NormalizedSave>, WaystoneError> {
+    normalize_via(&system, raw, CheckpointAdapter::new)
+}
+
+#[uniffi::export]
+pub fn checkpoint_to_native(save: NormalizedSave) -> Result<RawTree, WaystoneError> {
+    to_native_via(save, |s| CheckpointAdapter::new(s.id.system).to_native(s))
 }
 
 #[uniffi::export]
