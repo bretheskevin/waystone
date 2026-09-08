@@ -217,6 +217,35 @@ fn resolve_snapshot_selector<'a>(
     }
 }
 
+/// Pick the single save from `saves`, or the one whose game key matches `game`.
+/// Errors when `game` is required but absent, or when the key is not found.
+fn resolve_save_by_game<'a>(
+    saves: &'a [waystone_core::model::NormalizedSave],
+    game: &Option<String>,
+) -> Result<&'a waystone_core::model::NormalizedSave> {
+    if saves.len() == 1 {
+        Ok(&saves[0])
+    } else if let Some(ref game_key) = *game {
+        saves
+            .iter()
+            .find(|s| s.id.game.key == *game_key)
+            .ok_or_else(|| {
+                let keys: Vec<&str> = saves.iter().map(|s| s.id.game.key.as_str()).collect();
+                anyhow::anyhow!(
+                    "game key '{}' not found; available: {}",
+                    game_key,
+                    keys.join(", ")
+                )
+            })
+    } else {
+        let keys: Vec<&str> = saves.iter().map(|s| s.id.game.key.as_str()).collect();
+        anyhow::bail!(
+            "multiple saves found; use --game to select one: {}",
+            keys.join(", ")
+        )
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn do_pull_save(
     vault: &waystone_core::crypto::Vault,
@@ -561,29 +590,7 @@ async fn main() -> Result<()> {
                         let saves = adapter_obj.normalize(&raw);
                         drop(adapter_obj);
 
-                        let save = if saves.len() == 1 {
-                            &saves[0]
-                        } else if let Some(ref game_key) = game {
-                            saves
-                                .iter()
-                                .find(|s| s.id.game.key == *game_key)
-                                .ok_or_else(|| {
-                                    let keys: Vec<&str> =
-                                        saves.iter().map(|s| s.id.game.key.as_str()).collect();
-                                    anyhow::anyhow!(
-                                        "game key '{}' not found; available: {}",
-                                        game_key,
-                                        keys.join(", ")
-                                    )
-                                })?
-                        } else {
-                            let keys: Vec<&str> =
-                                saves.iter().map(|s| s.id.game.key.as_str()).collect();
-                            anyhow::bail!(
-                                "multiple saves found; use --game to select one: {}",
-                                keys.join(", ")
-                            );
-                        };
+                        let save = resolve_save_by_game(&saves, &game)?;
 
                         let entries = waystone_sync::list_history(&vault_arc, save, &blocking_dav)?;
                         let entry = resolve_history_selector(&entries, &selector)?;
@@ -676,29 +683,7 @@ async fn main() -> Result<()> {
                                 dest.display()
                             );
                         }
-                        let save = if saves.len() == 1 {
-                            &saves[0]
-                        } else if let Some(ref game_key) = game {
-                            saves
-                                .iter()
-                                .find(|s| s.id.game.key == *game_key)
-                                .ok_or_else(|| {
-                                    let keys: Vec<&str> =
-                                        saves.iter().map(|s| s.id.game.key.as_str()).collect();
-                                    anyhow::anyhow!(
-                                        "game key '{}' not found; available: {}",
-                                        game_key,
-                                        keys.join(", ")
-                                    )
-                                })?
-                        } else {
-                            let keys: Vec<&str> =
-                                saves.iter().map(|s| s.id.game.key.as_str()).collect();
-                            anyhow::bail!(
-                                "multiple saves found; use --game to select one: {}",
-                                keys.join(", ")
-                            );
-                        };
+                        let save = resolve_save_by_game(&saves, &game)?;
                         let entries = helpers::list_snapshots(&save.group_key)?;
                         let entry = resolve_snapshot_selector(&entries, &selector)?;
                         println!(
@@ -839,5 +824,63 @@ mod tests {
         let result = resolve_snapshot_selector(&entries, "2026090");
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("ambiguous"));
+    }
+
+    // --- resolve_save_by_game tests ---
+
+    use waystone_core::model::{Confidence, GameRef, NormalizedSave, SaveId, SaveKind, SystemId};
+
+    fn make_save(key: &str) -> NormalizedSave {
+        NormalizedSave {
+            id: SaveId {
+                source: "test".into(),
+                system: SystemId::Switch,
+                game: GameRef {
+                    key: key.to_string(),
+                    display_name: key.to_string(),
+                    confidence: Confidence::Strong,
+                    title_id: None,
+                    serial: None,
+                    rom_crc: None,
+                },
+                slot: "main".into(),
+                kind: SaveKind::Native,
+            },
+            group_key: format!("switch/{}/main", key),
+            portable: false,
+            mtime: "2026-01-01T00:00:00Z".into(),
+            files: vec![],
+        }
+    }
+
+    #[test]
+    fn resolve_save_by_game_single_save_no_game_arg() {
+        let saves = vec![make_save("zelda")];
+        let result = resolve_save_by_game(&saves, &None).unwrap();
+        assert_eq!(result.id.game.key, "zelda");
+    }
+
+    #[test]
+    fn resolve_save_by_game_multi_save_matching_key() {
+        let saves = vec![make_save("zelda"), make_save("mario")];
+        let result = resolve_save_by_game(&saves, &Some("mario".to_string())).unwrap();
+        assert_eq!(result.id.game.key, "mario");
+    }
+
+    #[test]
+    fn resolve_save_by_game_multi_save_missing_key() {
+        let saves = vec![make_save("zelda"), make_save("mario")];
+        let err = resolve_save_by_game(&saves, &Some("sonic".to_string()))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not found"), "got: {err}");
+        assert!(err.contains("zelda"), "got: {err}");
+    }
+
+    #[test]
+    fn resolve_save_by_game_multi_save_no_game_arg() {
+        let saves = vec![make_save("zelda"), make_save("mario")];
+        let err = resolve_save_by_game(&saves, &None).unwrap_err().to_string();
+        assert!(err.contains("use --game"), "got: {err}");
     }
 }
