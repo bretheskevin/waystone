@@ -35,6 +35,7 @@ else
 SOURCES		:=	source source/ui ../shell-common
 EXCLUDES	:=	source/main.cpp ../shell-common/test_wsconfig.cpp
 ROMFS_ASSETS	:=	romfs-assets
+BOREALIS_PATCH	:=	borealis-patch
 # Path to the borealis repo root (relative to TOPDIR = switch/).
 BOREALIS_PATH	:=	lib/borealis
 # Compiled deko3d shaders will be written to $(ROMFS)/$(OUT_SHADERS)/ at build time.
@@ -168,11 +169,11 @@ ifneq ($(strip $(ROMFS)),)
 	export NROFLAGS += --romfsdir=$(CURDIR)/$(ROMFS)
 endif
 
-.PHONY: $(BUILD) clean all romfs-assets
+.PHONY: $(BUILD) clean all romfs-assets $(BOREALIS_PATCH)
 
 #---------------------------------------------------------------------------------
 # romfs-assets is a prereq only in GUI mode; in CONSOLE=1 the var expands to empty.
-all: $(ROMFS_ASSETS) $(ROMFS_TARGETS) | $(BUILD)
+all: $(ROMFS_ASSETS) $(ROMFS_TARGETS) $(BOREALIS_PATCH) | $(BUILD)
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
 
 $(BUILD):
@@ -185,6 +186,17 @@ ifneq ($(CONSOLE),1)
 romfs-assets:
 	@cp -R $(BOREALIS_RESOURCES)/. $(ROMFS)/
 	@rm -f $(ROMFS)/.gitignore
+
+# Apply tint patch to borealis before any borealis TU is compiled.
+# Idempotent: skips if already applied; fails loudly when patch is incompatible.
+# operator[] override replaces insert so apply_waystone_tint() overrides take effect.
+borealis-patch:
+	@if git -C lib/borealis apply --check $(TOPDIR)/patches/borealis-theme-tint.patch 2>/dev/null; then \
+	  git -C lib/borealis apply $(TOPDIR)/patches/borealis-theme-tint.patch; \
+	elif ! git -C lib/borealis apply --check --reverse $(TOPDIR)/patches/borealis-theme-tint.patch 2>/dev/null; then \
+	  echo "ERROR: patches/borealis-theme-tint.patch cannot apply -- rebase on current borealis" >&2; \
+	  exit 1; \
+	fi
 endif
 
 # deko3d shader compilation: .glsl → .dksh via uam (present in devkita64 base image).

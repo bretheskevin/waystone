@@ -1,0 +1,13 @@
+diff --git a/library/lib/core/theme.cpp b/library/lib/core/theme.cpp
+index 8ac0bfc..8000f00 100644
+--- a/library/lib/core/theme.cpp
++++ b/library/lib/core/theme.cpp
+@@ -119,7 +119,7 @@ ThemeValues::ThemeValues(std::initializer_list<std::pair<std::string, NVGcolor>>
+ 
+ void ThemeValues::addColor(std::string name, NVGcolor color)
+ {
+-    this->values.insert(std::make_pair(name, color));
++    this->values[name] = color;
+ }
+ 
+ NVGcolor ThemeValues::getColor(std::string name)
