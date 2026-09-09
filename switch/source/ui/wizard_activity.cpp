@@ -1,5 +1,6 @@
 #include "wizard_activity.h"
 #include "session.h"
+#include "swkbd_util.h"
 
 static NVGcolor footer_hint_color() { return nvgRGB(0x71, 0x71, 0x7A); }
 
@@ -16,7 +17,7 @@ static std::string build_hint_text(const std::string& rb_label) {
          + "   \xc2\xb7   \xEE\x82\xA4 Back   \xc2\xb7   \xEE\x82\xB5 Exit";
 }
 
-WizardActivity::WizardActivity(size_t num_steps) : values_(num_steps) {}
+WizardActivity::WizardActivity(size_t num_values) : values_(num_values) {}
 
 WizardActivity::~WizardActivity() {
     if (refresh_pump_) {
@@ -39,7 +40,8 @@ brls::View* WizardActivity::createContentView() {
     content_box_ = new brls::Box(brls::Axis::COLUMN);
     content_box_->setPadding(40.0f);
 
-    renderer_ = new WizardRenderer(content_box_, get_steps());
+    steps_    = get_steps();
+    renderer_ = new WizardRenderer(content_box_, steps_);
 
     frame->setContentView(content_box_);
 
@@ -62,15 +64,11 @@ brls::View* WizardActivity::createContentView() {
 }
 
 void WizardActivity::onContentAvailable() {
-    refresh();
+    refresh();  // synchronous: not inside an action dispatch, safe for frame 1
 
     refresh_pump_ = new RefreshPump(this);
     refresh_pump_->start();
 
-    registerAction("Edit", brls::BUTTON_A, [this](brls::View*) {
-        edit_current_field();
-        return true;
-    });
     registerAction("Next", brls::BUTTON_RB, [this](brls::View*) {
         go_next();
         return true;
@@ -92,22 +90,54 @@ void WizardActivity::schedule_refresh() {
     refresh_pending_ = true;
 }
 
+void WizardActivity::reload_steps() {
+    steps_    = get_steps();
+    delete renderer_;
+    renderer_ = new WizardRenderer(content_box_, steps_);
+    step_changed_ = false;
+}
+
+void WizardActivity::edit_field(const WizardFieldDef& f) {
+    std::string result = swkbd_prompt(f.label.c_str(), values_[f.value_index], f.is_secret);
+    if (!result.empty() || !f.is_secret) {
+        if (f.is_secret) {
+            zeroize_string(values_[f.value_index]);
+            values_[f.value_index] = result;
+            zeroize_string(result);
+        } else {
+            values_[f.value_index] = std::move(result);
+        }
+    } else {
+        zeroize_string(result);
+    }
+    error_.clear();
+    schedule_refresh();
+}
+
 void WizardActivity::refresh() {
-    std::string action = (current_step_ == values_.size() - 1) ? finish_label() : "Next";
+    bool is_last = (current_step_ == steps_.size() - 1);
+    std::string action = is_last ? finish_label() : "Next";
 
-    bool had_content = !content_box_->getChildren().empty();
-    if (had_content)
-        brls::Application::giveFocus(nullptr);
+    WizardTransition trans = WizardTransition::NONE;
+    if (step_changed_) {
+        trans = go_forward_ ? WizardTransition::FORWARD : WizardTransition::BACK;
+        step_changed_ = false;
+    }
 
-    renderer_->rebuild(current_step_, values_, error_, [this]{ edit_current_field(); });
+    std::string flabel = is_last ? action : std::string{};
+    auto        fcb    = is_last ? std::function<void()>([this]{ go_next(); })
+                                 : std::function<void()>{};
+
+    renderer_->rebuild(current_step_, values_, error_,
+                       [this](const WizardFieldDef& f) { edit_field(f); },
+                       flabel, fcb, trans);
 
     if (hint_label_)
         hint_label_->setText(build_hint_text(action));
 
     if (auto* cv = getContentView()) {
         cv->updateActionHint(brls::BUTTON_RB, action);
-        if (had_content)
-            brls::Application::giveFocus(cv);
+        brls::Application::giveFocus(cv);
     }
 }
 
@@ -116,18 +146,20 @@ bool WizardActivity::validate_step(size_t /*step*/) { return true; }
 void WizardActivity::register_extra_actions() {}
 
 void WizardActivity::go_next() {
-    size_t n = values_.size();
+    size_t n = steps_.size();
     if (current_step_ < n - 1) {
         if (!validate_step(current_step_)) {
-            refresh();
+            schedule_refresh();
             return;
         }
         current_step_++;
         error_.clear();
-        refresh();
+        step_changed_ = true;
+        go_forward_   = true;
+        schedule_refresh();
     } else {
         if (!validate_step(current_step_)) {
-            refresh();
+            schedule_refresh();
             return;
         }
         on_finish();
@@ -138,7 +170,9 @@ void WizardActivity::go_back() {
     if (current_step_ > 0) {
         current_step_--;
         error_.clear();
-        refresh();
+        step_changed_ = true;
+        go_forward_   = false;
+        schedule_refresh();
     } else {
         zeroize_secrets();
         brls::Application::popActivity();
