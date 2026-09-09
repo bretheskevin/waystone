@@ -77,6 +77,60 @@ fi
 echo "=== Capturing wizard: setup-welcome ==="
 capture "$WIZARD_OUT/setup-welcome.png" "$PREVIEW_DIR" "$WIZARD_BIN" setup-welcome
 
+# ---------------------------------------------------------------------------
+# 6. Transition filmstrip + GIF
+#    The binary auto-advances from step 0→1 after 4 s (with PREVIEW_SLOW_TRANSITION
+#    the animation lasts 2 s, giving time for mid-animation frame capture).
+#    Capture 6 frames: before, ~0%, ~20%, ~40%, ~60%, ~80%, then assemble GIF.
+# ---------------------------------------------------------------------------
+echo "=== Capturing transition filmstrip ==="
+mkdir -p "$WIZARD_OUT"
+cd "$PREVIEW_DIR"
+"$WIZARD_BIN" transition &
+TRANS_PID=$!
+
+# Wait for borealis to initialise (~2 s) then stay at welcome step until t=4s timer fires
+sleep 3
+import -display "$DISPLAY" -window root "$WIZARD_OUT/transition-f0.png"  # before (welcome)
+echo "  frame 0 (before)"
+
+# Timer fires at ~4s from binary start → ~5s from script start of this section
+# Wait until ~5s → animation starts, capture mid-animation frames
+sleep 2
+import -display "$DISPLAY" -window root "$WIZARD_OUT/transition-f1.png"  # ~0%
+echo "  frame 1 (~0%)"
+sleep 0.4
+import -display "$DISPLAY" -window root "$WIZARD_OUT/transition-f2.png"  # ~20%
+echo "  frame 2 (~20%)"
+sleep 0.4
+import -display "$DISPLAY" -window root "$WIZARD_OUT/transition-f3.png"  # ~40%
+echo "  frame 3 (~40%)"
+sleep 0.4
+import -display "$DISPLAY" -window root "$WIZARD_OUT/transition-f4.png"  # ~60%
+echo "  frame 4 (~60%)"
+sleep 0.4
+import -display "$DISPLAY" -window root "$WIZARD_OUT/transition-f5.png"  # ~80%+
+echo "  frame 5 (~80%+)"
+
+kill "$TRANS_PID" 2>/dev/null || true
+wait "$TRANS_PID" 2>/dev/null || true
+cd /
+
+# Assemble filmstrip frames into an animated GIF (40 centiseconds = 400 ms per frame)
+if command -v convert >/dev/null 2>&1; then
+    convert -delay 40 -loop 0 \
+        "$WIZARD_OUT/transition-f0.png" \
+        "$WIZARD_OUT/transition-f1.png" \
+        "$WIZARD_OUT/transition-f2.png" \
+        "$WIZARD_OUT/transition-f3.png" \
+        "$WIZARD_OUT/transition-f4.png" \
+        "$WIZARD_OUT/transition-f5.png" \
+        "$WIZARD_OUT/transition.gif"
+    echo "  GIF assembled: $WIZARD_OUT/transition.gif"
+else
+    echo "  WARNING: convert not found — only filmstrip PNGs produced" >&2
+fi
+
 echo "=== Capturing wizard: setup-field (Server URL step) ==="
 capture "$WIZARD_OUT/setup-field.png" "$PREVIEW_DIR" "$WIZARD_BIN" setup-field
 

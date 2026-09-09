@@ -14,7 +14,7 @@ class WizardActivity : public brls::Activity {
     void        onContentAvailable() override;
 
   protected:
-    explicit WizardActivity(size_t num_steps);
+    explicit WizardActivity(size_t num_values);
     ~WizardActivity() override;
 
     brls::Box*               content_box_  = nullptr;
@@ -26,9 +26,11 @@ class WizardActivity : public brls::Activity {
 
     void refresh();
     void schedule_refresh();
+    void reload_steps();
     void go_next();
     void go_back();
     void zeroize_secrets();
+    void edit_field(const WizardFieldDef& f);
 
     virtual std::vector<WizardStepDef> get_steps()      const = 0;
     virtual std::string                finish_label()    const = 0;
@@ -36,9 +38,10 @@ class WizardActivity : public brls::Activity {
     virtual bool                       validate_step(size_t step);
     virtual void                       on_finish()             = 0;
     virtual void                       register_extra_actions();
-    virtual void                       edit_current_field()    = 0;
 
   private:
+    std::vector<WizardStepDef> steps_;
+
     // Defers a rebuild by one borealis frame so that action callbacks
     // (BUTTON_A on the focused Button) return before rebuild() deletes
     // that Button — avoiding the use-after-free Data Abort on hardware.
@@ -58,4 +61,6 @@ class WizardActivity : public brls::Activity {
 
     bool         refresh_pending_ = false;
     RefreshPump* refresh_pump_    = nullptr;
+    bool         step_changed_    = false;
+    bool         go_forward_      = true;
 };

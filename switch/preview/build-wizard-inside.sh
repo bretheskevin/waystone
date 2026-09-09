@@ -58,6 +58,7 @@ CXXFLAGS=(
     -DYG_ENABLE_EVENTS
     -D__GLFW__
     "-DBRLS_RESOURCES=\"./resources/\""
+    -DPREVIEW_SLOW_TRANSITION
     -O2
     # Silence all warnings — vendored borealis code is noisy
     -w

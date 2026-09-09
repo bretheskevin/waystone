@@ -16,7 +16,6 @@ class UnlockActivity : public WizardActivity {
     bool                       validate_step(size_t step)       override;
     void                       on_finish()                      override;
     void                       register_extra_actions()         override;
-    void                       edit_current_field()             override;
 
   private:
     Session*       session_;
@@ -24,9 +23,9 @@ class UnlockActivity : public WizardActivity {
     size_t         keys_len_;
     bool           recovery_mode_ = false;
 
-    static const size_t STEP_PASSPHRASE = 0;
-    static const size_t STEP_PASSWORD   = 1;
-    static const size_t NUM_STEPS       = 2;
+    static const size_t FIELD_PASSPHRASE = 0;
+    static const size_t FIELD_PASSWORD   = 1;
+    static const size_t NUM_VALUES       = 2;
 
     void do_unlock();
 };

@@ -56,7 +56,7 @@ endif
 #---------------------------------------------------------------------------------
 ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 
-CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
+CFLAGS	:=	-g -Wall -O2 -ffunction-sections -fno-plt \
 			$(ARCH) $(DEFINES)
 
 CFLAGS	+=	$(INCLUDE) -D__SWITCH__
@@ -73,7 +73,10 @@ CXXFLAGS	:= $(CFLAGS) -std=c++17 -Wno-volatile -include optional -include varian
 endif
 
 ASFLAGS	:=	-g $(ARCH)
-LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
+# -fno-plt + -Bsymbolic: Switch NRO loader ignores .rela.plt JUMP_SLOT relocations (no
+# dynamic linker); -fno-plt prevents PLT code generation, -Bsymbolic binds remaining
+# global refs locally — together they eliminate all JUMP_SLOT relocations at link time.
+LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map) -Wl,-Bsymbolic
 
 LIBS	:= -lwaystone_ffi $(shell $(DEVKITPRO)/portlibs/switch/bin/curl-config --libs) -lnx
 

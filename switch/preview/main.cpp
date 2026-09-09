@@ -6,6 +6,7 @@
  *   setup-field    — SetupActivity at step 1 (Server URL, pre-filled)
  *   unlock         — UnlockActivity at step 0 (Vault Passphrase)
  *   recovery       — RecoveryKeyActivity with canned recovery hex
+ *   transition     — SetupActivity auto-advancing from step 0→1 (for GIF capture)
  *
  * Set BOREALIS_THEME=DARK before running to force the dark theme.
  * The binary must be launched from switch/lib/borealis/ so that
@@ -33,11 +34,29 @@ public:
     // Call BEFORE pushActivity() — borealis calls onContentAvailable()
     // synchronously inside pushActivity(), so state must be set first.
     void preset_step1() {
-        values_[1]    = "https://dav.example.com";
+        values_[0]    = "https://dav.example.com";  // FIELD_SERVER = 0
         current_step_ = 1;
         error_.clear();
-        // refresh() will be called by onContentAvailable() inside pushActivity().
     }
+};
+
+// ---------------------------------------------------------------------------
+// Preview-only subclass for transition capture.
+// After borealis init, installs a one-shot timer to call go_next() so the
+// transition animation plays while the screenshot script captures frames.
+// ---------------------------------------------------------------------------
+class PreviewTransitionActivity : public SetupActivity {
+public:
+    explicit PreviewTransitionActivity(Session* s) : SetupActivity(s) {}
+
+    void onContentAvailable() override {
+        SetupActivity::onContentAvailable();
+        advance_timer_.setEndCallback([this](bool) { go_next(); });
+        advance_timer_.start(4000);  // fire 4 s after init
+    }
+
+private:
+    brls::Timer advance_timer_;
 };
 
 // ---------------------------------------------------------------------------
@@ -47,8 +66,6 @@ int main(int argc, char** argv)
 {
     const char* mode = (argc > 1) ? argv[1] : "setup-welcome";
 
-    // Apply Waystone brand tint before Application::init() so that the
-    // theme override takes effect immediately.
     apply_waystone_tint();
 
     brls::Logger::setLogLevel(brls::LogLevel::WARNING);
@@ -58,26 +75,19 @@ int main(int argc, char** argv)
         return 1;
     }
 
-    // Window title visible in the Xvfb WM_NAME (helpful for debugging).
     brls::Application::createWindow("Waystone Preview");
 
-    // Session is never used to make real network calls in this build;
-    // vault_helpers_stub and ws_ffi_stub provide no-op implementations.
     static Session session;
 
     if (strcmp(mode, "setup-welcome") == 0) {
         brls::Application::pushActivity(new SetupActivity(&session));
 
     } else if (strcmp(mode, "setup-field") == 0) {
-        // IMPORTANT: preset before pushActivity — borealis calls
-        // onContentAvailable() synchronously inside pushActivity().
         auto* act = new PreviewSetupActivity(&session);
         act->preset_step1();
         brls::Application::pushActivity(act);
 
     } else if (strcmp(mode, "unlock") == 0) {
-        // keys_data=nullptr, keys_len=0 — the unlock wizard doesn't try to
-        // decrypt until the user presses "Unlock" (which we never trigger).
         brls::Application::pushActivity(
             new UnlockActivity(&session, nullptr, 0));
 
@@ -88,12 +98,17 @@ int main(int argc, char** argv)
         brls::Application::pushActivity(
             new RecoveryKeyActivity(&session, hex, "/preview/recovery.txt"));
 
+    } else if (strcmp(mode, "transition") == 0) {
+        // Renders step 0 (Welcome) and auto-advances to step 1 after 4 s.
+        // With PREVIEW_SLOW_TRANSITION the animation lasts 2 s, giving the
+        // screenshot script time to capture mid-animation frames.
+        brls::Application::pushActivity(new PreviewTransitionActivity(&session));
+
     } else {
         brls::Logger::error("Unknown mode: %s", mode);
         return 1;
     }
 
-    // Run until the process is killed by the screenshot harness.
     while (brls::Application::mainLoop())
         ;
 
