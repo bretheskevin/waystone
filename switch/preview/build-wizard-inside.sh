@@ -191,19 +191,28 @@ g++ "${OBJS[@]}" \
 echo "=== Wizard preview binary: $OUT/waystone_preview ($(du -sh "$OUT/waystone_preview" | cut -f1)) ==="
 
 # ---------------------------------------------------------------------------
-# Install the preview controller-glyph font so borealis GLFW finds it.
-# On desktop, glfw_font.cpp looks for BRLS_ASSET("User-Switch-Icons.ttf")
-# which resolves to ./resources/User-Switch-Icons.ttf (run dir = borealis/).
-# The font maps NintendoExt PUA codepoints (U+E0A0-U+E0B6) to recognisable
-# button shapes and is registered BEFORE Material Icons in the fallback chain.
+# Assemble a preview-only resources directory so borealis GLFW finds the fonts
+# WITHOUT polluting switch/lib/borealis/resources/ (which feeds the shipped .nro).
+#
+# Strategy: copy borealis's own resources into switch/preview/resources/, then
+# add the two preview-only fonts there.  run-headless-inner.sh runs the wizard
+# binary from switch/preview/ so BRLS_RESOURCES="./resources/" resolves to
+# switch/preview/resources/ and never touches switch/lib/borealis/resources/.
+#
 # Generator: switch/preview/fonts/gen_from_svg.py (SVGs from Figma community pack, preview-only)
 # ---------------------------------------------------------------------------
-# Install the controller-glyph font at the NintendoExt PUA codepoints.
+PREVIEW_RESOURCES=/work/switch/preview/resources
+
+echo "=== Assembling preview resources dir: $PREVIEW_RESOURCES ==="
+mkdir -p "$PREVIEW_RESOURCES"
+# Seed with borealis resources (themes, shaders, inter fonts, material icons, …)
+cp -rT /work/switch/lib/borealis/resources/ "$PREVIEW_RESOURCES/"
+
+# Install the preview controller-glyph font (NintendoExt PUA U+E0A0-U+E0B6).
 FONT_SRC=/work/switch/preview/fonts/User-Switch-Icons.ttf
-FONT_DST=/work/switch/lib/borealis/resources/User-Switch-Icons.ttf
 if [ -f "$FONT_SRC" ]; then
-    cp "$FONT_SRC" "$FONT_DST"
-    echo "=== Installed preview glyph font: $(basename "$FONT_DST") ==="
+    cp "$FONT_SRC" "$PREVIEW_RESOURCES/User-Switch-Icons.ttf"
+    echo "=== Installed preview glyph font into preview resources ==="
 else
     echo "WARNING: $FONT_SRC not found -- button glyphs will not render in preview" >&2
 fi
@@ -212,10 +221,9 @@ fi
 # Without this, FONT_REGULAR (Inter-Switch.ttf) would render Inter's own PUA
 # glyphs at those codepoints BEFORE the FONT_SWITCH_ICONS fallback fires.
 REG_SRC=/work/switch/preview/fonts/User-Regular.ttf
-REG_DST=/work/switch/lib/borealis/resources/User-Regular.ttf
 if [ -f "$REG_SRC" ]; then
-    cp "$REG_SRC" "$REG_DST"
-    echo "=== Installed stripped Inter (User-Regular.ttf) ==="
+    cp "$REG_SRC" "$PREVIEW_RESOURCES/User-Regular.ttf"
+    echo "=== Installed stripped Inter (User-Regular.ttf) into preview resources ==="
 else
     echo "WARNING: $REG_SRC not found -- button glyph fallback will not work" >&2
 fi

@@ -41,9 +41,9 @@ LSB       =   50   # notional left side bearing
 #                              font_y = FONT_CY − (svg_y − 16) × SCALE  ← flip Y
 SVG_CX  = 16.0
 SVG_CY  = 16.0
-SCALE   = 30.0        # 1 SVG px → 30 font units; icon slightly above cap-height for legibility
+SCALE   = 34.0        # 1 SVG px → 34 font units; r=12px → 408 fu radius; up from 30 for better legibility
 FONT_CX = 450         # horizontal centre of the advance width
-FONT_CY = 360         # circle bottom lands at baseline; top at 720 (comfortably below ascender)
+FONT_CY = 375         # centre: bottom at -33 fu (above descender), top at 783 fu (below ascender=800)
 
 # ---------------------------------------------------------------------------
 # Glyph table  (codepoint, glyph-name, SVG button name)

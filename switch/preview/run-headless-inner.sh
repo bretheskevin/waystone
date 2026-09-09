@@ -14,6 +14,8 @@ set -euo pipefail
 DEMO_BIN=/work/switch/lib/borealis/build-preview/borealis_demo
 WIZARD_BIN=/work/switch/preview/build-wizard/waystone_preview
 BOREALIS_DIR=/work/switch/lib/borealis
+# Wizard runs from here so ./resources/ resolves to switch/preview/resources/ (preview-only).
+PREVIEW_DIR=/work/switch/preview
 DEMO_OUT=/work/switch/preview/demo.png
 WIZARD_OUT=/work/switch/preview/out
 
@@ -69,18 +71,20 @@ fi
 
 # ---------------------------------------------------------------------------
 # 2-5. Waystone wizard screens (dark theme + Waystone tint)
+# Binary runs from PREVIEW_DIR so ./resources/ → switch/preview/resources/
+# (preview-only; never the shared borealis resources that feed the .nro).
 # ---------------------------------------------------------------------------
 echo "=== Capturing wizard: setup-welcome ==="
-capture "$WIZARD_OUT/setup-welcome.png" "$BOREALIS_DIR" "$WIZARD_BIN" setup-welcome
+capture "$WIZARD_OUT/setup-welcome.png" "$PREVIEW_DIR" "$WIZARD_BIN" setup-welcome
 
 echo "=== Capturing wizard: setup-field (Server URL step) ==="
-capture "$WIZARD_OUT/setup-field.png" "$BOREALIS_DIR" "$WIZARD_BIN" setup-field
+capture "$WIZARD_OUT/setup-field.png" "$PREVIEW_DIR" "$WIZARD_BIN" setup-field
 
 echo "=== Capturing wizard: unlock ==="
-capture "$WIZARD_OUT/unlock.png" "$BOREALIS_DIR" "$WIZARD_BIN" unlock
+capture "$WIZARD_OUT/unlock.png" "$PREVIEW_DIR" "$WIZARD_BIN" unlock
 
 echo "=== Capturing wizard: recovery key ==="
-capture "$WIZARD_OUT/recovery.png" "$BOREALIS_DIR" "$WIZARD_BIN" recovery
+capture "$WIZARD_OUT/recovery.png" "$PREVIEW_DIR" "$WIZARD_BIN" recovery
 
 # ---------------------------------------------------------------------------
 # Cleanup
