@@ -36,7 +36,7 @@ void SetupActivity::edit_current_field() {
         zeroize_string(result);
     }
     error_.clear();
-    refresh();
+    schedule_refresh();
 }
 
 bool SetupActivity::validate_step(size_t step) {

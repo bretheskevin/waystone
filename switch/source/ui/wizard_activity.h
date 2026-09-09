@@ -25,6 +25,7 @@ class WizardActivity : public brls::Activity {
     std::string              error_;
 
     void refresh();
+    void schedule_refresh();
     void go_next();
     void go_back();
     void zeroize_secrets();
@@ -36,4 +37,25 @@ class WizardActivity : public brls::Activity {
     virtual void                       on_finish()             = 0;
     virtual void                       register_extra_actions();
     virtual void                       edit_current_field()    = 0;
+
+  private:
+    // Defers a rebuild by one borealis frame so that action callbacks
+    // (BUTTON_A on the focused Button) return before rebuild() deletes
+    // that Button — avoiding the use-after-free Data Abort on hardware.
+    class RefreshPump : public brls::RepeatingTask {
+      public:
+        explicit RefreshPump(WizardActivity* owner)
+            : brls::RepeatingTask(16), owner_(owner) {}
+        void run() override {
+            if (owner_->refresh_pending_) {
+                owner_->refresh_pending_ = false;
+                owner_->refresh();
+            }
+        }
+      private:
+        WizardActivity* owner_;
+    };
+
+    bool         refresh_pending_ = false;
+    RefreshPump* refresh_pump_    = nullptr;
 };

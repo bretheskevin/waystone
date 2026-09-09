@@ -19,6 +19,11 @@ static std::string build_hint_text(const std::string& rb_label) {
 WizardActivity::WizardActivity(size_t num_steps) : values_(num_steps) {}
 
 WizardActivity::~WizardActivity() {
+    if (refresh_pump_) {
+        refresh_pump_->stop();
+        delete refresh_pump_;
+        refresh_pump_ = nullptr;
+    }
     zeroize_secrets();
     delete renderer_;
 }
@@ -59,6 +64,9 @@ brls::View* WizardActivity::createContentView() {
 void WizardActivity::onContentAvailable() {
     refresh();
 
+    refresh_pump_ = new RefreshPump(this);
+    refresh_pump_->start();
+
     registerAction("Edit", brls::BUTTON_A, [this](brls::View*) {
         edit_current_field();
         return true;
@@ -78,6 +86,10 @@ void WizardActivity::onContentAvailable() {
     });
 
     register_extra_actions();
+}
+
+void WizardActivity::schedule_refresh() {
+    refresh_pending_ = true;
 }
 
 void WizardActivity::refresh() {

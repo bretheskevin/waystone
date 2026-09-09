@@ -67,7 +67,7 @@ void UnlockActivity::edit_current_field() {
         zeroize_string(result);
     }
     error_.clear();
-    refresh();
+    schedule_refresh();
 }
 
 void UnlockActivity::do_unlock() {
