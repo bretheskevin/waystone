@@ -189,3 +189,33 @@ g++ "${OBJS[@]}" \
     -o "$OUT/waystone_preview"
 
 echo "=== Wizard preview binary: $OUT/waystone_preview ($(du -sh "$OUT/waystone_preview" | cut -f1)) ==="
+
+# ---------------------------------------------------------------------------
+# Install the preview controller-glyph font so borealis GLFW finds it.
+# On desktop, glfw_font.cpp looks for BRLS_ASSET("User-Switch-Icons.ttf")
+# which resolves to ./resources/User-Switch-Icons.ttf (run dir = borealis/).
+# The font maps NintendoExt PUA codepoints (U+E0A0-U+E0B6) to recognisable
+# button shapes and is registered BEFORE Material Icons in the fallback chain.
+# Generator: switch/preview/fonts/gen_switch_icons.py (CC0 1.0)
+# ---------------------------------------------------------------------------
+# Install the controller-glyph font at the NintendoExt PUA codepoints.
+FONT_SRC=/work/switch/preview/fonts/User-Switch-Icons.ttf
+FONT_DST=/work/switch/lib/borealis/resources/User-Switch-Icons.ttf
+if [ -f "$FONT_SRC" ]; then
+    cp "$FONT_SRC" "$FONT_DST"
+    echo "=== Installed preview glyph font: $(basename "$FONT_DST") ==="
+else
+    echo "WARNING: $FONT_SRC not found -- button glyphs will not render in preview" >&2
+fi
+
+# Install Inter-Switch with NintendoExt PUA range stripped as User-Regular.ttf.
+# Without this, FONT_REGULAR (Inter-Switch.ttf) would render Inter's own PUA
+# glyphs at those codepoints BEFORE the FONT_SWITCH_ICONS fallback fires.
+REG_SRC=/work/switch/preview/fonts/User-Regular.ttf
+REG_DST=/work/switch/lib/borealis/resources/User-Regular.ttf
+if [ -f "$REG_SRC" ]; then
+    cp "$REG_SRC" "$REG_DST"
+    echo "=== Installed stripped Inter (User-Regular.ttf) ==="
+else
+    echo "WARNING: $REG_SRC not found -- button glyph fallback will not work" >&2
+fi

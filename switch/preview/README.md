@@ -28,3 +28,39 @@ force-include and a small `stubs/filestream.c` for a libretro-common symbol bore
 meson build doesn't include.
 
 Only for iterating on the GUI — the stubs are NOT part of the shipped `.nro` build.
+
+## Controller-glyph font (`fonts/`)
+
+The borealis GLFW backend (desktop builds) looks for
+`resources/User-Switch-Icons.ttf` in the run directory to populate the
+`FONT_SWITCH_ICONS` slot — the fallback registered **before** Material Icons.
+
+`fonts/User-Switch-Icons.ttf` is a generated preview font covering the ten
+NintendoExt codepoints used by the wizard footer:
+
+| Codepoint | Button  | Glyph shape  |
+|-----------|---------|--------------|
+| U+E0A0    | A       | circle ring  |
+| U+E0A1    | B       | circle ring  |
+| U+E0A2    | X       | circle ring  |
+| U+E0A3    | Y       | circle ring  |
+| U+E0A4    | L       | rectangle    |
+| U+E0A5    | R       | rectangle    |
+| U+E0A6    | ZL      | rectangle    |
+| U+E0A7    | ZR      | rectangle    |
+| U+E0B5    | Plus +  | + crosshair  |
+| U+E0B6    | Minus − | − bar        |
+
+**License:** CC0 1.0 Universal (no rights reserved).  
+This font is NOT Nintendo's proprietary font. It is a purpose-built preview stub.
+
+**Regenerate with:**
+```sh
+python3 switch/preview/fonts/gen_switch_icons.py
+```
+The build script (`build-wizard-inside.sh`) copies the font into
+`switch/lib/borealis/resources/` automatically at build time.
+
+### Codepoint source
+Authoritative codepoints from `WerWolv/libtesla` (MIT-licensed Switch overlay
+framework, confirmed on hardware). Note: Plus is U+E0B5, **not** U+E0B8.
