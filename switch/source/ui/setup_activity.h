@@ -11,6 +11,7 @@ class SetupActivity : public WizardActivity {
   protected:
     std::vector<WizardStepDef> get_steps()            const override;
     std::string                finish_label()          const override;
+    std::string                wizard_title()          const override;
     bool                       validate_step(size_t step) override;
     void                       on_finish()                  override;
     void                       edit_current_field()         override;

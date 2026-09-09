@@ -21,6 +21,8 @@ std::vector<WizardStepDef> SetupActivity::get_steps() const { return setup_steps
 
 std::string SetupActivity::finish_label() const { return "Create Vault"; }
 
+std::string SetupActivity::wizard_title() const { return "Waystone Setup"; }
+
 void SetupActivity::edit_current_field() {
     if (current_step_ == STEP_WELCOME) return;
 

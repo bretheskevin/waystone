@@ -30,6 +30,7 @@ class WizardActivity : public brls::Activity {
 
     virtual std::vector<WizardStepDef> get_steps()      const = 0;
     virtual std::string                finish_label()    const = 0;
+    virtual std::string                wizard_title()    const { return ""; }
     virtual bool                       validate_step(size_t step);
     virtual void                       on_finish()             = 0;
     virtual void                       register_extra_actions();

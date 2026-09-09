@@ -9,6 +9,9 @@ WizardRenderer::WizardRenderer(brls::Box* parent, const std::vector<WizardStepDe
     : parent_(parent), steps_(steps) {}
 
 void WizardRenderer::clear_parent() {
+    // Prevent dangling currentFocus when focused child views are deleted.
+    if (!parent_->getChildren().empty())
+        brls::Application::giveFocus(nullptr);
     auto& ch = parent_->getChildren();
     while (!ch.empty())
         parent_->removeView(ch.front());
@@ -31,46 +34,43 @@ brls::Box* WizardRenderer::build_progress_dots(size_t current, size_t total) {
 
 void WizardRenderer::rebuild(size_t current_step,
                              const std::vector<std::string>& values,
-                             const std::string& error) {
+                             const std::string& error,
+                             const std::function<void()>& edit_fn) {
     clear_parent();
 
-    parent_->addView(build_progress_dots(current_step, steps_.size()));
-
     const auto& step = steps_[current_step];
+
+    // Step content — grows to fill the available space.
+    auto* top = new brls::Box(brls::Axis::COLUMN);
+    top->setGrow(1.0f);
+
+    top->addView(build_progress_dots(current_step, steps_.size()));
 
     auto* title = new brls::Label();
     title->setText(step.label);
     title->setFontSize(32.0f);
     title->setSingleLine(true);
-    title->setMargins(16.0f, 0.0f, 8.0f, 0.0f);
-    parent_->addView(title);
+    title->setMargins(16.0f, 0.0f, 12.0f, 0.0f);
+    top->addView(title);
 
+    // Value field: bordered Button gives a clear "pressable" affordance.
     if (current_step < values.size()) {
         const std::string& raw = values[current_step];
         if (!raw.empty() || !step.placeholder.empty()) {
-            auto* val_label = new brls::Label();
+            auto* btn = new brls::Button();
+            btn->setStyle(&brls::BUTTONSTYLE_BORDERED);
             if (raw.empty()) {
-                val_label->setText(step.placeholder);
-                val_label->setTextColor(hint_color());
+                btn->setText(step.placeholder);
             } else if (step.is_secret) {
-                val_label->setText(std::string(raw.size(), '*'));
+                btn->setText(std::string(raw.size(), '*'));
             } else {
-                val_label->setText(raw);
+                btn->setText(raw);
             }
-            val_label->setFontSize(24.0f);
-            val_label->setSingleLine(true);
-            val_label->setMargins(4.0f, 0.0f, 4.0f, 0.0f);
-            parent_->addView(val_label);
+            btn->setMargins(0.0f, 0.0f, 8.0f, 0.0f);
+            if (edit_fn)
+                btn->registerClickAction([edit_fn](brls::View*) { edit_fn(); return true; });
+            top->addView(btn);
         }
-    }
-
-    if (!step.hint.empty()) {
-        auto* hint = new brls::Label();
-        hint->setText(step.hint);
-        hint->setFontSize(18.0f);
-        hint->setTextColor(hint_color());
-        hint->setMargins(4.0f, 0.0f, 8.0f, 0.0f);
-        parent_->addView(hint);
     }
 
     if (!error.empty()) {
@@ -79,6 +79,18 @@ void WizardRenderer::rebuild(size_t current_step,
         err->setFontSize(18.0f);
         err->setTextColor(error_color());
         err->setMargins(4.0f, 0.0f, 8.0f, 0.0f);
-        parent_->addView(err);
+        top->addView(err);
+    }
+
+    parent_->addView(top);
+
+    // Step hint anchored to the bottom of the content area (outside the growing top box).
+    if (!step.hint.empty()) {
+        auto* hint = new brls::Label();
+        hint->setText(step.hint);
+        hint->setFontSize(18.0f);
+        hint->setTextColor(hint_color());
+        hint->setMargins(8.0f, 0.0f, 0.0f, 0.0f);
+        parent_->addView(hint);
     }
 }

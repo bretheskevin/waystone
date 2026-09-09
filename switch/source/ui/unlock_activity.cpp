@@ -25,6 +25,8 @@ std::vector<WizardStepDef> UnlockActivity::get_steps() const {
 
 std::string UnlockActivity::finish_label() const { return "Unlock"; }
 
+std::string UnlockActivity::wizard_title() const { return "Unlock Vault"; }
+
 bool UnlockActivity::validate_step(size_t step) {
     error_.clear();
     if (step == STEP_PASSPHRASE && values_[STEP_PASSPHRASE].empty()) {
