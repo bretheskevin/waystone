@@ -1,15 +1,30 @@
 #pragma once
-#include <borealis.hpp>
+#include "wizard_activity.h"
 #include "session.h"
+#include <string>
+#include <vector>
 
-class SetupActivity : public brls::Activity {
+class SetupActivity : public WizardActivity {
   public:
     explicit SetupActivity(Session* session);
-    ~SetupActivity() override;
-    brls::View* createContentView() override;
-    void onContentAvailable() override;
+
+  protected:
+    std::vector<WizardStepDef> get_steps()            const override;
+    std::string                finish_label()          const override;
+    bool                       validate_step(size_t step) override;
+    void                       on_finish()                  override;
+    void                       edit_current_field()         override;
+
   private:
     Session* session_;
-    brls::Label* status_label_ = nullptr;
-    void run_setup();
+
+    static const size_t STEP_WELCOME    = 0;
+    static const size_t STEP_SERVER     = 1;
+    static const size_t STEP_USERNAME   = 2;
+    static const size_t STEP_PASSWORD   = 3;
+    static const size_t STEP_PASSPHRASE = 4;
+    static const size_t STEP_CONFIRM    = 5;
+    static const size_t NUM_STEPS       = 6;
+
+    void do_create_vault();
 };

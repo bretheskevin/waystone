@@ -110,6 +110,15 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   `CONSOLE=1`** modes; 3DS build unaffected; `waystone.h` unchanged; reviewed (two rounds, DRY + concurrency +
   secret-hygiene). **Not yet run on hardware.**
 
+- **Switch FIRST ON-HARDWARE RUN + guided onboarding wizard**: the borealis shell was run on a real
+  Switch for the first time (SD-card deploy via OpenMTP, full application mode) — it boots into the GUI and
+  swkbd works on-device. Driven by that testing, the first-run UX was redesigned from an auto-fire keyboard
+  sequence into a **step-by-step wizard** (Setup + Unlock): one field per step with progress dots, current
+  value (secrets masked), inline hint + validation, RB/LB navigation, controlled `swkbd` editing, and a
+  full-screen "save your recovery key" confirmation that can't be skipped. DRY via a shared `WizardActivity`
+  base + `WizardRenderer` + `vault_helpers`. Compile+link verified (GUI + `CONSOLE=1`); **on-device re-test of
+  the wizard in progress.**
+
 **Quality:** 103 tests pass (11 new checkpoint core tests + 3 checkpoint FFI tests), clippy clean.
 
 ### Adapter source references
