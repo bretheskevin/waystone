@@ -3,8 +3,17 @@
 
 static NVGcolor footer_hint_color() { return nvgRGB(0x71, 0x71, 0x7A); }
 
+// NintendoExt (PlSharedFontType_NintendoExt) private-use button glyph codepoints:
+//   U+E0A0  "\xEE\x82\xA0"  A button
+//   U+E0A5  "\xEE\x82\xA5"  R shoulder button (Switch nomenclature: R, not RB)
+//   U+E0A4  "\xEE\x82\xA4"  L shoulder button (Switch nomenclature: L, not LB)
+//   U+E0B5  "\xEE\x82\xB5"  Plus (+) button  [source: WerWolv/libtesla, confirmed NintendoExt]
+// On Switch hardware these render via the NintendoExt system font registered as
+// FONT_SWITCH_ICONS (fallback of FONT_REGULAR).  On desktop/preview the font is
+// absent (User-Switch-Icons.ttf not provided), so they appear as replacement boxes.
 static std::string build_hint_text(const std::string& rb_label) {
-    return "A  Edit   \xc2\xb7   RB  " + rb_label + "   \xc2\xb7   LB  Back   \xc2\xb7   +  Exit";
+    return "\xEE\x82\xA0 Edit   \xc2\xb7   \xEE\x82\xA5 " + rb_label
+         + "   \xc2\xb7   \xEE\x82\xA4 Back   \xc2\xb7   \xEE\x82\xB5 Exit";
 }
 
 WizardActivity::WizardActivity(size_t num_steps) : values_(num_steps) {}
