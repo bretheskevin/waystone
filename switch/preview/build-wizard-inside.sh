@@ -196,7 +196,7 @@ echo "=== Wizard preview binary: $OUT/waystone_preview ($(du -sh "$OUT/waystone_
 # which resolves to ./resources/User-Switch-Icons.ttf (run dir = borealis/).
 # The font maps NintendoExt PUA codepoints (U+E0A0-U+E0B6) to recognisable
 # button shapes and is registered BEFORE Material Icons in the fallback chain.
-# Generator: switch/preview/fonts/gen_switch_icons.py (CC0 1.0)
+# Generator: switch/preview/fonts/gen_from_svg.py (SVGs from Figma community pack, preview-only)
 # ---------------------------------------------------------------------------
 # Install the controller-glyph font at the NintendoExt PUA codepoints.
 FONT_SRC=/work/switch/preview/fonts/User-Switch-Icons.ttf

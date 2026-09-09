@@ -35,30 +35,45 @@ The borealis GLFW backend (desktop builds) looks for
 `resources/User-Switch-Icons.ttf` in the run directory to populate the
 `FONT_SWITCH_ICONS` slot — the fallback registered **before** Material Icons.
 
-`fonts/User-Switch-Icons.ttf` is a generated preview font covering the ten
-NintendoExt codepoints used by the wizard footer:
+`fonts/User-Switch-Icons.ttf` is generated from real Switch button artwork
+(see below). Each glyph = filled button body with the letter knocked out as a
+counter, so in the dark-themed footer the letter shows through as background.
 
-| Codepoint | Button  | Glyph shape  |
-|-----------|---------|--------------|
-| U+E0A0    | A       | circle ring  |
-| U+E0A1    | B       | circle ring  |
-| U+E0A2    | X       | circle ring  |
-| U+E0A3    | Y       | circle ring  |
-| U+E0A4    | L       | rectangle    |
-| U+E0A5    | R       | rectangle    |
-| U+E0A6    | ZL      | rectangle    |
-| U+E0A7    | ZR      | rectangle    |
-| U+E0B5    | Plus +  | + crosshair  |
-| U+E0B6    | Minus − | − bar        |
+| Codepoint | Button  | Shape                        |
+|-----------|---------|------------------------------|
+| U+E0A0    | A       | filled circle, A knocked out |
+| U+E0A1    | B       | filled circle, B knocked out |
+| U+E0A2    | X       | filled circle, X knocked out |
+| U+E0A3    | Y       | filled circle, Y knocked out |
+| U+E0A4    | L       | Switch L shoulder shape      |
+| U+E0A5    | R       | Switch R shoulder shape      |
+| U+E0A6    | ZL      | Switch ZL trigger shape      |
+| U+E0A7    | ZR      | Switch ZR trigger shape      |
+| U+E0B5    | Plus +  | filled circle, + knocked out |
+| U+E0B6    | Minus − | filled circle, − knocked out |
 
-**License:** CC0 1.0 Universal (no rights reserved).  
-This font is NOT Nintendo's proprietary font. It is a purpose-built preview stub.
+### Source artwork
 
-**Regenerate with:**
+Glyphs are derived from the Figma community pack
+**"Switch Button Icons (Essential pack)"** by Alvaro Polo Valdenebro:
+<https://www.figma.com/community/file/RYQbKWJa1nu4i9NiWbKEI2>
+
+The SVG sources live in `fonts/svg/` (one file per button).
+These icons are used **for developer preview only** — they are NOT compiled
+into the `.nro` or shipped in any distributed Waystone build. Figma community
+files are made available for personal/community use under the terms stated
+in the file; use of this artwork is limited to dev tooling in this repository.
+
+### Regenerate
+
 ```sh
-python3 switch/preview/fonts/gen_switch_icons.py
+/opt/homebrew/bin/python3 switch/preview/fonts/gen_from_svg.py
 ```
-The build script (`build-wizard-inside.sh`) copies the font into
+
+Requires: `fonttools` (already installed in Homebrew Python 3.14 on this machine).
+The original abstract-shape generator is kept at `fonts/gen_switch_icons.py` for
+reference (CC0 1.0). The build script (`build-wizard-inside.sh`) copies the
+pre-generated `User-Switch-Icons.ttf` into
 `switch/lib/borealis/resources/` automatically at build time.
 
 ### Codepoint source
