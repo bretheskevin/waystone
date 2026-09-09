@@ -18,6 +18,7 @@ class WizardActivity : public brls::Activity {
     ~WizardActivity() override;
 
     brls::Box*               content_box_  = nullptr;
+    brls::Label*             hint_label_   = nullptr;
     WizardRenderer*          renderer_     = nullptr;
     size_t                   current_step_ = 0;
     std::vector<std::string> values_;

@@ -3,6 +3,10 @@
 
 static NVGcolor footer_hint_color() { return nvgRGB(0x71, 0x71, 0x7A); }
 
+static std::string build_hint_text(const std::string& rb_label) {
+    return "A  Edit   \xc2\xb7   RB  " + rb_label + "   \xc2\xb7   LB  Back   \xc2\xb7   +  Exit";
+}
+
 WizardActivity::WizardActivity(size_t num_steps) : values_(num_steps) {}
 
 WizardActivity::~WizardActivity() {
@@ -26,18 +30,18 @@ brls::View* WizardActivity::createContentView() {
     frame->setContentView(content_box_);
 
     // AppletFrame children after setContentView: [header(0), content(1), footer(2)].
-    // Clear the debug-placeholder rectangles from the footer and add the exit hint.
+    // Clear the debug-placeholder rectangles from the footer and add the full hint bar.
     auto& af_ch = frame->getChildren();
     if (af_ch.size() >= 3) {
         auto* footer = static_cast<brls::Box*>(af_ch[2]);
         auto& fc = footer->getChildren();
         while (!fc.empty()) footer->removeView(fc.front());
 
-        auto* exit_hint = new brls::Label();
-        exit_hint->setText("  +  Exit");
-        exit_hint->setFontSize(18.0f);
-        exit_hint->setTextColor(footer_hint_color());
-        footer->addView(exit_hint);
+        hint_label_ = new brls::Label();
+        hint_label_->setText(build_hint_text("Next"));
+        hint_label_->setFontSize(18.0f);
+        hint_label_->setTextColor(footer_hint_color());
+        footer->addView(hint_label_);
     }
 
     return frame;
@@ -75,6 +79,9 @@ void WizardActivity::refresh() {
         brls::Application::giveFocus(nullptr);
 
     renderer_->rebuild(current_step_, values_, error_, [this]{ edit_current_field(); });
+
+    if (hint_label_)
+        hint_label_->setText(build_hint_text(action));
 
     if (auto* cv = getContentView()) {
         cv->updateActionHint(brls::BUTTON_RB, action);
