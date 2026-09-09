@@ -1,0 +1,4 @@
+# Generated preview artifacts — regenerate with build.sh + screenshot.sh
+out/
+demo.png
+build-preview/
