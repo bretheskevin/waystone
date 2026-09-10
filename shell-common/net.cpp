@@ -33,8 +33,15 @@ static void curl_apply_tls(CURL* c) {
     curl_easy_setopt(c, CURLOPT_CAINFO, "romfs:/cacert.pem");
 }
 
-static void set_auth(CURL* c, const WebDavCfg& cfg) {
+// Applies timeouts + TLS to every curl handle. Called by all verbs via set_auth.
+static void curl_apply_common(CURL* c) {
+    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 20L);
     curl_apply_tls(c);
+}
+
+static void set_auth(CURL* c, const WebDavCfg& cfg) {
+    curl_apply_common(c);
     if (cfg.user && cfg.pass) {
         std::string userpwd = std::string(cfg.user) + ":" + cfg.pass;
         curl_easy_setopt(c, CURLOPT_USERPWD, userpwd.c_str());

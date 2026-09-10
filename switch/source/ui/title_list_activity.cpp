@@ -2,6 +2,8 @@
 #include "settings_activity.h"
 #include "conflicts_activity.h"
 #include "conflict_controller.h"
+#include "no_internet_activity.h"
+#include "net_status.h"
 #include <cstdio>
 
 TitleListActivity::TitleListActivity(SyncController* ctrl, Session* session)
@@ -27,7 +29,7 @@ brls::View* TitleListActivity::createContentView() {
     sync_label->setText("Sync all");
     sync_label->setFontSize(24.0f);
     sync_label->setSingleLine(true);
-    sync_label->registerClickAction([this](brls::View*) { ctrl_->start(); return true; });
+    sync_label->registerClickAction([this](brls::View*) { start_sync_or_gate(); return true; });
     col->addView(sync_label);
     char buf[32];
     for (const auto& t : ctrl_->titles()) {
@@ -45,7 +47,7 @@ brls::View* TitleListActivity::createContentView() {
 void TitleListActivity::onContentAvailable() {
     poll_timer_.setCallback([this]() { status_label_->setText("Status: " + ctrl_->status()); });
     poll_timer_.start(200);
-    registerAction("Sync", brls::BUTTON_A, [this](brls::View*) { ctrl_->start(); return true; });
+    registerAction("Sync", brls::BUTTON_A, [this](brls::View*) { start_sync_or_gate(); return true; });
     registerAction("Conflicts", brls::BUTTON_X, [this](brls::View*) {
         auto titles = ctrl_->titles();
         auto* cc = new ConflictController(session_->vault, session_->uid, session_->device_id,
@@ -58,4 +60,15 @@ void TitleListActivity::onContentAvailable() {
         brls::Application::pushActivity(new SettingsActivity(session_));
         return true;
     });
+}
+
+void TitleListActivity::start_sync_or_gate() {
+    if (!network_available()) {
+        brls::Application::pushActivity(
+            new NoInternetActivity(NoInternetReason::NoNetwork, [this]() {
+                ctrl_->start();
+            }));
+        return;
+    }
+    ctrl_->start();
 }

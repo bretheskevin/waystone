@@ -12,12 +12,14 @@ extern "C" {
 }
 
 #include "net.h"
+#include "net_status.h"
 #include "saves.h"
 #include "wsconfig.h"
 #include "ui/session.h"
 #include "ui/theme_tint.h"
 #include "ui/setup_activity.h"
 #include "ui/unlock_activity.h"
+#include "ui/no_internet_activity.h"
 
 int main(int argc, char* argv[])
 {
@@ -45,37 +47,49 @@ int main(int argc, char* argv[])
         brls::Application::createWindow("Waystone");
         brls::Application::setGlobalQuit(true);
 
-        const char* keys_path = "sdmc:/waystone/keys.json";
-        FILE* kf = fopen(keys_path, "rb");
-        if (kf) {
-            fseek(kf, 0, SEEK_END);
-            long klen = ftell(kf);
-            fseek(kf, 0, SEEK_SET);
-            uint8_t* kbuf = nullptr;
-            if (klen > 0) {
-                kbuf = static_cast<uint8_t*>(malloc(static_cast<size_t>(klen)));
-                if (kbuf) {
-                    size_t got = fread(kbuf, 1, static_cast<size_t>(klen), kf);
-                    if (got != static_cast<size_t>(klen)) {
-                        free(kbuf);
-                        kbuf = nullptr;
-                        klen = 0;
+        uint8_t* kbuf = nullptr;
+
+        // Choose SetupActivity or UnlockActivity based on whether keys.json exists.
+        auto route_to_first_screen = [&]() {
+            const char* keys_path = "sdmc:/waystone/keys.json";
+            FILE* kf = fopen(keys_path, "rb");
+            if (kf) {
+                fseek(kf, 0, SEEK_END);
+                long klen = ftell(kf);
+                fseek(kf, 0, SEEK_SET);
+                if (klen > 0) {
+                    kbuf = static_cast<uint8_t*>(malloc(static_cast<size_t>(klen)));
+                    if (kbuf) {
+                        size_t got = fread(kbuf, 1, static_cast<size_t>(klen), kf);
+                        if (got != static_cast<size_t>(klen)) {
+                            free(kbuf);
+                            kbuf = nullptr;
+                            klen = 0;
+                        }
                     }
                 }
-            }
-            fclose(kf);
-            if (kbuf && klen > 0) {
-                brls::Application::pushActivity(
-                    new UnlockActivity(&session, kbuf, static_cast<size_t>(klen)));
+                fclose(kf);
+                if (kbuf && klen > 0) {
+                    brls::Application::pushActivity(
+                        new UnlockActivity(&session, kbuf, static_cast<size_t>(klen)));
+                } else {
+                    brls::Application::pushActivity(new SetupActivity(&session));
+                }
             } else {
                 brls::Application::pushActivity(new SetupActivity(&session));
             }
-            while (brls::Application::mainLoop()) {}
-            free(kbuf);
+        };
+
+        if (!network_available()) {
+            brls::Application::pushActivity(
+                new NoInternetActivity(NoInternetReason::NoNetwork,
+                                       route_to_first_screen));
         } else {
-            brls::Application::pushActivity(new SetupActivity(&session));
-            while (brls::Application::mainLoop()) {}
+            route_to_first_screen();
         }
+
+        while (brls::Application::mainLoop()) {}
+        free(kbuf);
     }
 
 cleanup:

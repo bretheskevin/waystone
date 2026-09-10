@@ -27,10 +27,11 @@ WAYSTONE_TARGET	?=	aarch64-nintendo-switch-freestanding
 #     Entry point: source/app_main.cpp.  source/main.cpp excluded.
 #   CONSOLE=1:             Console driver build — no borealis.
 #     Entry point: source/main.cpp.  source/app_main.cpp excluded.
+#     net_status.cpp is also excluded (nifm + UI layer, GUI-only).
 #
 ifeq ($(CONSOLE),1)
 SOURCES		:=	source ../shell-common
-EXCLUDES	:=	source/app_main.cpp ../shell-common/test_wsconfig.cpp
+EXCLUDES	:=	source/app_main.cpp source/net_status.cpp ../shell-common/test_wsconfig.cpp
 else
 SOURCES		:=	source source/ui ../shell-common
 EXCLUDES	:=	source/main.cpp ../shell-common/test_wsconfig.cpp

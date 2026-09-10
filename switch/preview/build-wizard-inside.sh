@@ -163,6 +163,7 @@ OBJS+=( $(cxx "$UI/wizard_activity.cpp"         ws_wizard_activity) )
 OBJS+=( $(cxx "$UI/setup_activity.cpp"          ws_setup_activity) )
 OBJS+=( $(cxx "$UI/unlock_activity.cpp"         ws_unlock_activity) )
 OBJS+=( $(cxx "$UI/recovery_key_activity.cpp"   ws_recovery_key_activity) )
+OBJS+=( $(cxx "$UI/no_internet_activity.cpp"    ws_no_internet_activity) )
 OBJS+=( $(cxx "$UI/theme_tint.cpp"              ws_theme_tint) )
 
 # ---------------------------------------------------------------------------
@@ -174,6 +175,7 @@ OBJS+=( $(cxx "$PREVIEW/stubs/vault_helpers_stub.cpp"   stub_vault_helpers) )
 OBJS+=( $(cxx "$PREVIEW/stubs/ws_ffi_stub.cpp"          stub_ws_ffi) )
 OBJS+=( $(cxx "$PREVIEW/stubs/saves_stub.cpp"           stub_saves) )
 OBJS+=( $(cxx "$PREVIEW/stubs/wsconfig_stub.cpp"        stub_wsconfig) )
+OBJS+=( $(cxx "$PREVIEW/stubs/net_status_stub.cpp"      stub_net_status) )
 
 # Preview entry point
 OBJS+=( $(cxx "$PREVIEW/main.cpp" preview_main) )
@@ -198,7 +200,7 @@ echo "=== Wizard preview binary: $OUT/waystone_preview ($(du -sh "$OUT/waystone_
 # Strategy: copy borealis's own resources into switch/preview/resources/, then
 # add the two preview-only fonts there.  run-headless-inner.sh runs the wizard
 # binary from switch/preview/ so BRLS_RESOURCES="./resources/" resolves to
-# switch/preview/resources/ and never touches switch/lib/borealis/resources/.
+# switch/preview/resources/ and never touches switch/lib/borealis/resources/
 #
 # Generator: switch/preview/fonts/gen_from_svg.py (SVGs from Figma community pack, preview-only)
 # ---------------------------------------------------------------------------

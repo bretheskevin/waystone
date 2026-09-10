@@ -6,6 +6,7 @@
  *   setup-field    — SetupActivity at step 1 (Server URL, pre-filled)
  *   unlock         — UnlockActivity at step 0 (Vault Passphrase)
  *   recovery       — RecoveryKeyActivity with canned recovery hex
+ *   no-internet    — NoInternetActivity (no-network reason)
  *   transition     — SetupActivity auto-advancing from step 0→1 (for GIF capture)
  *
  * Set BOREALIS_THEME=DARK before running to force the dark theme.
@@ -18,6 +19,7 @@
 #include "setup_activity.h"
 #include "unlock_activity.h"
 #include "recovery_key_activity.h"
+#include "no_internet_activity.h"
 #include "session.h"
 #include <cstring>
 #include <string>
@@ -97,6 +99,10 @@ int main(int argc, char** argv)
             "DEAD003300000003DEAD004400000004";
         brls::Application::pushActivity(
             new RecoveryKeyActivity(&session, hex, "/preview/recovery.txt"));
+
+    } else if (strcmp(mode, "no-internet") == 0) {
+        brls::Application::pushActivity(
+            new NoInternetActivity(NoInternetReason::NoNetwork));
 
     } else if (strcmp(mode, "transition") == 0) {
         // Renders step 0 (Welcome) and auto-advances to step 1 after 4 s.

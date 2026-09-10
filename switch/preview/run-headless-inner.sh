@@ -8,6 +8,7 @@
 #   out/setup-field.png   — SetupActivity step 1 (Server URL, pre-filled)
 #   out/unlock.png        — UnlockActivity step 0 (Vault Passphrase)
 #   out/recovery.png      — RecoveryKeyActivity (full-screen recovery key)
+#   out/no-internet.png   — NoInternetActivity (no connection screen)
 #   demo.png              — borealis demo (regression check, optional)
 set -euo pipefail
 
@@ -139,6 +140,9 @@ capture "$WIZARD_OUT/unlock.png" "$PREVIEW_DIR" "$WIZARD_BIN" unlock
 
 echo "=== Capturing wizard: recovery key ==="
 capture "$WIZARD_OUT/recovery.png" "$PREVIEW_DIR" "$WIZARD_BIN" recovery
+
+echo "=== Capturing wizard: no-internet ==="
+capture "$WIZARD_OUT/no-internet.png" "$PREVIEW_DIR" "$WIZARD_BIN" no-internet
 
 # ---------------------------------------------------------------------------
 # Cleanup

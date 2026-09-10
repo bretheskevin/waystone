@@ -15,4 +15,6 @@ class TitleListActivity : public brls::Activity {
     Session* session_;
     brls::Label* status_label_ = nullptr;
     brls::RepeatingTimer poll_timer_;
+
+    void start_sync_or_gate();
 };
