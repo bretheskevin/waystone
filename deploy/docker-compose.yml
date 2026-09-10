@@ -24,6 +24,16 @@ services:
       - "traefik.http.routers.waystone.entrypoints=websecure"
       - "traefik.http.routers.waystone.tls.certresolver=letsencrypt"
       - "traefik.http.services.waystone.loadbalancer.server.port=5000"
+      # Container is on two networks (its own + dokploy's) — tell Traefik which to route through.
+      - "traefik.docker.network=dokploy-network"
+    networks:
+      - default
+      - dokploy-network
 
 volumes:
   waystone-data:
+
+networks:
+  # Dokploy's shared Traefik network — required for Traefik to reach this service.
+  dokploy-network:
+    external: true
