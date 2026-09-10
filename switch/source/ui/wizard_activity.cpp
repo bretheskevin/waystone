@@ -111,6 +111,7 @@ void WizardActivity::edit_field(const WizardFieldDef& f) {
         zeroize_string(result);
     }
     error_.clear();
+    status_.clear();
     schedule_refresh();
 }
 
@@ -128,7 +129,7 @@ void WizardActivity::refresh() {
     auto        fcb    = is_last ? std::function<void()>([this]{ go_next(); })
                                  : std::function<void()>{};
 
-    renderer_->rebuild(current_step_, values_, error_,
+    renderer_->rebuild(current_step_, values_, error_, status_,
                        [this](const WizardFieldDef& f) { edit_field(f); },
                        flabel, fcb, trans);
 
@@ -154,6 +155,7 @@ void WizardActivity::go_next() {
         }
         current_step_++;
         error_.clear();
+        status_.clear();
         step_changed_ = true;
         go_forward_   = true;
         schedule_refresh();
@@ -170,6 +172,7 @@ void WizardActivity::go_back() {
     if (current_step_ > 0) {
         current_step_--;
         error_.clear();
+        status_.clear();
         step_changed_ = true;
         go_forward_   = false;
         schedule_refresh();

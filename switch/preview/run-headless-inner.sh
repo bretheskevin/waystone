@@ -4,12 +4,13 @@
 # The borealis demo capture is optional (skipped if demo binary is absent).
 #
 # Outputs:
-#   out/setup-welcome.png — SetupActivity step 0 (Welcome)
-#   out/setup-field.png   — SetupActivity step 1 (Server URL, pre-filled)
-#   out/unlock.png        — UnlockActivity step 0 (Vault Passphrase)
-#   out/recovery.png      — RecoveryKeyActivity (full-screen recovery key)
-#   out/no-internet.png   — NoInternetActivity (no connection screen)
-#   demo.png              — borealis demo (regression check, optional)
+#   out/setup-welcome.png  — SetupActivity step 0 (Welcome)
+#   out/setup-field.png    — SetupActivity step 1 (Server URL, pre-filled)
+#   out/creating-vault.png — SetupActivity step 3, "Creating vault…" progress state
+#   out/unlock.png         — UnlockActivity step 0 (Vault Passphrase)
+#   out/recovery.png       — RecoveryKeyActivity (full-screen recovery key)
+#   out/no-internet.png    — NoInternetActivity (no connection screen)
+#   demo.png               — borealis demo (regression check, optional)
 set -euo pipefail
 
 DEMO_BIN=/work/switch/lib/borealis/build-preview/borealis_demo
@@ -134,6 +135,9 @@ fi
 
 echo "=== Capturing wizard: setup-field (Server URL step) ==="
 capture "$WIZARD_OUT/setup-field.png" "$PREVIEW_DIR" "$WIZARD_BIN" setup-field
+
+echo "=== Capturing wizard: creating-vault (progress state) ==="
+capture "$WIZARD_OUT/creating-vault.png" "$PREVIEW_DIR" "$WIZARD_BIN" creating-vault
 
 echo "=== Capturing wizard: unlock ==="
 capture "$WIZARD_OUT/unlock.png" "$PREVIEW_DIR" "$WIZARD_BIN" unlock

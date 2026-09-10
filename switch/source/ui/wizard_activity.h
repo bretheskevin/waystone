@@ -1,6 +1,7 @@
 #pragma once
 #include <borealis.hpp>
 #include "wizard.h"
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -23,6 +24,13 @@ class WizardActivity : public brls::Activity {
     size_t                   current_step_ = 0;
     std::vector<std::string> values_;
     std::string              error_;
+    std::string              status_;
+
+    // Optional poll callback invoked on every RefreshPump tick (main thread).
+    // Set by a subclass to marshal a background result back to the UI thread.
+    // The pump copies the function before calling it, so the lambda may safely
+    // clear poll_fn_ without destroying the currently-running instance.
+    std::function<void()> poll_fn_;
 
     void refresh();
     void schedule_refresh();
@@ -53,6 +61,12 @@ class WizardActivity : public brls::Activity {
             if (owner_->refresh_pending_) {
                 owner_->refresh_pending_ = false;
                 owner_->refresh();
+            }
+            // Copy before calling so the lambda can safely clear poll_fn_
+            // without destroying the currently-running instance.
+            if (owner_->poll_fn_) {
+                auto fn = owner_->poll_fn_;
+                fn();
             }
         }
       private:

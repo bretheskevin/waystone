@@ -33,6 +33,7 @@ class WizardRenderer {
     void rebuild(size_t current_step,
                  const std::vector<std::string>& values,
                  const std::string& error,
+                 const std::string& status,
                  const std::function<void(const WizardFieldDef&)>& edit_cb = {},
                  const std::string& finish_label = {},
                  const std::function<void()>& finish_cb = {},
@@ -54,6 +55,7 @@ class WizardRenderer {
     brls::Box* make_step_content(size_t step,
                                   const std::vector<std::string>& values,
                                   const std::string& error,
+                                  const std::string& status,
                                   const std::function<void(const WizardFieldDef&)>& edit_cb,
                                   const std::string& finish_label,
                                   const std::function<void()>& finish_cb);
@@ -64,12 +66,14 @@ class WizardRenderer {
     void init_layout(size_t step,
                      const std::vector<std::string>& values,
                      const std::string& error,
+                     const std::string& status,
                      const std::function<void(const WizardFieldDef&)>& edit_cb,
                      const std::string& finish_label,
                      const std::function<void()>& finish_cb);
     void swap_instant(size_t step,
                       const std::vector<std::string>& values,
                       const std::string& error,
+                      const std::string& status,
                       const std::function<void(const WizardFieldDef&)>& edit_cb,
                       const std::string& finish_label,
                       const std::function<void()>& finish_cb);

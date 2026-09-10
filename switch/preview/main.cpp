@@ -2,12 +2,13 @@
  * Waystone preview harness — renders onboarding wizard screens on desktop.
  *
  * Usage: waystone_preview <mode>
- *   setup-welcome  — SetupActivity at step 0 (Welcome)
- *   setup-field    — SetupActivity at step 1 (Server URL, pre-filled)
- *   unlock         — UnlockActivity at step 0 (Vault Passphrase)
- *   recovery       — RecoveryKeyActivity with canned recovery hex
- *   no-internet    — NoInternetActivity (no-network reason)
- *   transition     — SetupActivity auto-advancing from step 0→1 (for GIF capture)
+ *   setup-welcome   — SetupActivity at step 0 (Welcome)
+ *   setup-field     — SetupActivity at step 1 (Server URL, pre-filled)
+ *   creating-vault  — SetupActivity at step 3, "Creating vault…" progress state
+ *   unlock          — UnlockActivity at step 0 (Vault Passphrase)
+ *   recovery        — RecoveryKeyActivity with canned recovery hex
+ *   no-internet     — NoInternetActivity (no-network reason)
+ *   transition      — SetupActivity auto-advancing from step 0→1 (for GIF capture)
  *
  * Set BOREALIS_THEME=DARK before running to force the dark theme.
  * The binary must be launched from switch/lib/borealis/ so that
@@ -39,6 +40,17 @@ public:
         values_[0]    = "https://dav.example.com";  // FIELD_SERVER = 0
         current_step_ = 1;
         error_.clear();
+    }
+
+    // Show the "Creating vault…" progress state (step 3, worker running).
+    // Does NOT start a real worker thread — only presets the visual state for
+    // screenshot capture.  Call BEFORE pushActivity().
+    void preset_creating_vault() {
+        values_[0]       = "https://dav.example.com";  // FIELD_SERVER
+        values_[1]       = "waystone";                  // FIELD_USERNAME
+        current_step_    = 3;
+        creating_vault_  = true;
+        status_          = "Creating vault\xe2\x80\xa6 please wait";
     }
 };
 
@@ -87,6 +99,11 @@ int main(int argc, char** argv)
     } else if (strcmp(mode, "setup-field") == 0) {
         auto* act = new PreviewSetupActivity(&session);
         act->preset_step1();
+        brls::Application::pushActivity(act);
+
+    } else if (strcmp(mode, "creating-vault") == 0) {
+        auto* act = new PreviewSetupActivity(&session);
+        act->preset_creating_vault();
         brls::Application::pushActivity(act);
 
     } else if (strcmp(mode, "unlock") == 0) {

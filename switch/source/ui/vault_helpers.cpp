@@ -25,17 +25,20 @@ VaultCreateResult create_vault(const std::string& passphrase, Session* session) 
         }
     }
 
+    printf("[vault] ws_vault_init: calling (Argon2 KDF — may take seconds)\n");
     WsBuf recovery = {nullptr, 0};
     WsBuf keys = {nullptr, 0};
     WsVault* vault = ws_vault_init(passphrase.c_str(), &recovery, &keys);
 
     if (!vault) {
         const char* err = ws_last_error();
+        printf("[vault] ws_vault_init: FAILED — %s\n", err ? err : "unknown");
         result.error = std::string("Vault creation failed: ") + (err ? err : "unknown");
         ws_buf_free(recovery);
         ws_buf_free(keys);
         return result;
     }
+    printf("[vault] ws_vault_init: succeeded\n");
 
     mkdir("sdmc:/waystone", 0755);
     FILE* wf = fopen(keys_path, "wb");
@@ -44,6 +47,7 @@ VaultCreateResult create_vault(const std::string& passphrase, Session* session) 
         fclose(wf);
     }
     ws_buf_free(keys);
+    printf("[vault] keys.json written\n");
 
     wsconfig_save(session->config, session->config_path.c_str());
 
@@ -57,6 +61,7 @@ VaultCreateResult create_vault(const std::string& passphrase, Session* session) 
             fwrite(recovery.ptr, 1, recovery.len, rf);
             fclose(rf);
         }
+        printf("[vault] recovery file written: %s\n", result.recovery_path.c_str());
     }
     ws_buf_free(recovery);
 

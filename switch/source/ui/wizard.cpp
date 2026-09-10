@@ -63,6 +63,7 @@ brls::Box* WizardRenderer::make_step_content(
     size_t step,
     const std::vector<std::string>& values,
     const std::string& error,
+    const std::string& status,
     const std::function<void(const WizardFieldDef&)>& edit_cb,
     const std::string& finish_label,
     const std::function<void()>& finish_cb)
@@ -139,6 +140,15 @@ brls::Box* WizardRenderer::make_step_content(
         }
     }
 
+    if (!status.empty()) {
+        auto* slbl = new brls::Label();
+        slbl->setText(status);
+        slbl->setFontSize(18.0f);
+        slbl->setTextColor(hint_color());
+        slbl->setMargins(4.0f, 0.0f, 8.0f, 0.0f);
+        box->addView(slbl);
+    }
+
     if (!error.empty()) {
         auto* err = new brls::Label();
         err->setText(error);
@@ -168,6 +178,7 @@ void WizardRenderer::init_layout(
     size_t step,
     const std::vector<std::string>& values,
     const std::string& error,
+    const std::string& status,
     const std::function<void(const WizardFieldDef&)>& edit_cb,
     const std::string& finish_label,
     const std::function<void()>& finish_cb)
@@ -184,7 +195,7 @@ void WizardRenderer::init_layout(
     step_slot_->setGrow(1.0f);
     parent_->addView(step_slot_);
 
-    active_box_ = make_step_content(step, values, error, edit_cb, finish_label, finish_cb);
+    active_box_ = make_step_content(step, values, error, status, edit_cb, finish_label, finish_cb);
     step_slot_->addView(active_box_);
 }
 
@@ -193,13 +204,14 @@ void WizardRenderer::swap_instant(
     size_t step,
     const std::vector<std::string>& values,
     const std::string& error,
+    const std::string& status,
     const std::function<void(const WizardFieldDef&)>& edit_cb,
     const std::string& finish_label,
     const std::function<void()>& finish_cb)
 {
     brls::Application::giveFocus(nullptr);
     step_slot_->removeView(active_box_);     // deletes active_box_
-    active_box_ = make_step_content(step, values, error, edit_cb, finish_label, finish_cb);
+    active_box_ = make_step_content(step, values, error, status, edit_cb, finish_label, finish_cb);
     step_slot_->addView(active_box_);
 }
 
@@ -227,13 +239,14 @@ void WizardRenderer::rebuild(
     size_t current_step,
     const std::vector<std::string>& values,
     const std::string& error,
+    const std::string& status,
     const std::function<void(const WizardFieldDef&)>& edit_cb,
     const std::string& finish_label,
     const std::function<void()>& finish_cb,
     WizardTransition transition)
 {
     if (!step_slot_) {
-        init_layout(current_step, values, error, edit_cb, finish_label, finish_cb);
+        init_layout(current_step, values, error, status, edit_cb, finish_label, finish_cb);
         return;
     }
 
@@ -243,7 +256,7 @@ void WizardRenderer::rebuild(
     refresh_dots(current_step);
 
     if (transition == WizardTransition::NONE) {
-        swap_instant(current_step, values, error, edit_cb, finish_label, finish_cb);
+        swap_instant(current_step, values, error, status, edit_cb, finish_label, finish_cb);
         return;
     }
 
@@ -255,7 +268,7 @@ void WizardRenderer::rebuild(
     brls::Application::giveFocus(nullptr);
 
     // Build incoming content; start it invisible, offset to the side.
-    brls::Box* new_box = make_step_content(current_step, values, error, edit_cb, finish_label, finish_cb);
+    brls::Box* new_box = make_step_content(current_step, values, error, status, edit_cb, finish_label, finish_cb);
     new_box->setAlpha(0.0f);
     new_box->setTranslationX(dir * SLIDE_DIST);
 
