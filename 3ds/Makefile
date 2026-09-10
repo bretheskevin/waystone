@@ -12,9 +12,20 @@ include $(DEVKITPRO)/devkitARM/3ds_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	waystone-3ds-spike
 BUILD		:=	build
-SOURCES		:=	source ../shell-common
+# Build-mode guard.
+#   Default (no CONSOLE): GUI build (citro2d). Entry: source/app_main.cpp. main.cpp excluded.
+#   CONSOLE=1: console driver. Entry: source/main.cpp. app_main.cpp + source/ui/* excluded.
+ifeq ($(CONSOLE),1)
+SOURCES  := source ../shell-common
+EXCLUDES := source/app_main.cpp ../shell-common/test_wsconfig.cpp
+LIBS     := -lwaystone_ffi -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lctru -lm
+else
+SOURCES  := source source/ui ../shell-common
+EXCLUDES := source/main.cpp ../shell-common/test_wsconfig.cpp
+LIBS     := -lwaystone_ffi -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lcitro2d -lcitro3d -lctru -lm
+endif
 DATA		:=	data
-INCLUDES	:=	../ffi/include source ../shell-common
+INCLUDES	:=	../ffi/include source source/ui ../shell-common
 ROMFS		:=	romfs
 
 # WAYSTONE_TARGET selects which cross-compiled libwaystone_ffi.a to link.
@@ -37,8 +48,6 @@ CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=c++11
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lwaystone_ffi -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lz -lctru -lm
-
 #---------------------------------------------------------------------------------
 LIBDIRS	:= $(PORTLIBS) $(CTRULIB)
 
@@ -56,8 +65,7 @@ export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
-# Exclude host-only test drivers from the 3DS build.
-CPPFILES	:=	$(filter-out test_wsconfig.cpp,$(CPPFILES))
+CPPFILES	:=	$(filter-out $(notdir $(EXCLUDES)),$(CPPFILES))
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
 
