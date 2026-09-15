@@ -10,6 +10,8 @@
  *   no-internet     — NoInternetActivity (no-network reason)
  *   loading         — LoadingActivity spinner (3-second simulated worker)
  *   transition      — SetupActivity auto-advancing from step 0→1 (for GIF capture)
+ *   conflicts       — ConflictsActivity with 3 canned conflicts (normal mode)
+ *   conflicts-confirm — ConflictsActivity with confirm banner auto-triggered
  *
  * Set BOREALIS_THEME=DARK before running to force the dark theme.
  * The binary must be launched from switch/lib/borealis/ so that
@@ -23,6 +25,7 @@
 #include "recovery_key_activity.h"
 #include "no_internet_activity.h"
 #include "loading_activity.h"
+#include "conflicts_activity.h"
 #include "session.h"
 #include <chrono>
 #include <cstring>
@@ -75,6 +78,27 @@ public:
 
 private:
     brls::Timer advance_timer_;
+};
+
+// ---------------------------------------------------------------------------
+// Preview-only subclass of ConflictsActivity.
+// Auto-triggers the confirm banner after 1 second via a timer,
+// so the screenshot script can capture it without manual input.
+// ---------------------------------------------------------------------------
+class PreviewConflictsConfirmActivity : public ConflictsActivity {
+public:
+    using ConflictsActivity::ConflictsActivity;
+
+    void onContentAvailable() override {
+        ConflictsActivity::onContentAvailable();
+        confirm_timer_.setEndCallback([this](bool) {
+            trigger_confirm_for_preview();
+        });
+        confirm_timer_.start(1000);
+    }
+
+private:
+    brls::Timer confirm_timer_;
 };
 
 // ---------------------------------------------------------------------------
@@ -140,6 +164,21 @@ int main(int argc, char** argv)
         };
         brls::Application::pushActivity(
             new LoadingActivity(&session, worker));
+
+    } else if (strcmp(mode, "conflicts") == 0) {
+        auto* ctrl = new ConflictController(
+            nullptr, AccountUid{}, "",
+            WebDavCfg{nullptr, nullptr, nullptr}, {});
+        ctrl->start_scan();
+        brls::Application::pushActivity(new ConflictsActivity(ctrl));
+
+    } else if (strcmp(mode, "conflicts-confirm") == 0) {
+        auto* ctrl = new ConflictController(
+            nullptr, AccountUid{}, "",
+            WebDavCfg{nullptr, nullptr, nullptr}, {});
+        ctrl->start_scan();
+        brls::Application::pushActivity(
+            new PreviewConflictsConfirmActivity(ctrl));
 
     } else {
         brls::Logger::error("Unknown mode: %s", mode);

@@ -148,6 +148,14 @@ capture "$WIZARD_OUT/recovery.png" "$PREVIEW_DIR" "$WIZARD_BIN" recovery
 echo "=== Capturing wizard: no-internet ==="
 capture "$WIZARD_OUT/no-internet.png" "$PREVIEW_DIR" "$WIZARD_BIN" no-internet
 
+echo "=== Capturing conflicts: normal inbox ==="
+capture "$WIZARD_OUT/conflicts.png" "$PREVIEW_DIR" "$WIZARD_BIN" conflicts
+
+echo "=== Capturing conflicts: confirm banner ==="
+# conflicts-confirm mode auto-triggers the banner after 1 second.
+# The capture() helper waits 5 seconds, so the banner is visible.
+capture "$WIZARD_OUT/conflicts-confirm.png" "$PREVIEW_DIR" "$WIZARD_BIN" conflicts-confirm
+
 # ---------------------------------------------------------------------------
 # Cleanup
 # ---------------------------------------------------------------------------
