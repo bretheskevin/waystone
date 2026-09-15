@@ -1,4 +1,5 @@
 #include "title_list_screen.h"
+#include "settings_screen.h"
 #include "app.h"
 #include "widgets.h"
 #include "theme.h"
@@ -11,6 +12,13 @@ TitleListScreen::TitleListScreen(Session* session)
     printf("[title_list] found %zu titles\n", titles_.size());
     status_text_ = "Ready";
 }
+
+TitleListScreen::TitleListScreen(Session* session, const std::vector<TitleInfo>& preloaded_titles)
+    : session_(session), worker_(0), scroll_offset_(0), cursor_(0), syncing_(false) {
+    titles_ = preloaded_titles;
+    status_text_ = "Ready";
+}
+
 TitleListScreen::~TitleListScreen() {
     if (worker_) { worker_->join(); delete worker_; }
 }
@@ -70,7 +78,7 @@ void TitleListScreen::draw_bottom(C3D_RenderTarget* target) {
         snprintf(scroll_text, sizeof(scroll_text), "%zu-%zu of %zu", scroll_offset_+1, end, titles_.size());
         draw_text_centered(buf, 0, btn_y-16.0f, 0.5f, TEXT_SM, CLR_TEXT_HINT, scroll_text, (float)SCREEN_BOT_W);
     }
-    draw_footer_hint(buf, "A: Sync All  DPad: Navigate");
+    draw_footer_hint(buf, "A: Sync  Y: Settings  DPad: Nav");
 }
 void TitleListScreen::handle_input(u32 kDown, touchPosition touch) {
     size_t item_count = titles_.size() + 1;
@@ -80,6 +88,7 @@ void TitleListScreen::handle_input(u32 kDown, touchPosition touch) {
         if (cursor_ < scroll_offset_) scroll_offset_ = cursor_;
         else if (cursor_ >= scroll_offset_ + VISIBLE_ROWS) scroll_offset_ = cursor_ - VISIBLE_ROWS + 1;
     }
+    if (kDown & KEY_Y) { App::instance().push_screen(new SettingsScreen(session_)); return; }
     if (kDown & KEY_A) { if (cursor_ == titles_.size() || titles_.empty()) start_sync(); }
     if (touch.px != 0 || touch.py != 0) {
         float btn_y=(float)SCREEN_BOT_H-50.0f, btn_w=120.0f, btn_x=((float)SCREEN_BOT_W-btn_w)/2.0f;

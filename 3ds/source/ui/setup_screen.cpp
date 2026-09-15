@@ -3,6 +3,7 @@
 #include "app.h"
 #include "theme.h"
 #include "worker_thread.h"
+#include "session_store.h"
 #include <cstdio>
 #include <cstring>
 
@@ -224,6 +225,8 @@ void SetupScreen::poll() {
     session_->dav.server_url = wizard_.value(FIELD_SERVER);
     session_->dav.user       = wizard_.value(FIELD_USERNAME);
     session_->dav.pass       = wizard_.value(FIELD_PASSWORD);
+    // Persist the session for auto-unlock on next launch
+    persist_session(session_->vault, session_->dav.pass);
     wizard_.zeroize_secrets();
 
     // set_screen deletes 'this' — no member access after this point

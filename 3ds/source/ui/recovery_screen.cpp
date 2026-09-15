@@ -1,5 +1,5 @@
 #include "recovery_screen.h"
-#include "title_list_screen.h"
+#include "loading_screen.h"
 #include "app.h"
 #include "theme.h"
 #include "widgets.h"
@@ -53,6 +53,7 @@ void RecoveryScreen::handle_input(u32 kDown, touchPosition touch) {
     }
     if (confirm) {
         // set_screen deletes 'this'
-        App::instance().set_screen(new TitleListScreen(session_));
+        // list_titles runs off the render thread inside LoadingScreen
+        App::instance().set_screen(new LoadingScreen(session_, false));
     }
 }

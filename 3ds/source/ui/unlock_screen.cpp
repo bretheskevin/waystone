@@ -1,5 +1,7 @@
 #include "unlock_screen.h"
 #include "title_list_screen.h"
+#include "loading_screen.h"
+#include "session_store.h"
 #include "app.h"
 #include "theme.h"
 #include "worker_thread.h"
@@ -174,8 +176,11 @@ void UnlockScreen::poll() {
     session_->dav.server_url = session_->config.server_url;
     session_->dav.user       = session_->config.username;
     session_->dav.pass       = wizard_.value(FIELD_PASSWORD);
+    // Persist the session for auto-unlock on next launch
+    persist_session(session_->vault, session_->dav.pass);
     wizard_.zeroize_secrets();
 
     // set_screen deletes 'this' — no member access after this point
-    App::instance().set_screen(new TitleListScreen(session_));
+    // list_titles runs off the render thread inside LoadingScreen
+    App::instance().set_screen(new LoadingScreen(session_, false));
 }

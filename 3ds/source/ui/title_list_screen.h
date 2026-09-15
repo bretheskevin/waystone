@@ -8,6 +8,7 @@
 class TitleListScreen : public Screen {
 public:
     TitleListScreen(Session* session);
+    TitleListScreen(Session* session, const std::vector<TitleInfo>& preloaded_titles);
     ~TitleListScreen();
     void draw_top(C3D_RenderTarget* target);
     void draw_bottom(C3D_RenderTarget* target);

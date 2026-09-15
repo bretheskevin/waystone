@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <3ds.h>
+#include <3ds/services/cfgu.h>
 #include <sys/select.h>
 #include <citro3d.h>
 #include <citro2d.h>
@@ -16,15 +17,26 @@ extern "C" {
 
 #include "saves.h"
 #include "wsconfig.h"
+#include "session_store.h"
+#include "secure_clear.h"
 #include "ui/app.h"
 #include "ui/session.h"
 #include "ui/setup_screen.h"
 #include "ui/unlock_screen.h"
+#include "ui/loading_screen.h"
+
+static bool ctr_device_key(uint8_t* out_key, size_t* out_len) {
+    if (!out_key || !out_len || *out_len < 8) return false;
+    Result rc = CFGU_GetConfigInfoBlk2(8, 0x00090001, out_key);
+    if (R_FAILED(rc)) return false;
+    *out_len = 8;
+    return true;
+}
 
 int main(int argc, char* argv[]) {
     (void)argc; (void)argv;
     u32* SOC_buffer = static_cast<u32*>(memalign(0x1000, 0x100000));
-    bool ps_ok=false, soc_ok=false, romfs_ok=false, curl_ok=false;
+    bool ps_ok=false, cfgu_ok=false, soc_ok=false, romfs_ok=false, curl_ok=false;
     uint8_t* kbuf = 0;
 
     gfxInitDefault();
@@ -35,6 +47,9 @@ int main(int argc, char* argv[]) {
     if (!SOC_buffer) { printf("FATAL: SOC buffer alloc failed\n"); goto cleanup; }
     if (psInit() != 0) { printf("FATAL: psInit failed\n"); goto cleanup; }
     ps_ok = true;
+    if (cfguInit() != 0) { printf("FATAL: cfguInit failed\n"); goto cleanup; }
+    cfgu_ok = true;
+    session_store_set_device_key_fn(ctr_device_key);
     if (socInit(SOC_buffer, 0x100000) != 0) { printf("FATAL: socInit failed\n"); goto cleanup; }
     soc_ok = true;
     if (romfsInit() != 0) { printf("FATAL: romfsInit failed\n"); goto cleanup; }
@@ -52,26 +67,14 @@ int main(int argc, char* argv[]) {
         {
             App app;
 
-            const char* keys_path = "sdmc:/waystone/keys.json";
-            FILE* kf = fopen(keys_path, "rb");
-            if (kf) {
-                fseek(kf, 0, SEEK_END);
-                long klen = ftell(kf);
-                fseek(kf, 0, SEEK_SET);
-                if (klen > 0) {
-                    kbuf = static_cast<uint8_t*>(malloc(static_cast<size_t>(klen)));
-                    if (kbuf) {
-                        size_t got = fread(kbuf, 1, static_cast<size_t>(klen), kf);
-                        if (got != static_cast<size_t>(klen)) { free(kbuf); kbuf = 0; klen = 0; }
-                    }
-                }
-                fclose(kf);
-                if (kbuf && klen > 0) {
-                    app.set_screen(new UnlockScreen(&session, kbuf, static_cast<size_t>(klen)));
-                } else {
-                    app.set_screen(new SetupScreen(&session));
-                }
+            long klen = 0;
+            kbuf = read_keys_file("sdmc:/waystone/keys.json", &klen);
+            if (kbuf && klen > 0 && session_store_exists()) {
+                app.set_screen(new LoadingScreen(&session, true, kbuf, static_cast<size_t>(klen)));
+            } else if (kbuf && klen > 0) {
+                app.set_screen(new UnlockScreen(&session, kbuf, static_cast<size_t>(klen)));
             } else {
+                free(kbuf); kbuf = 0;
                 app.set_screen(new SetupScreen(&session));
             }
 
@@ -86,6 +89,7 @@ cleanup:
     if (curl_ok) curl_global_cleanup();
     if (romfs_ok) romfsExit();
     if (soc_ok) socExit();
+    if (cfgu_ok) cfguExit();
     if (ps_ok) psExit();
     free(SOC_buffer);
 
