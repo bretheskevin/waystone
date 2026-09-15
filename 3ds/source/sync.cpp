@@ -50,6 +50,173 @@ static std::string history_timestamp() {
     return buf;
 }
 
+SaveDecision scan_save_decision(const WsVault* vault, const char* save_json,
+                                const char* mtime, const char* device_id,
+                                int policy, const WebDavCfg& dav,
+                                const std::string& raw_json) {
+    SaveDecision d;
+    d.raw_json = raw_json;
+
+    WsBuf zip = {nullptr, 0};
+    char* entry_json = ws_package(save_json, &zip);
+    if (!entry_json) {
+        printf("FAIL ws_package: %s\n", ws_last_error() ? ws_last_error() : "unknown");
+        return d;
+    }
+    d.local_hash = json_get_nested_string(entry_json, "content", "hash");
+    d.group_key  = json_get_string(entry_json, "group_key");
+    ws_string_free(entry_json);
+    ws_buf_free(zip);
+    if (d.group_key.empty()) {
+        printf("FAIL: could not parse SaveEntry group_key\n");
+        return d;
+    }
+    d.base_path = make_base_path(vault, d.group_key);
+    if (d.base_path.empty()) return d;
+
+    std::string heads_path = d.base_path + "/heads";
+    std::vector<std::string> hrefs;
+    if (webdav_propfind(dav, heads_path.c_str(), &hrefs) != 0) {
+        printf("FAIL: PROPFIND %s\n", heads_path.c_str());
+        return d;
+    }
+    if (hrefs.empty()) {
+        printf("no remote heads found -- skipping\n");
+        d.decision_type = "in_sync";
+        return d;
+    }
+
+    d.heads_array = "[";
+    bool first_head = true;
+    for (size_t hi = 0; hi < hrefs.size(); hi++) {
+        const std::string& href = hrefs[hi];
+        if (href.size() < 5 || href.compare(href.size() - 5, 5, ".json") != 0) continue;
+        std::vector<uint8_t> enc_data;
+        if (webdav_get(dav, href.c_str(), &enc_data) != 0) continue;
+        WsBuf decrypted = ws_vault_decrypt_heads(vault, enc_data.data(), enc_data.size());
+        if (!decrypted.ptr) {
+            printf("\n  WARN: ws_vault_decrypt_heads failed for %s: %s\n", href.c_str(),
+                   ws_last_error() ? ws_last_error() : "unknown");
+            continue;
+        }
+        std::string head_obj(reinterpret_cast<const char*>(decrypted.ptr), decrypted.len);
+        ws_buf_free(decrypted);
+        if (!first_head) d.heads_array += ",";
+        d.heads_array += head_obj;
+        first_head = false;
+    }
+    d.heads_array += "]";
+    if (first_head) {
+        printf("no decryptable heads -- skipping\n");
+        d.decision_type = "in_sync";
+        return d;
+    }
+
+    const char* local_hash_ptr = d.local_hash.empty() ? nullptr : d.local_hash.c_str();
+    char* decision_json = ws_decide_pull(local_hash_ptr, mtime, d.heads_array.c_str(), device_id, policy);
+    if (!decision_json) {
+        printf("FAIL ws_decide_pull: %s\n", ws_last_error() ? ws_last_error() : "unknown");
+        return d;
+    }
+    d.decision_type = json_get_string(decision_json, "type");
+    if (d.decision_type == "pull") {
+        d.pull_hash = json_get_string(decision_json, "head_hash");
+    } else if (d.decision_type == "conflict_resolved") {
+        d.winner = json_get_string(decision_json, "winner");
+        if (d.winner == "remote") {
+            char* folded = ws_fold_heads(d.heads_array.c_str());
+            if (folded) {
+                d.pull_hash = json_get_string(folded, "hash");
+                ws_string_free(folded);
+            }
+        }
+    }
+    ws_string_free(decision_json);
+    return d;
+}
+
+int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
+                        const std::string& base_path, const std::string& group_key,
+                        const std::string& raw_json, u64 title_id,
+                        const WebDavCfg& dav) {
+    char* blob_name = ws_vault_blob_name(vault, pull_hash.c_str());
+    if (!blob_name) {
+        printf("  FAIL: ws_vault_blob_name: %s\n",
+               ws_last_error() ? ws_last_error() : "unknown");
+        return -1;
+    }
+    std::string blob_remote = base_path + "/blobs/" + blob_name + ".bin";
+    ws_string_free(blob_name);
+
+    std::vector<uint8_t> enc_blob;
+    int grc = webdav_get(dav, blob_remote.c_str(), &enc_blob);
+    if (grc == 1) { printf("  FAIL: blob not found (404)\n"); return -1; }
+    else if (grc != 0) { printf("  FAIL: GET blob error\n"); return -1; }
+
+    WsBuf decrypted_blob = ws_vault_decrypt_blob(vault, enc_blob.data(), enc_blob.size());
+    if (!decrypted_blob.ptr) {
+        printf("  FAIL: ws_vault_decrypt_blob: %s\n",
+               ws_last_error() ? ws_last_error() : "unknown");
+        return -1;
+    }
+
+    char* files_json = ws_unzip(decrypted_blob.ptr, decrypted_blob.len);
+    ws_buf_free(decrypted_blob);
+    if (!files_json) {
+        printf("  FAIL: ws_unzip: %s\n",
+               ws_last_error() ? ws_last_error() : "unknown");
+        return -1;
+    }
+
+    {
+        std::string sanitized = snapshot_sanitize_key(group_key);
+        std::string snap_ts = history_timestamp();
+        std::string backup_dir = std::string("sdmc:/waystone/backups/") +
+                                 sanitized + "/" + snap_ts;
+        if (!write_snapshot(backup_dir.c_str(), raw_json.c_str())) {
+            printf("  WARN: safety snapshot failed for %s, skipping restore\n",
+                   group_key.c_str());
+            ws_string_free(files_json);
+            return -1;
+        }
+    }
+
+    int wrc = write_save_files(title_id, files_json);
+    ws_string_free(files_json);
+    return wrc;
+}
+
+std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& title,
+                                     const char* device_id, int policy,
+                                     const WebDavCfg& dav, bool* error) {
+    std::vector<SaveDecision> results;
+    if (error) *error = false;
+
+    std::string raw_json = extract_save_json(title);
+    if (raw_json.empty()) return results;
+
+    char* norm_json = ws_checkpoint_normalize("3ds", raw_json.c_str());
+    if (!norm_json) {
+        printf("  ws_checkpoint_normalize failed: %s\n",
+               ws_last_error() ? ws_last_error() : "unknown");
+        if (error) *error = true;
+        return results;
+    }
+
+    std::vector<std::string> saves = json_split_array(norm_json);
+    ws_string_free(norm_json);
+    if (saves.empty()) return results;
+
+    std::string mtime = current_utc_time();
+    for (size_t si = 0; si < saves.size(); si++) {
+        std::string save_json = json_set_mtime(saves[si], mtime.c_str());
+        SaveDecision d = scan_save_decision(vault, save_json.c_str(), mtime.c_str(),
+                                            device_id, policy, dav, raw_json);
+        results.push_back(d);
+    }
+    return results;
+}
+
 int push_title(const WsVault* vault,
                const TitleInfo& title,
                const char* device_id,
@@ -197,221 +364,43 @@ int pull_title(const WsVault* vault,
                const WebDavCfg& dav) {
 
     printf("  Extracting local save data for pull comparison...\n");
-    std::string raw_json = extract_save_json(title);
-    if (raw_json.empty()) {
-        printf("  No local save data found — cannot determine remote path. Skipping.\n");
+    bool had_error = false;
+    std::vector<SaveDecision> decisions = scan_title(vault, title, device_id,
+                                                     0 /* NewestWins */, dav, &had_error);
+    if (had_error) return -1;
+    if (decisions.empty()) {
+        printf("  No local saves or nothing to scan.\n");
         return 0;
     }
 
-    char* norm_json = ws_checkpoint_normalize("3ds", raw_json.c_str());
-    if (!norm_json) {
-        printf("  ws_checkpoint_normalize failed: %s\n",
-               ws_last_error() ? ws_last_error() : "unknown");
-        return -1;
-    }
-
-    std::vector<std::string> saves = json_split_array(norm_json);
-    ws_string_free(norm_json);
-
-    if (saves.empty()) {
-        printf("  No normalized saves produced.\n");
-        return 0;
-    }
-
-    std::string mtime = current_utc_time();
     int pulled = 0;
-
-    for (size_t si = 0; si < saves.size(); si++) {
-        printf("  Pull %zu/%zu: ", si + 1, saves.size());
-
-        std::string save_json = json_set_mtime(saves[si], mtime.c_str());
-
-        WsBuf zip = {nullptr, 0};
-        char* entry_json = ws_package(save_json.c_str(), &zip);
-        if (!entry_json) {
-            printf("FAIL ws_package: %s\n",
-                   ws_last_error() ? ws_last_error() : "unknown");
+    for (size_t i = 0; i < decisions.size(); i++) {
+        const SaveDecision& d = decisions[i];
+        printf("  Pull %zu/%zu: ", i + 1, decisions.size());
+        if (d.decision_type == "in_sync") {
+            printf("in_sync\n"); continue;
+        } else if (d.decision_type == "push") {
+            printf("decision=push, no pull needed\n"); continue;
+        } else if (d.decision_type == "conflict_needs_input") {
+            printf("conflict_needs_input -- manual resolution required (skipping)\n"); continue;
+        } else if (d.decision_type == "conflict_resolved" && d.winner == "local") {
+            printf("conflict_resolved winner=local, no pull needed\n"); continue;
+        } else if (d.decision_type.empty()) {
             continue;
+        } else if (d.decision_type != "pull" && d.decision_type != "conflict_resolved") {
+            printf("unknown decision type: %s\n", d.decision_type.c_str()); continue;
         }
-
-        std::string local_hash = json_get_nested_string(entry_json, "content", "hash");
-        std::string group_key  = json_get_string(entry_json, "group_key");
-        ws_string_free(entry_json);
-        ws_buf_free(zip); // zip not needed for pull; free immediately
-
-        if (group_key.empty()) {
-            printf("FAIL: could not parse SaveEntry group_key\n");
-            continue;
+        if (d.pull_hash.empty()) {
+            printf("FAIL: could not determine pull hash\n"); continue;
         }
-
-        std::string base_path = make_base_path(vault, group_key);
-        if (base_path.empty()) {
-            continue;
-        }
-
-        // PROPFIND heads directory: collect encrypted DeviceHead blobs.
-        std::string heads_path = base_path + "/heads";
-        std::vector<std::string> hrefs;
-        if (webdav_propfind(dav, heads_path.c_str(), &hrefs) != 0) {
-            printf("FAIL: PROPFIND %s\n", heads_path.c_str());
-            continue;
-        }
-
-        if (hrefs.empty()) {
-            printf("no remote heads found — skipping\n");
-            continue;
-        }
-
-        // Decrypt each .json head file and build a JSON array: [obj,obj,...].
-        std::string heads_array = "[";
-        bool first_head = true;
-
-        for (const auto& href : hrefs) {
-            // Skip the directory entry itself (doesn't end in ".json").
-            if (href.size() < 5 ||
-                href.compare(href.size() - 5, 5, ".json") != 0) {
-                continue;
-            }
-
-            std::vector<uint8_t> enc_data;
-            if (webdav_get(dav, href.c_str(), &enc_data) != 0) continue;
-
-            WsBuf decrypted = ws_vault_decrypt_heads(
-                vault, enc_data.data(), enc_data.size());
-            if (!decrypted.ptr) {
-                printf("\n  WARN: ws_vault_decrypt_heads failed for %s: %s\n",
-                       href.c_str(),
-                       ws_last_error() ? ws_last_error() : "unknown");
-                continue;
-            }
-
-            std::string head_obj(
-                reinterpret_cast<const char*>(decrypted.ptr), decrypted.len);
-            ws_buf_free(decrypted);
-
-            if (!first_head) heads_array += ",";
-            heads_array += head_obj;
-            first_head = false;
-        }
-        heads_array += "]";
-
-        if (first_head) {
-            printf("no decryptable heads — skipping\n");
-            continue;
-        }
-
-        const char* local_hash_ptr = local_hash.empty() ? nullptr : local_hash.c_str();
-        char* decision_json = ws_decide_pull(
-            local_hash_ptr, mtime.c_str(), heads_array.c_str(), device_id, 0);
-        if (!decision_json) {
-            printf("FAIL ws_decide_pull: %s\n",
-                   ws_last_error() ? ws_last_error() : "unknown");
-            continue;
-        }
-
-        std::string decision_type = json_get_string(decision_json, "type");
-        std::string pull_hash;
-
-        if (decision_type == "in_sync") {
-            printf("in_sync\n");
-            ws_string_free(decision_json);
-            continue;
-        } else if (decision_type == "push") {
-            printf("decision=push, no pull needed\n");
-            ws_string_free(decision_json);
-            continue;
-        } else if (decision_type == "pull") {
-            pull_hash = json_get_string(decision_json, "head_hash");
-        } else if (decision_type == "conflict_resolved") {
-            std::string winner = json_get_string(decision_json, "winner");
-            if (winner == "remote") {
-                char* folded = ws_fold_heads(heads_array.c_str());
-                if (folded) {
-                    pull_hash = json_get_string(folded, "hash");
-                    ws_string_free(folded);
-                }
-            } else {
-                printf("conflict_resolved winner=local, no pull needed\n");
-                ws_string_free(decision_json);
-                continue;
-            }
-        } else if (decision_type == "conflict_needs_input") {
-            printf("conflict_needs_input — manual resolution required (skipping)\n");
-            ws_string_free(decision_json);
-            continue;
+        printf("pulling hash=%.12s...\n", d.pull_hash.c_str());
+        int rc = restore_remote_save(vault, d.pull_hash, d.base_path, d.group_key,
+                                     d.raw_json, title.title_id, dav);
+        if (rc == 0) {
+            printf("  Pulled OK.\n"); pulled++;
         } else {
-            printf("unknown decision type: %s\n", decision_type.c_str());
-            ws_string_free(decision_json);
-            continue;
-        }
-        ws_string_free(decision_json);
-
-        if (pull_hash.empty()) {
-            printf("FAIL: could not determine pull hash\n");
-            continue;
-        }
-
-        printf("pulling hash=%.12s...\n", pull_hash.c_str());
-
-        char* blob_name = ws_vault_blob_name(vault, pull_hash.c_str());
-        if (!blob_name) {
-            printf("  FAIL: ws_vault_blob_name: %s\n",
-                   ws_last_error() ? ws_last_error() : "unknown");
-            continue;
-        }
-        std::string blob_remote = base_path + "/blobs/" + blob_name + ".bin";
-        ws_string_free(blob_name);
-
-        std::vector<uint8_t> enc_blob;
-        int grc = webdav_get(dav, blob_remote.c_str(), &enc_blob);
-        if (grc == 1) {
-            printf("  FAIL: blob not found (404)\n");
-            continue;
-        } else if (grc != 0) {
-            printf("  FAIL: GET blob error\n");
-            continue;
-        }
-
-        WsBuf decrypted_blob = ws_vault_decrypt_blob(
-            vault, enc_blob.data(), enc_blob.size());
-        if (!decrypted_blob.ptr) {
-            printf("  FAIL: ws_vault_decrypt_blob: %s\n",
-                   ws_last_error() ? ws_last_error() : "unknown");
-            continue;
-        }
-
-        char* files_json = ws_unzip(decrypted_blob.ptr, decrypted_blob.len);
-        ws_buf_free(decrypted_blob);
-        if (!files_json) {
-            printf("  FAIL: ws_unzip: %s\n",
-                   ws_last_error() ? ws_last_error() : "unknown");
-            continue;
-        }
-
-        // Safety snapshot of the current local save before overwriting.
-        {
-            std::string sanitized = snapshot_sanitize_key(group_key);
-            std::string snap_ts = history_timestamp();
-            std::string backup_dir = std::string("sdmc:/waystone/backups/") +
-                                     sanitized + "/" + snap_ts;
-            if (!write_snapshot(backup_dir.c_str(), raw_json.c_str())) {
-                printf("  WARN: safety snapshot failed for %s, skipping restore\n",
-                       group_key.c_str());
-                ws_string_free(files_json);
-                continue;
-            }
-        }
-
-        int wrc = write_save_files(title.title_id, files_json);
-        ws_string_free(files_json);
-
-        if (wrc != 0) {
-            printf("  WARN: write_save_files partial failure (%d)\n", wrc);
-        } else {
-            printf("  Pulled OK.\n");
-            pulled++;
+            printf("  WARN: restore failure (%d)\n", rc);
         }
     }
-
     return pulled;
 }
