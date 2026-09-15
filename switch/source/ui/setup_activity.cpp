@@ -124,7 +124,7 @@ void SetupActivity::do_create_vault() {
     });
     zeroize_string(passphrase_copy);
 
-    // Called by RefreshPump::run() on the main thread. The pump copies
+    // Called by the pump's on_tick on the main thread. The pump copies
     // poll_fn_ to a local std::function before invoking it, because this
     // lambda clears poll_fn_ on completion (preventing re-entry after the
     // worker is joined).

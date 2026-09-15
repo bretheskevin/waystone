@@ -2,29 +2,13 @@
 #include <cstdio>
 
 // -----------------------------------------------------------------------
-// RefreshPump -- fires on every borealis frame (~16 ms).
-// Only does work when refresh_pending_ is set, ensuring the rebuild
-// runs AFTER input dispatch unwinds (avoiding the focused-view UAF).
-// -----------------------------------------------------------------------
-void ConflictsActivity::RefreshPump::run() {
-    if (owner_->refresh_pending_) {
-        owner_->refresh_pending_ = false;
-        owner_->refresh();
-    }
-}
-
-// -----------------------------------------------------------------------
 // Construction / destruction
 // -----------------------------------------------------------------------
 ConflictsActivity::ConflictsActivity(ConflictController* ctrl) : ctrl_(ctrl) {}
 
 ConflictsActivity::~ConflictsActivity() {
     // Pump FIRST (mirrors WizardActivity destructor ordering).
-    if (refresh_pump_) {
-        refresh_pump_->stop();
-        delete refresh_pump_;
-        refresh_pump_ = nullptr;
-    }
+    pump_.stop();
     poll_timer_.stop();
     delete ctrl_;
 }
@@ -68,8 +52,7 @@ void ConflictsActivity::onContentAvailable() {
     refresh();
 
     // Start the deferred-rebuild pump
-    refresh_pump_ = new RefreshPump(this);
-    refresh_pump_->start();
+    pump_.start();
 
     // Poll the controller for status changes (300 ms)
     poll_timer_.setCallback([this]() {
@@ -138,7 +121,7 @@ void ConflictsActivity::onContentAvailable() {
 // Deferred rebuild
 // -----------------------------------------------------------------------
 void ConflictsActivity::schedule_refresh() {
-    refresh_pending_ = true;
+    pump_.schedule();
 }
 
 void ConflictsActivity::refresh() {

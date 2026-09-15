@@ -20,11 +20,7 @@ static std::string build_hint_text(const std::string& rb_label) {
 WizardActivity::WizardActivity(size_t num_values) : values_(num_values) {}
 
 WizardActivity::~WizardActivity() {
-    if (refresh_pump_) {
-        refresh_pump_->stop();
-        delete refresh_pump_;
-        refresh_pump_ = nullptr;
-    }
+    pump_.stop();  // stop BEFORE zeroize_secrets / delete renderer_
     zeroize_secrets();
     delete renderer_;
 }
@@ -66,8 +62,7 @@ brls::View* WizardActivity::createContentView() {
 void WizardActivity::onContentAvailable() {
     refresh();  // synchronous: not inside an action dispatch, safe for frame 1
 
-    refresh_pump_ = new RefreshPump(this);
-    refresh_pump_->start();
+    pump_.start();
 
     registerAction("Next", brls::BUTTON_RB, [this](brls::View*) {
         go_next();
@@ -87,7 +82,7 @@ void WizardActivity::onContentAvailable() {
 }
 
 void WizardActivity::schedule_refresh() {
-    refresh_pending_ = true;
+    pump_.schedule();
 }
 
 void WizardActivity::reload_steps() {

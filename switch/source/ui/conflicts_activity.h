@@ -1,6 +1,7 @@
 #pragma once
 #include <borealis.hpp>
 #include "conflict_controller.h"
+#include "deferred_refresh_pump.h"
 
 class ConflictsActivity : public brls::Activity {
   public:
@@ -32,19 +33,10 @@ class ConflictsActivity : public brls::Activity {
     // Change detection
     size_t last_conflict_count_ = SIZE_MAX;  // force first rebuild
 
-    // Deferred rebuild (WizardActivity pattern -- never rebuild the focused
-    // view synchronously inside its own action callback).
-    class RefreshPump : public brls::RepeatingTask {
-      public:
-        explicit RefreshPump(ConflictsActivity* owner)
-            : brls::RepeatingTask(16), owner_(owner) {}
-        void run() override;
-      private:
-        ConflictsActivity* owner_;
-    };
-
-    bool         refresh_pending_ = false;
-    RefreshPump* refresh_pump_    = nullptr;
+    // Deferred rebuild: never rebuild the focused view synchronously inside
+    // its own action callback (UAF). ConflictsActivity has its own poll_timer_
+    // for status polling; only the rebuild is delegated to the pump.
+    DeferredRefreshPump pump_{ [this]{ refresh(); } };
 
     brls::RepeatingTimer poll_timer_;
 

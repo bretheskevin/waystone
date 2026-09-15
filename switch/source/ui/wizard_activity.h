@@ -1,6 +1,7 @@
 #pragma once
 #include <borealis.hpp>
 #include "wizard.h"
+#include "deferred_refresh_pump.h"
 #include <functional>
 #include <string>
 #include <vector>
@@ -26,7 +27,7 @@ class WizardActivity : public brls::Activity {
     std::string              error_;
     std::string              status_;
 
-    // Optional poll callback invoked on every RefreshPump tick (main thread).
+    // Optional poll callback invoked on every pump tick (main thread).
     // Set by a subclass to marshal a background result back to the UI thread.
     // The pump copies the function before calling it, so the lambda may safely
     // clear poll_fn_ without destroying the currently-running instance.
@@ -49,32 +50,12 @@ class WizardActivity : public brls::Activity {
 
   private:
     std::vector<WizardStepDef> steps_;
+    bool step_changed_ = false;
+    bool go_forward_   = true;
 
-    // Defers a rebuild by one borealis frame so that action callbacks
-    // (BUTTON_A on the focused Button) return before rebuild() deletes
-    // that Button — avoiding the use-after-free Data Abort on hardware.
-    class RefreshPump : public brls::RepeatingTask {
-      public:
-        explicit RefreshPump(WizardActivity* owner)
-            : brls::RepeatingTask(16), owner_(owner) {}
-        void run() override {
-            if (owner_->refresh_pending_) {
-                owner_->refresh_pending_ = false;
-                owner_->refresh();
-            }
-            // Copy before calling so the lambda can safely clear poll_fn_
-            // without destroying the currently-running instance.
-            if (owner_->poll_fn_) {
-                auto fn = owner_->poll_fn_;
-                fn();
-            }
-        }
-      private:
-        WizardActivity* owner_;
-    };
-
-    bool         refresh_pending_ = false;
-    RefreshPump* refresh_pump_    = nullptr;
-    bool         step_changed_    = false;
-    bool         go_forward_      = true;
+    // Deferred pump: on_refresh rebuilds the view; on_tick forwards to poll_fn_
+    // (copy-before-call so the lambda can safely clear poll_fn_ without UAF).
+    DeferredRefreshPump pump_{
+        [this]{ refresh(); },
+        [this]{ if (poll_fn_) { auto fn = poll_fn_; fn(); } }};
 };
