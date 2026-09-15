@@ -49,6 +49,15 @@ WsVault* ws_vault_unlock_recovery(const char* /*recovery_hex*/,
 
 void ws_vault_free(WsVault* /*vault*/) {}
 
+WsBuf ws_vault_export_mdk(const WsVault*) {
+    static uint8_t fake_mdk[32] = {0x42};
+    return {fake_mdk, 32};
+}
+
+WsVault* ws_vault_from_mdk(const uint8_t*, uintptr_t) {
+    return &g_stub_vault;
+}
+
 // ---------------------------------------------------------------------------
 // Error
 // ---------------------------------------------------------------------------

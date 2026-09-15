@@ -1,5 +1,11 @@
 #include "settings_activity.h"
 #include "swkbd_util.h"
+#include "session_store.h"
+
+extern "C" {
+struct Vault;
+#include "waystone.h"
+}
 
 SettingsActivity::SettingsActivity(Session* session) : session_(session) {}
 SettingsActivity::~SettingsActivity() = default;
@@ -70,6 +76,23 @@ brls::View* SettingsActivity::createContentView()
     device_label_ = new brls::Label();
     device_label_->setFontSize(20.0f);
     col->addView(device_label_);
+
+    logout_label_ = new brls::Label();
+    logout_label_->setText("Log out");
+    logout_label_->setFontSize(20.0f);
+    logout_label_->setTextColor(nvgRGB(220, 50, 50));
+    logout_label_->registerClickAction([this](brls::View*) {
+        session_store_clear();
+        if (session_->vault) {
+            ws_vault_free(session_->vault);
+            session_->vault = nullptr;
+        }
+        zeroize_string(session_->dav.pass);
+        zeroize_string(session_->dav.user);
+        status_label_->setText("Logged out. Please restart the app.");
+        return true;
+    });
+    col->addView(logout_label_);
 
     status_label_ = new brls::Label();
     status_label_->setFontSize(18.0f);

@@ -1,5 +1,6 @@
 #include "setup_activity.h"
 #include "recovery_key_activity.h"
+#include "session_store.h"
 #include <borealis.hpp>
 #include <cstdio>
 
@@ -39,6 +40,10 @@ SetupActivity::~SetupActivity() {
         ws_vault_free(vault_result_.vault);
         vault_result_.vault = nullptr;
     }
+    // No explicit zeroize_secrets() here: if the poll lambda ran, secrets are
+    // already moved into session_; if the worker is still running (early exit),
+    // the worker's std::string copies are zeroized by the worker itself. The
+    // base class ~WizardActivity zeroizes values_[] automatically.
 }
 
 std::vector<WizardStepDef> SetupActivity::get_steps() const { return setup_steps(); }
@@ -96,42 +101,33 @@ bool SetupActivity::validate_step(size_t step) {
 void SetupActivity::on_finish() { do_create_vault(); }
 
 void SetupActivity::do_create_vault() {
-    // Re-entry guard: worker thread already running.
     if (creating_vault_) return;
-
-    printf("[vault] do_create_vault: entered\n");
+    // Re-entry guard: creating_vault_ prevents a second worker spawn if the
+    // user hammers the finish button while Argon2 is running.
 
     session_->config.server_url = values_[FIELD_SERVER];
     session_->config.username   = values_[FIELD_USERNAME];
 
     creating_vault_ = true;
     status_ = "Creating vault\xe2\x80\xa6 please wait";
-    schedule_refresh();  // show the progress state before blocking
+    schedule_refresh();
 
-    // Copy passphrase for the worker; the original remains in values_ and is
-    // zeroized by zeroize_secrets() in the poll callback on success.
     std::string passphrase_copy = values_[FIELD_PASSPHRASE];
 
     vault_done_.store(false);
 
-    printf("[vault] do_create_vault: starting worker thread\n");
-
     vault_thread_ = std::thread([this, pass = passphrase_copy]() mutable {
-        printf("[vault] worker: calling create_vault\n");
         VaultCreateResult res = create_vault(pass, session_);
-        zeroize_string(pass);  // zeroize worker's passphrase copy immediately
-        if (res.vault) {
-            printf("[vault] worker: create_vault succeeded\n");
-        } else {
-            printf("[vault] worker: create_vault FAILED: %s\n", res.error.c_str());
-        }
+        zeroize_string(pass);
         vault_result_ = std::move(res);
         vault_done_.store(true);
     });
-    zeroize_string(passphrase_copy);  // scrub the local; move leaves SSO remnants
+    zeroize_string(passphrase_copy);
 
-    // poll_fn_ is called by RefreshPump on every 16ms tick (main thread only).
-    // The pump copies before calling, so assigning poll_fn_ = nullptr here is safe.
+    // Called by RefreshPump::run() on the main thread. The pump copies
+    // poll_fn_ to a local std::function before invoking it, because this
+    // lambda clears poll_fn_ on completion (preventing re-entry after the
+    // worker is joined).
     poll_fn_ = [this]() {
         if (!vault_done_.load()) return;
 
@@ -139,20 +135,17 @@ void SetupActivity::do_create_vault() {
 
         if (vault_thread_.joinable()) vault_thread_.join();
 
-        // If the user pressed Exit while the worker was running,
-        // zeroize_secrets() already cleared values_.  Skip result
-        // processing — the destructor frees any orphaned vault.
         if (values_[FIELD_SERVER].empty()) {
             creating_vault_ = false;
             status_.clear();
             return;
         }
 
-        printf("[vault] poll: worker joined, processing result\n");
-
-        // Transfer ownership out of vault_result_ before touching any UI state.
+        // Transfer ownership of the vault pointer out of vault_result_ so the
+        // destructor cannot double-free it if this activity is destroyed after
+        // we push RecoveryKeyActivity (which takes session_->vault).
         WsVault*    vault_ptr     = vault_result_.vault;
-        vault_result_.vault       = nullptr;  // prevent destructor double-free
+        vault_result_.vault       = nullptr;
         std::string recovery_hex  = std::move(vault_result_.recovery_hex);
         std::string recovery_path = std::move(vault_result_.recovery_path);
         std::string err_msg       = std::move(vault_result_.error);
@@ -161,23 +154,21 @@ void SetupActivity::do_create_vault() {
         status_.clear();
 
         if (!vault_ptr) {
-            printf("[vault] poll: failure — showing error\n");
             error_ = err_msg;
             schedule_refresh();
             return;
         }
 
-        printf("[vault] poll: success — setting up session\n");
         session_->vault          = vault_ptr;
         session_->dav.server_url = values_[FIELD_SERVER];
         session_->dav.user       = values_[FIELD_USERNAME];
         session_->dav.pass       = std::move(values_[FIELD_PASSWORD]);
         zeroize_secrets();
 
-        printf("[vault] poll: before pushActivity(RecoveryKeyActivity)\n");
+        persist_session(session_->vault, session_->dav.pass);
+
         brls::Application::pushActivity(
             new RecoveryKeyActivity(session_, recovery_hex, recovery_path));
         zeroize_string(recovery_hex);
-        printf("[vault] poll: after pushActivity(RecoveryKeyActivity)\n");
     };
 }

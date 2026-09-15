@@ -190,6 +190,38 @@ pub unsafe extern "C" fn ws_vault_path_segment(
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_vault_export_mdk(vault: *const WsVault) -> WsBuf {
+    if vault.is_null() {
+        set_last_error("null pointer argument");
+        return WsBuf::null();
+    }
+    let vault = unsafe { &*vault };
+    let mdk = vault.export_mdk();
+    WsBuf::from_vec(mdk.to_vec())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_vault_from_mdk(mdk: *const u8, mdk_len: usize) -> *mut WsVault {
+    if mdk.is_null() {
+        set_last_error("null pointer argument");
+        return core::ptr::null_mut();
+    }
+    if mdk_len != 32 {
+        set_last_error("MDK must be exactly 32 bytes");
+        return core::ptr::null_mut();
+    }
+    let mdk_slice = unsafe { core::slice::from_raw_parts(mdk, mdk_len) };
+    let mut mdk_arr = [0u8; 32];
+    mdk_arr.copy_from_slice(mdk_slice);
+    let vault = Vault::from_mdk(mdk_arr);
+    // Zeroize stack-local MDK copy (write_volatile prevents elision)
+    for byte in mdk_arr.iter_mut() {
+        unsafe { core::ptr::write_volatile(byte, 0) };
+    }
+    Box::into_raw(Box::new(vault))
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn ws_vault_free(vault: *mut WsVault) {
     if !vault.is_null() {
         unsafe {

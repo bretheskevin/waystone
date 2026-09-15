@@ -376,6 +376,69 @@ fn vault_null_input_returns_null() {
     assert!(!err.is_null());
 }
 
+#[test]
+fn vault_export_mdk_round_trip_via_from_mdk() {
+    let pass = CString::new("mdk-round-trip").unwrap();
+    let mut recovery_buf = WsBuf::null();
+    let mut keys_buf = WsBuf::null();
+
+    let vault = unsafe { ws_vault_init(pass.as_ptr(), &mut recovery_buf, &mut keys_buf) };
+    assert!(!vault.is_null());
+
+    // Export MDK
+    let mdk_buf = unsafe { ws_vault_export_mdk(vault) };
+    assert!(!mdk_buf.ptr.is_null());
+    assert_eq!(mdk_buf.len, 32);
+
+    // Reconstruct from MDK
+    let vault2 = unsafe { ws_vault_from_mdk(mdk_buf.ptr, mdk_buf.len) };
+    assert!(!vault2.is_null());
+
+    // Verify encrypt/decrypt parity
+    let plaintext = b"mdk ffi round trip";
+    let encrypted = unsafe { ws_vault_encrypt_blob(vault, plaintext.as_ptr(), plaintext.len()) };
+    assert!(encrypted.len > 0);
+    let decrypted = unsafe { ws_vault_decrypt_blob(vault2, encrypted.ptr, encrypted.len) };
+    let dec_slice = unsafe { std::slice::from_raw_parts(decrypted.ptr, decrypted.len) };
+    assert_eq!(dec_slice, plaintext);
+
+    unsafe {
+        ws_buf_free(mdk_buf);
+        ws_buf_free(encrypted);
+        ws_buf_free(decrypted);
+        ws_buf_free(recovery_buf);
+        ws_buf_free(keys_buf);
+        ws_vault_free(vault);
+        ws_vault_free(vault2);
+    }
+}
+
+#[test]
+fn vault_from_mdk_null_returns_null() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
+    let vault = unsafe { ws_vault_from_mdk(std::ptr::null(), 32) };
+    assert!(vault.is_null());
+    let err = unsafe { ws_last_error() };
+    assert!(!err.is_null());
+}
+
+#[test]
+fn vault_from_mdk_wrong_length_returns_null() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
+    let bad_mdk = [0u8; 16];
+    let vault = unsafe { ws_vault_from_mdk(bad_mdk.as_ptr(), bad_mdk.len()) };
+    assert!(vault.is_null());
+    let err = unsafe { ws_last_error() };
+    assert!(!err.is_null());
+}
+
+#[test]
+fn vault_export_mdk_null_vault_returns_null() {
+    let buf = unsafe { ws_vault_export_mdk(std::ptr::null()) };
+    assert!(buf.ptr.is_null());
+    assert_eq!(buf.len, 0);
+}
+
 // ── Packaging ABI tests ──────────────────────────────────────────────────────
 
 #[test]

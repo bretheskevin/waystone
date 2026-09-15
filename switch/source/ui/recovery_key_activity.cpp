@@ -1,5 +1,6 @@
 #include "recovery_key_activity.h"
 #include "vault_helpers.h"
+#include <cstdio>
 
 RecoveryKeyActivity::RecoveryKeyActivity(Session* session,
                                          const std::string& recovery_hex,

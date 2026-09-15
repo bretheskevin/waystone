@@ -81,6 +81,10 @@ WsVault *ws_vault_init(const char *passphrase,
 
  char *ws_vault_path_segment(const WsVault *vault, const char *name);
 
+ struct WsBuf ws_vault_export_mdk(const WsVault *vault);
+
+ WsVault *ws_vault_from_mdk(const uint8_t *mdk, uintptr_t mdk_len);
+
  void ws_vault_free(WsVault *vault);
 
 /**

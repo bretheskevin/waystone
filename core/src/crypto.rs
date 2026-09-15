@@ -232,6 +232,21 @@ impl Vault {
     pub fn path_segment(&self, name: &str) -> String {
         hmac_name(&self.mdk, b"path-segment", name)
     }
+
+    pub fn export_mdk(&self) -> [u8; 32] {
+        self.mdk
+    }
+
+    pub fn from_mdk(mdk: [u8; 32]) -> Vault {
+        Vault {
+            mdk,
+            keys_file: KeysFile {
+                salt: String::new(),
+                wrapped_mdk_pass: String::new(),
+                wrapped_mdk_rec: String::new(),
+            },
+        }
+    }
 }
 
 impl Drop for Vault {
@@ -357,5 +372,43 @@ mod tests {
         let name1 = vault1.blob_name("same_hash");
         let name2 = vault2.blob_name("same_hash");
         assert_ne!(name1, name2);
+    }
+
+    #[test]
+    fn export_mdk_round_trip() {
+        let (vault, _recovery) = Vault::init("test-pass").unwrap();
+        let mdk = vault.export_mdk();
+        let vault2 = Vault::from_mdk(mdk);
+        let plaintext = b"round-trip test data";
+        let encrypted = vault.encrypt_blob(plaintext).unwrap();
+        let decrypted = vault2.decrypt_blob(&encrypted).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn from_mdk_heads_parity() {
+        let (vault, _recovery) = Vault::init("heads-pass").unwrap();
+        let mdk = vault.export_mdk();
+        let vault2 = Vault::from_mdk(mdk);
+        let heads = b"{\"device\":\"dev1\",\"hash\":\"abc\"}";
+        let encrypted = vault.encrypt_heads(heads).unwrap();
+        let decrypted = vault2.decrypt_heads(&encrypted).unwrap();
+        assert_eq!(decrypted, heads);
+    }
+
+    #[test]
+    fn from_mdk_hmac_parity() {
+        let (vault, _recovery) = Vault::init("hmac-pass").unwrap();
+        let mdk = vault.export_mdk();
+        let vault2 = Vault::from_mdk(mdk);
+        assert_eq!(vault.blob_name("test-hash"), vault2.blob_name("test-hash"));
+        assert_eq!(vault.path_segment("switch"), vault2.path_segment("switch"));
+    }
+
+    #[test]
+    fn export_mdk_returns_32_bytes() {
+        let (vault, _) = Vault::init("pw").unwrap();
+        let mdk = vault.export_mdk();
+        assert_eq!(mdk.len(), 32);
     }
 }

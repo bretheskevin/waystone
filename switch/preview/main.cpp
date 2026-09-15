@@ -8,6 +8,7 @@
  *   unlock          — UnlockActivity at step 0 (Vault Passphrase)
  *   recovery        — RecoveryKeyActivity with canned recovery hex
  *   no-internet     — NoInternetActivity (no-network reason)
+ *   loading         — LoadingActivity spinner (3-second simulated worker)
  *   transition      — SetupActivity auto-advancing from step 0→1 (for GIF capture)
  *
  * Set BOREALIS_THEME=DARK before running to force the dark theme.
@@ -21,9 +22,12 @@
 #include "unlock_activity.h"
 #include "recovery_key_activity.h"
 #include "no_internet_activity.h"
+#include "loading_activity.h"
 #include "session.h"
+#include <chrono>
 #include <cstring>
 #include <string>
+#include <thread>
 
 // ---------------------------------------------------------------------------
 // Preview-only subclass of SetupActivity.
@@ -126,6 +130,16 @@ int main(int argc, char** argv)
         // With PREVIEW_SLOW_TRANSITION the animation lasts 2 s, giving the
         // screenshot script time to capture mid-animation frames.
         brls::Application::pushActivity(new PreviewTransitionActivity(&session));
+
+    } else if (strcmp(mode, "loading") == 0) {
+        // Preview the loading spinner without a real worker
+        auto worker = []() -> LoadingActivity::LoadResult {
+            // Simulate a 3-second load
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            return {true, "", {}};
+        };
+        brls::Application::pushActivity(
+            new LoadingActivity(&session, worker));
 
     } else {
         brls::Logger::error("Unknown mode: %s", mode);

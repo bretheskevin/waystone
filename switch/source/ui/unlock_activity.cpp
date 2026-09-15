@@ -1,5 +1,8 @@
 #include "unlock_activity.h"
+#include "loading_activity.h"
 #include "vault_helpers.h"
+#include "session_store.h"
+#include <cstdio>
 
 extern "C" {
 struct Vault;
@@ -55,31 +58,48 @@ void UnlockActivity::register_extra_actions() {
     });
 }
 
+// Task 5 + 7b: run Argon2 KDF + title listing off the render thread; persist session.
 void UnlockActivity::do_unlock() {
-    WsVault* vault = nullptr;
+    std::string passphrase_copy = values_[FIELD_PASSPHRASE];
+    std::string password_copy   = values_[FIELD_PASSWORD];
+    bool recovery = recovery_mode_;
+    std::vector<uint8_t> keys_copy(keys_data_, keys_data_ + keys_len_);
+    Session* session = session_;
 
-    if (recovery_mode_) {
-        vault = ws_vault_unlock_recovery(values_[FIELD_PASSPHRASE].c_str(),
-                                         keys_data_, keys_len_);
-    } else {
-        vault = ws_vault_unlock_pass(values_[FIELD_PASSPHRASE].c_str(),
-                                     keys_data_, keys_len_);
-    }
+    auto worker = [session, pass = std::move(passphrase_copy),
+                   pwd = std::move(password_copy),
+                   keys = std::move(keys_copy), recovery]() mutable
+        -> LoadingActivity::LoadResult {
+        WsVault* vault = nullptr;
+        if (recovery) {
+            vault = ws_vault_unlock_recovery(pass.c_str(), keys.data(), keys.size());
+        } else {
+            vault = ws_vault_unlock_pass(pass.c_str(), keys.data(), keys.size());
+        }
+        zeroize_string(pass);
 
-    if (!vault) {
-        const char* err = ws_last_error();
-        error_ = std::string("Unlock failed: ") + (err ? err : "wrong passphrase or key");
-        zeroize_string(values_[FIELD_PASSPHRASE]);
-        schedule_refresh();
-        return;
-    }
+        if (!vault) {
+            const char* err = ws_last_error();
+            std::string msg = std::string("Unlock failed: ") + (err ? err : "wrong passphrase or key");
+            zeroize_string(pwd);
+            return {false, std::move(msg), {}};
+        }
 
-    session_->vault          = vault;
-    session_->dav.server_url = session_->config.server_url;
-    session_->dav.user       = session_->config.username;
-    session_->dav.pass       = std::move(values_[FIELD_PASSWORD]);
-    zeroize_string(values_[FIELD_PASSWORD]);
+        session->vault          = vault;
+        session->dav.server_url = session->config.server_url;
+        session->dav.user       = session->config.username;
+        session->dav.pass       = std::move(pwd);
+        zeroize_string(pwd);
+
+        persist_session(session->vault, session->dav.pass);
+
+        auto titles = list_titles();
+        return {true, "", std::move(titles)};
+    };
+
+    // Zeroize originals — copies moved into the lambda above.
     zeroize_string(values_[FIELD_PASSPHRASE]);
+    zeroize_string(values_[FIELD_PASSWORD]);
 
-    push_dashboard(session_);
+    brls::Application::pushActivity(new LoadingActivity(session_, std::move(worker)));
 }

@@ -20,11 +20,31 @@ extern "C" {
 #include "ui/setup_activity.h"
 #include "ui/unlock_activity.h"
 #include "ui/no_internet_activity.h"
+#include "ui/loading_activity.h"
+#include "session_store.h"
+
+// Task 3: Switch hardware device key (SPL service — always available on Switch).
+static bool switch_device_key(uint8_t* out_key, size_t* out_len) {
+    if (!out_key || !out_len || *out_len < 8) return false;
+    Result spl_rc = splInitialize();
+    if (R_SUCCEEDED(spl_rc)) {
+        uint64_t device_id = 0;
+        Result rc = splGetConfig(SplConfigItem_DeviceId, &device_id);
+        splExit();
+        if (R_SUCCEEDED(rc)) {
+            memcpy(out_key, &device_id, 8);
+            *out_len = 8;
+            return true;
+        }
+    }
+    return false;
+}
 
 int main(int argc, char* argv[])
 {
     socketInitializeDefault();
     romfsInit();
+    session_store_set_device_key_fn(switch_device_key);  // Task 3: register before any session use
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
         romfsExit();
         socketExit();
@@ -50,6 +70,7 @@ int main(int argc, char* argv[])
         uint8_t* kbuf = nullptr;
 
         // Choose SetupActivity or UnlockActivity based on whether keys.json exists.
+        // Task 6: when session.bin exists, try auto-unlock via LoadingActivity first.
         auto route_to_first_screen = [&]() {
             const char* keys_path = "sdmc:/waystone/keys.json";
             FILE* kf = fopen(keys_path, "rb");
@@ -70,8 +91,36 @@ int main(int argc, char* argv[])
                 }
                 fclose(kf);
                 if (kbuf && klen > 0) {
-                    brls::Application::pushActivity(
-                        new UnlockActivity(&session, kbuf, static_cast<size_t>(klen)));
+                    if (session_store_exists()) {
+                        auto worker = [&session]() -> LoadingActivity::LoadResult {
+                            std::string webdav_pass;
+                            WsVault* vault = session_store_load_vault(webdav_pass);
+                            if (!vault) return {false, "session expired", {}};
+
+                            session.vault          = vault;
+                            session.dav.server_url = session.config.server_url;
+                            session.dav.user       = session.config.username;
+                            session.dav.pass       = std::move(webdav_pass);
+                            zeroize_string(webdav_pass);
+
+                            auto titles = list_titles();
+                            return {true, "", std::move(titles)};
+                        };
+
+                        // on_failure runs from RefreshPump::run() on the render thread.
+                        // pushActivity is safe; popActivity is NOT (UAF).
+                        auto on_failure = [&session, kbuf, klen](const std::string&) {
+                            session_store_clear();
+                            brls::Application::pushActivity(
+                                new UnlockActivity(&session, kbuf, static_cast<size_t>(klen)));
+                        };
+
+                        brls::Application::pushActivity(
+                            new LoadingActivity(&session, worker, on_failure));
+                    } else {
+                        brls::Application::pushActivity(
+                            new UnlockActivity(&session, kbuf, static_cast<size_t>(klen)));
+                    }
                 } else {
                     brls::Application::pushActivity(new SetupActivity(&session));
                 }

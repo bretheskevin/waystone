@@ -15,6 +15,7 @@ class SettingsActivity : public brls::Activity {
     brls::Label* policy_label_  = nullptr;
     brls::Label* backup_label_  = nullptr;
     brls::Label* device_label_  = nullptr;
+    brls::Label* logout_label_  = nullptr;
     brls::Label* status_label_  = nullptr;
     void refresh_labels();
 };
