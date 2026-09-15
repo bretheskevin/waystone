@@ -1,11 +1,7 @@
 #pragma once
 #include <borealis.hpp>
 #include <functional>
-
-enum class NoInternetReason {
-    NoNetwork,        // Switch has no internet connection
-    ServerUnreachable // Network up but Waystone server can't be reached
-};
+#include "net_status.h"
 
 class NoInternetActivity : public brls::Activity {
   public:

@@ -24,6 +24,7 @@ private:
     bool syncing_;
     static const size_t VISIBLE_ROWS = 5;
     void start_sync();
+    void start_sync_or_gate();
     TitleListScreen(const TitleListScreen&);
     TitleListScreen& operator=(const TitleListScreen&);
 };

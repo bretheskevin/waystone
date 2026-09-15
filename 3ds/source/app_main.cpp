@@ -24,6 +24,8 @@ extern "C" {
 #include "ui/setup_screen.h"
 #include "ui/unlock_screen.h"
 #include "ui/loading_screen.h"
+#include "net_status.h"
+#include "ui/no_internet_screen.h"
 
 static bool ctr_device_key(uint8_t* out_key, size_t* out_len) {
     if (!out_key || !out_len || *out_len < 8) return false;
@@ -69,13 +71,24 @@ int main(int argc, char* argv[]) {
 
             long klen = 0;
             kbuf = read_keys_file("sdmc:/waystone/keys.json", &klen);
-            if (kbuf && klen > 0 && session_store_exists()) {
-                app.set_screen(new LoadingScreen(&session, true, kbuf, static_cast<size_t>(klen)));
-            } else if (kbuf && klen > 0) {
-                app.set_screen(new UnlockScreen(&session, kbuf, static_cast<size_t>(klen)));
+
+            // Wrap routing in a lambda so the no-internet gate can retry it.
+            auto route_to_first_screen = [&]() {
+                if (kbuf && klen > 0 && session_store_exists()) {
+                    app.set_screen(new LoadingScreen(&session, true, kbuf, static_cast<size_t>(klen)));
+                } else if (kbuf && klen > 0) {
+                    app.set_screen(new UnlockScreen(&session, kbuf, static_cast<size_t>(klen)));
+                } else {
+                    free(kbuf); kbuf = 0;
+                    app.set_screen(new SetupScreen(&session));
+                }
+            };
+
+            if (!network_available()) {
+                app.set_screen(new NoInternetScreen(NoInternetReason::NoNetwork,
+                                                    route_to_first_screen));
             } else {
-                free(kbuf); kbuf = 0;
-                app.set_screen(new SetupScreen(&session));
+                route_to_first_screen();
             }
 
             app.run();

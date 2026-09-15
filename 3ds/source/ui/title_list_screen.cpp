@@ -1,6 +1,8 @@
 #include "title_list_screen.h"
 #include "settings_screen.h"
 #include "conflict_screen.h"
+#include "no_internet_screen.h"
+#include "net_status.h"
 #include "app.h"
 #include "widgets.h"
 #include "theme.h"
@@ -91,12 +93,22 @@ void TitleListScreen::handle_input(u32 kDown, touchPosition touch) {
     }
     if (kDown & KEY_X) { App::instance().push_screen(new ConflictScreen(session_, titles_)); return; }
     if (kDown & KEY_Y) { App::instance().push_screen(new SettingsScreen(session_)); return; }
-    if (kDown & KEY_A) { if (cursor_ == titles_.size() || titles_.empty()) start_sync(); }
+    if (kDown & KEY_A) { if (cursor_ == titles_.size() || titles_.empty()) start_sync_or_gate(); }
     if (touch.px != 0 || touch.py != 0) {
         float btn_y=(float)SCREEN_BOT_H-50.0f, btn_w=120.0f, btn_x=((float)SCREEN_BOT_W-btn_w)/2.0f;
         Rect btn = {btn_x, btn_y, btn_w, 28.0f};
-        if (btn.contains((float)touch.px, (float)touch.py)) start_sync();
+        if (btn.contains((float)touch.px, (float)touch.py)) start_sync_or_gate();
     }
+}
+void TitleListScreen::start_sync_or_gate() {
+    if (!network_available()) {
+        App::instance().push_screen(
+            new NoInternetScreen(NoInternetReason::NoNetwork, [this]() {
+                start_sync();
+            }));
+        return;
+    }
+    start_sync();
 }
 void TitleListScreen::start_sync() {
     if (syncing_) return;
