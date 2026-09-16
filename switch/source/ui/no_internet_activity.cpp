@@ -1,16 +1,9 @@
 #include "no_internet_activity.h"
 #include "net_status.h"
+#include <string>
 
-static const char* reason_message(NoInternetReason r) {
-    switch (r) {
-        case NoInternetReason::NoNetwork:
-            return "No internet connection detected. "
-                   "Check your Wi-Fi settings and try again.";
-        case NoInternetReason::ServerUnreachable:
-            return "Can't reach your Waystone server. "
-                   "Check the server URL in Settings and try again.";
-    }
-    return "";
+static std::string reason_message(NoInternetReason r) {
+    return std::string(no_internet_headline(r)) + " " + no_internet_detail(r);
 }
 
 NoInternetActivity::NoInternetActivity(NoInternetReason reason,

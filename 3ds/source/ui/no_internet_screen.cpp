@@ -2,20 +2,11 @@
 #include "app.h"
 #include "theme.h"
 #include "widgets.h"
-#include <cstring>
 
 // Mirror the exact Switch wording; split at the sentence boundary so each
 // line fits the 400 px top screen at TEXT_SM.
-static const char* reason_message(NoInternetReason r) {
-    switch (r) {
-        case NoInternetReason::NoNetwork:
-            return "No internet connection detected.\n"
-                   "Check your Wi-Fi settings and try again.";
-        case NoInternetReason::ServerUnreachable:
-            return "Can't reach your Waystone server.\n"
-                   "Check the server URL in Settings and try again.";
-    }
-    return "";
+static std::string reason_message(NoInternetReason r) {
+    return std::string(no_internet_headline(r)) + "\n" + no_internet_detail(r);
 }
 
 NoInternetScreen::NoInternetScreen(NoInternetReason reason,
@@ -24,10 +15,7 @@ NoInternetScreen::NoInternetScreen(NoInternetReason reason,
       base_message_(reason_message(reason)),
       message_(base_message_),
       retry_rect_()
-{
-    retry_rect_.x = 0.0f; retry_rect_.y = 0.0f;
-    retry_rect_.w = 0.0f; retry_rect_.h = 0.0f;
-}
+{}
 
 void NoInternetScreen::draw_top(C3D_RenderTarget* /*target*/) {
     C2D_TextBuf buf = App::instance().text_buf();
