@@ -17,7 +17,7 @@ public:
 private:
     NoInternetReason      reason_;
     std::function<void()> on_success_;
-    const char*           base_message_; // points to a string literal (immortal)
+    std::string           base_message_; // owns the joined message text
     std::string           message_;      // displayed; gains a suffix on retry failure
     Rect                  retry_rect_;   // updated each frame by draw_bottom for touch hit-test
     NoInternetScreen(const NoInternetScreen&);
