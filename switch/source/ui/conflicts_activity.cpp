@@ -1,4 +1,5 @@
 #include "conflicts_activity.h"
+#include "borealis_focus.h"
 #include <cstdio>
 
 // -----------------------------------------------------------------------
@@ -199,39 +200,14 @@ void ConflictsActivity::rebuild_list() {
 // Determine which row is focused (d-pad selection)
 // -----------------------------------------------------------------------
 size_t ConflictsActivity::focused_row_index() const {
-    auto* focus = brls::Application::getCurrentFocus();
-    if (!focus) return 0;
-    auto& ch = list_box_->getChildren();
-    for (size_t i = 0; i < ch.size(); i++) {
-        // Check if focus is the row itself or a child of the row
-        brls::View* v = focus;
-        while (v) {
-            if (v == ch[i]) return i;
-            v = v->getParent();
-        }
-    }
-    return 0;  // fallback to first row
+    return borealis_focused_child_index(list_box_);
 }
 
 // -----------------------------------------------------------------------
 // Focus the row closest to the previously selected position
 // -----------------------------------------------------------------------
 void ConflictsActivity::focus_selected_row() {
-    auto& ch = list_box_->getChildren();
-    if (ch.empty()) {
-        // Nothing to focus -- give focus to the content view
-        if (auto* cv = getContentView())
-            brls::Application::giveFocus(cv);
-        return;
-    }
-    // Clamp selected_index_ to the new list size (items may have been resolved)
-    if (selected_index_ >= ch.size())
-        selected_index_ = ch.size() - 1;
-    auto* row = ch[selected_index_];
-    if (row->isFocusable())
-        brls::Application::giveFocus(row);
-    else if (auto* cv = getContentView())
-        brls::Application::giveFocus(cv);
+    borealis_focus_child(list_box_, selected_index_, getContentView());
 }
 
 // -----------------------------------------------------------------------

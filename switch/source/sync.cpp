@@ -1,10 +1,10 @@
 #include "sync.h"
 #include "json.h"
 #include "snapshot.h"
+#include "snapshot_browse.h" // history_timestamp (shared)
 
 #include <cstdio>
 #include <cstring>
-#include <ctime>
 
 extern "C" {
 #include "waystone.h"
@@ -41,16 +41,6 @@ static std::string make_base_path(const WsVault* vault,
     ws_string_free(game_seg);
     ws_string_free(slot_seg);
     return result;
-}
-
-// Helper: format a timestamp suitable for history filenames (20260902T153000Z).
-static std::string history_timestamp() {
-    time_t now = time(nullptr);
-    struct tm t;
-    gmtime_r(&now, &t);
-    char buf[32];
-    strftime(buf, sizeof(buf), "%Y%m%dT%H%M%SZ", &t);
-    return buf;
 }
 
 SaveDecision scan_save_decision(const WsVault* vault, const char* save_json,
