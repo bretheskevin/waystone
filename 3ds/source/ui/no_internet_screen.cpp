@@ -68,7 +68,7 @@ void NoInternetScreen::handle_input(u32 kDown, touchPosition touch) {
             if (cb) cb();
             return;
         } else {
-            message_ = std::string(base_message_) + "\nStill no connection. Try again.";
+            message_ = base_message_ + "\n" + no_internet_retry_suffix();
         }
     }
 

@@ -16,6 +16,11 @@ inline const char* no_internet_detail(NoInternetReason r) {
                ? "Check your Wi-Fi settings and try again."
                : "Check the server URL in Settings and try again.";
 }
+// Appended to the message after a Retry that still finds no connection.
+// Each platform prepends its own separator (Switch " ", 3DS "\n").
+inline const char* no_internet_retry_suffix() {
+    return "Still no connection. Try again.";
+}
 
 // Returns true when the console has an active internet connection.
 // Each platform provides its own implementation (switch/source/net_status.cpp,

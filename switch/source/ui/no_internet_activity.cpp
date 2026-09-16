@@ -44,8 +44,8 @@ brls::View* NoInternetActivity::createContentView() {
             }
         } else {
             msg_label_->setText(
-                std::string(reason_message(reason_)) +
-                " Still no connection. Try again.");
+                reason_message(reason_) + " " +
+                no_internet_retry_suffix());
         }
         return true;
     });
