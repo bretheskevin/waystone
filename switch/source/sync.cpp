@@ -49,6 +49,7 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_json,
                                 const std::string& raw_json) {
     SaveDecision d;
     d.raw_json = raw_json;
+    d.mtime    = mtime;
 
     WsBuf zip = {nullptr, 0};
     char* entry_json = ws_package(save_json, &zip);
@@ -151,6 +152,38 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
     int wrc = write_save_files(title_id, uid, files_json);
     ws_string_free(files_json);
     return wrc;
+}
+
+std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& title,
+                                     AccountUid uid,
+                                     const char* device_id, int policy,
+                                     const WebDavCfg& dav, bool* error) {
+    std::vector<SaveDecision> results;
+    if (error) *error = false;
+
+    std::string raw_json = extract_save_json(title, uid);
+    if (raw_json.empty()) return results;
+
+    char* norm_json = ws_jksv_normalize("switch", raw_json.c_str());
+    if (!norm_json) {
+        printf("  ws_jksv_normalize failed: %s\n",
+               ws_last_error() ? ws_last_error() : "unknown");
+        if (error) *error = true;
+        return results;
+    }
+
+    std::vector<std::string> saves = json_split_array(norm_json);
+    ws_string_free(norm_json);
+    if (saves.empty()) return results;
+
+    std::string mtime = current_utc_time();
+    for (size_t si = 0; si < saves.size(); si++) {
+        std::string save_json = json_set_mtime(saves[si], mtime.c_str());
+        SaveDecision d = scan_save_decision(vault, save_json.c_str(), mtime.c_str(),
+                                            device_id, policy, dav, raw_json);
+        results.push_back(d);
+    }
+    return results;
 }
 
 int push_title(const WsVault* vault,
@@ -314,36 +347,19 @@ int pull_title(const WsVault* vault,
                const WebDavCfg& dav) {
 
     printf("  Extracting local save data for pull comparison...\n");
-    std::string raw_json = extract_save_json(title, uid);
-    if (raw_json.empty()) {
+    bool had_error = false;
+    std::vector<SaveDecision> decisions = scan_title(vault, title, uid, device_id,
+                                                     0 /* NewestWins */, dav, &had_error);
+    if (had_error) return -1;
+    if (decisions.empty()) {
         printf("  No local save data found — cannot determine remote path. Skipping.\n");
         return 0;
     }
 
-    char* norm_json = ws_jksv_normalize("switch", raw_json.c_str());
-    if (!norm_json) {
-        printf("  ws_jksv_normalize failed: %s\n",
-               ws_last_error() ? ws_last_error() : "unknown");
-        return -1;
-    }
-
-    std::vector<std::string> saves = json_split_array(norm_json);
-    ws_string_free(norm_json);
-
-    if (saves.empty()) {
-        printf("  No normalized saves produced.\n");
-        return 0;
-    }
-
-    // Use a single mtime for all saves in this pull pass (mirrors push).
-    std::string mtime = current_utc_time();
     int pulled = 0;
-
-    for (size_t si = 0; si < saves.size(); si++) {
-        printf("  Pull %zu/%zu: ", si + 1, saves.size());
-        std::string save_json = json_set_mtime(saves[si], mtime.c_str());
-        SaveDecision d = scan_save_decision(vault, save_json.c_str(), mtime.c_str(),
-                                            device_id, 0 /* NewestWins */, dav, raw_json);
+    for (size_t si = 0; si < decisions.size(); si++) {
+        printf("  Pull %zu/%zu: ", si + 1, decisions.size());
+        const SaveDecision& d = decisions[si];
         if (d.decision_type == "in_sync") { printf("in_sync\n"); continue; }
         else if (d.decision_type == "push") { printf("decision=push, no pull needed\n"); continue; }
         else if (d.decision_type == "conflict_needs_input") { printf("conflict_needs_input -- manual resolution required (skipping)\n"); continue; }

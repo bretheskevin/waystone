@@ -14,7 +14,7 @@ void SnapshotsController::join() {
     if (thread_.joinable()) thread_.join();
 }
 
-SnapshotPhase SnapshotsController::phase() const { return phase_.load(); }
+BrowsePhase SnapshotsController::phase() const { return phase_.load(); }
 
 std::string SnapshotsController::status() const {
     std::lock_guard<std::mutex> lk(mu_);
@@ -30,7 +30,7 @@ void SnapshotsController::start_scan() {
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) return;
     if (thread_.joinable()) thread_.join();
-    phase_.store(SnapshotPhase::Scanning);
+    phase_.store(BrowsePhase::Scanning);
     { std::lock_guard<std::mutex> lk(mu_);
       status_ = "Scanning snapshots...";
       snapshots_.clear(); }
@@ -51,7 +51,7 @@ void SnapshotsController::scan_worker() {
         snprintf(buf, sizeof(buf), "%zu snapshot(s) found", entries.size());
         status_ = buf;
     }
-    phase_.store(entries.empty() ? SnapshotPhase::Done : SnapshotPhase::Ready);
+    phase_.store(entries.empty() ? BrowsePhase::Done : BrowsePhase::Ready);
     running_.store(false);
 }
 
@@ -63,7 +63,7 @@ void SnapshotsController::start_restore(size_t index) {
       if (index >= snapshots_.size()) { running_.store(false); return; }
       entry = snapshots_[index]; }
     if (thread_.joinable()) thread_.join();
-    phase_.store(SnapshotPhase::Restoring);
+    phase_.store(BrowsePhase::Restoring);
     { std::lock_guard<std::mutex> lk(mu_);
       status_ = "Restoring " + entry.timestamp + "..."; }
     thread_ = std::thread(&SnapshotsController::restore_worker, this,
@@ -85,7 +85,7 @@ void SnapshotsController::restore_worker(SnapshotEntry entry, size_t index) {
             printf("[snapshot] guard snapshot FAILED, aborting restore\n");
             { std::lock_guard<std::mutex> lk(mu_);
               status_ = "Restore failed: could not back up current save."; }
-            phase_.store(SnapshotPhase::Error);
+            phase_.store(BrowsePhase::Error);
             running_.store(false);
             return;
         }
@@ -98,14 +98,14 @@ void SnapshotsController::restore_worker(SnapshotEntry entry, size_t index) {
     if (flat_json.empty()) {
         { std::lock_guard<std::mutex> lk(mu_);
           status_ = "Restore failed: could not read snapshot."; }
-        phase_.store(SnapshotPhase::Error);
+        phase_.store(BrowsePhase::Error);
         running_.store(false);
         return;
     }
     if (flat_json == "[]") {
         { std::lock_guard<std::mutex> lk(mu_);
           status_ = "Snapshot is empty, nothing to restore."; }
-        phase_.store(SnapshotPhase::Done);
+        phase_.store(BrowsePhase::Done);
         running_.store(false);
         return;
     }
@@ -117,7 +117,7 @@ void SnapshotsController::restore_worker(SnapshotEntry entry, size_t index) {
         printf("[snapshot] write_save_files FAILED (rc=%d)\n", wrc);
         { std::lock_guard<std::mutex> lk(mu_);
           status_ = "Restore failed: write error."; }
-        phase_.store(SnapshotPhase::Error);
+        phase_.store(BrowsePhase::Error);
         running_.store(false);
         return;
     }
@@ -125,6 +125,6 @@ void SnapshotsController::restore_worker(SnapshotEntry entry, size_t index) {
     printf("[snapshot] restore complete\n");
     { std::lock_guard<std::mutex> lk(mu_);
       status_ = "Restored! Safety backup saved."; }
-    phase_.store(SnapshotPhase::Done);
+    phase_.store(BrowsePhase::Done);
     running_.store(false);
 }

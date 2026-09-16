@@ -18,7 +18,7 @@ public:
     void start_restore(size_t index);
     void join();
 
-    SnapshotPhase phase() const;
+    BrowsePhase phase() const;
     std::string status() const;
     std::vector<SnapshotEntry> snapshots() const;
     const TitleInfo& title() const { return title_; }
@@ -27,7 +27,7 @@ private:
     TitleInfo title_;
     AccountUid uid_;
     std::string key_dir_;
-    std::atomic<SnapshotPhase> phase_{SnapshotPhase::Idle};
+    std::atomic<BrowsePhase> phase_{BrowsePhase::Idle};
     std::atomic<bool> running_{false};
     mutable std::mutex mu_;
     std::string status_;

@@ -6,6 +6,8 @@
 #include "net_status.h"
 #include "snapshots_controller.h"
 #include "snapshots_activity.h"
+#include "history_controller.h"
+#include "history_activity.h"
 #include "borealis_focus.h"
 #include <cstdio>
 
@@ -77,6 +79,16 @@ void TitleListActivity::onContentAvailable() {
             auto* sc = new SnapshotsController(titles[idx], session_->uid);
             sc->start_scan();
             brls::Application::pushActivity(new SnapshotsActivity(sc));
+        }
+        return true;
+    });
+    registerAction("History", brls::BUTTON_RB, [this](brls::View*) {
+        auto titles = ctrl_->titles();
+        size_t idx = focused_title_index();
+        if (idx < titles.size()) {
+            auto* hc = new HistoryController(titles[idx], session_);
+            hc->start_scan();
+            brls::Application::pushActivity(new HistoryActivity(hc));
         }
         return true;
     });

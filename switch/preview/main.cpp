@@ -12,6 +12,7 @@
  *   transition      — SetupActivity auto-advancing from step 0→1 (for GIF capture)
  *   conflicts       — ConflictsActivity with 3 canned conflicts (normal mode)
  *   conflicts-confirm — ConflictsActivity with confirm banner auto-triggered
+ *   history           — HistoryActivity with 3 canned history entries
  *
  * Set BOREALIS_THEME=DARK before running to force the dark theme.
  * The binary must be launched from switch/lib/borealis/ so that
@@ -26,6 +27,8 @@
 #include "no_internet_activity.h"
 #include "loading_activity.h"
 #include "conflicts_activity.h"
+#include "history_controller.h"
+#include "history_activity.h"
 #include "session.h"
 #include <chrono>
 #include <cstring>
@@ -179,6 +182,14 @@ int main(int argc, char** argv)
         ctrl->start_scan();
         brls::Application::pushActivity(
             new PreviewConflictsConfirmActivity(ctrl));
+
+    } else if (strcmp(mode, "history") == 0) {
+        TitleInfo ti;
+        ti.title_id = 0x0100F2C0115B6000ULL;
+        ti.name = "The Legend of Zelda: TotK";
+        auto* hc = new HistoryController(ti, &session);
+        hc->start_scan();
+        brls::Application::pushActivity(new HistoryActivity(hc));
 
     } else {
         brls::Logger::error("Unknown mode: %s", mode);

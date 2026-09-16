@@ -15,7 +15,7 @@ public:
     void start_restore(size_t index);
     void join();
 
-    SnapshotPhase phase() const;
+    BrowsePhase phase() const;
     std::string status();
     std::vector<SnapshotEntry> snapshots();
 

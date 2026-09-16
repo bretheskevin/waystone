@@ -11,9 +11,7 @@ struct SnapshotEntry {
     unsigned long long total_bytes;
 };
 
-// Phase of a snapshot scan/restore operation.
-// Shared between 3DS (SnapshotWorker) and Switch (SnapshotsController).
-enum class SnapshotPhase { Idle, Scanning, Ready, Restoring, Done, Error };
+#include "browse_phase.h"
 
 // Port of core/src/model.rs:120 normalize_game_name.
 // Keep only ASCII alphanumeric, lowercased.

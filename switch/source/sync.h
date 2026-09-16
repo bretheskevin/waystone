@@ -5,6 +5,7 @@
 #include "saves.h"
 
 #include <string>
+#include <vector>
 
 struct Vault;
 typedef Vault WsVault;
@@ -25,11 +26,6 @@ int push_title(const WsVault* vault,
                const WebDavCfg& dav);
 
 // Pull/restore saves for a single title from the WebDAV backend.
-// Mirrors desktop do_pull_save pipeline, per normalized local save:
-//   1. Package local save -> local_hash + group_key -> base_path
-//   2. PROPFIND {base_path}/heads -> decrypt each .json -> heads array
-//   3. ws_decide_pull -> determine pull_hash (or skip)
-//   4. If pull: GET+decrypt blob -> ws_unzip -> write_save_files
 // Returns number of saves restored (0 = nothing to do, -1 = error).
 int pull_title(const WsVault* vault,
                const TitleInfo& title,
@@ -47,6 +43,7 @@ struct SaveDecision {
     std::string heads_array;    // raw JSON array of decrypted heads
     std::string raw_json;       // raw extracted local save JSON (for snapshot)
     std::string winner;         // "local" or "remote" for conflict_resolved
+    std::string mtime;          // UTC timestamp used when packaging this save
 };
 
 // Scan one normalized save entry to determine what sync action is needed.
@@ -63,5 +60,14 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
                         const std::string& base_path, const std::string& group_key,
                         const std::string& raw_json, u64 title_id,
                         AccountUid uid, const WebDavCfg& dav);
+
+// Scan all saves for a title: extract -> ws_jksv_normalize("switch") -> json_split_array
+// -> per-save scan_save_decision. Returns decisions for each normalized save.
+// Empty vector = no local saves or nothing to scan.
+// If error is non-null and a normalize failure occurs, *error is set to true.
+std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& title,
+                                     AccountUid uid,
+                                     const char* device_id, int policy,
+                                     const WebDavCfg& dav, bool* error = nullptr);
 
 #endif

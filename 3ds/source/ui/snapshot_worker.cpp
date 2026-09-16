@@ -7,7 +7,7 @@
 
 SnapshotWorker::SnapshotWorker(TitleInfo title)
     : title_(title),
-      phase_((int)SnapshotPhase::Idle),
+      phase_((int)BrowsePhase::Idle),
       running_(false),
       thread_(0),
       pending_restore_(0)
@@ -30,8 +30,8 @@ void SnapshotWorker::join() {
     }
 }
 
-SnapshotPhase SnapshotWorker::phase() const {
-    return (SnapshotPhase)phase_.load();
+BrowsePhase SnapshotWorker::phase() const {
+    return (BrowsePhase)phase_.load();
 }
 
 std::string SnapshotWorker::status() {
@@ -56,7 +56,7 @@ void SnapshotWorker::start_scan() {
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) return;
     join();
-    phase_.store((int)SnapshotPhase::Scanning);
+    phase_.store((int)BrowsePhase::Scanning);
     {
         LightLock_Lock(&mu_);
         snapshots_.clear();
@@ -66,7 +66,7 @@ void SnapshotWorker::start_scan() {
     thread_ = start_worker_thread(scan_entry, this);
     if (!thread_) {
         printf("[snapshot] threadCreate failed\n");
-        phase_.store((int)SnapshotPhase::Error);
+        phase_.store((int)BrowsePhase::Error);
         LightLock_Lock(&mu_);
         snprintf(status_buf_, sizeof(status_buf_), "Thread creation failed");
         LightLock_Unlock(&mu_);
@@ -88,8 +88,8 @@ void SnapshotWorker::scan_worker() {
                  "%zu snapshot(s) found", entries.size());
         LightLock_Unlock(&mu_);
     }
-    phase_.store(entries.empty() ? (int)SnapshotPhase::Done
-                                 : (int)SnapshotPhase::Ready);
+    phase_.store(entries.empty() ? (int)BrowsePhase::Done
+                                 : (int)BrowsePhase::Ready);
     running_.store(false);
 }
 
@@ -109,7 +109,7 @@ void SnapshotWorker::start_restore(size_t index) {
         LightLock_Unlock(&mu_);
     }
     join();
-    phase_.store((int)SnapshotPhase::Restoring);
+    phase_.store((int)BrowsePhase::Restoring);
     {
         LightLock_Lock(&mu_);
         snprintf(status_buf_, sizeof(status_buf_),
@@ -124,7 +124,7 @@ void SnapshotWorker::start_restore(size_t index) {
     pending_restore_->index = index;
     thread_ = start_worker_thread(restore_entry, pending_restore_);
     if (!thread_) {
-        phase_.store((int)SnapshotPhase::Error);
+        phase_.store((int)BrowsePhase::Error);
         LightLock_Lock(&mu_);
         snprintf(status_buf_, sizeof(status_buf_), "Thread creation failed");
         LightLock_Unlock(&mu_);
@@ -155,7 +155,7 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
             snprintf(status_buf_, sizeof(status_buf_),
                      "Restore failed: could not back up current save.");
             LightLock_Unlock(&mu_);
-            phase_.store((int)SnapshotPhase::Error);
+            phase_.store((int)BrowsePhase::Error);
             running_.store(false);
             return;
         }
@@ -172,7 +172,7 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
         snprintf(status_buf_, sizeof(status_buf_),
                  "Restore failed: could not read snapshot.");
         LightLock_Unlock(&mu_);
-        phase_.store((int)SnapshotPhase::Error);
+        phase_.store((int)BrowsePhase::Error);
         running_.store(false);
         return;
     }
@@ -181,7 +181,7 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
         snprintf(status_buf_, sizeof(status_buf_),
                  "Snapshot is empty, nothing to restore.");
         LightLock_Unlock(&mu_);
-        phase_.store((int)SnapshotPhase::Done);
+        phase_.store((int)BrowsePhase::Done);
         running_.store(false);
         return;
     }
@@ -196,7 +196,7 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
         snprintf(status_buf_, sizeof(status_buf_),
                  "Restore failed: write error.");
         LightLock_Unlock(&mu_);
-        phase_.store((int)SnapshotPhase::Error);
+        phase_.store((int)BrowsePhase::Error);
         running_.store(false);
         return;
     }
@@ -206,6 +206,6 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
     snprintf(status_buf_, sizeof(status_buf_),
              "Restored! Safety backup saved.");
     LightLock_Unlock(&mu_);
-    phase_.store((int)SnapshotPhase::Done);
+    phase_.store((int)BrowsePhase::Done);
     running_.store(false);
 }

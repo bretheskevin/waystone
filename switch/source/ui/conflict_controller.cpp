@@ -77,32 +77,25 @@ void ConflictController::scan_worker() {
     for (size_t i = 0; i < n; i++) {
         snprintf(buf, sizeof(buf), "Scanning %zu/%zu: %s", i + 1, n, titles_[i].name.c_str());
         { std::lock_guard<std::mutex> lk(mu_); status_ = buf; }
-        std::string raw_json = extract_save_json(titles_[i], uid_);
-        if (raw_json.empty()) continue;
-        char* norm_json = ws_jksv_normalize("switch", raw_json.c_str());
-        if (!norm_json) continue;
-        std::vector<std::string> saves = json_split_array(norm_json);
-        ws_string_free(norm_json);
-        std::string mtime = current_utc_time();
-        for (size_t si = 0; si < saves.size(); si++) {
-            std::string save_json = json_set_mtime(saves[si], mtime.c_str());
-            SaveDecision d = scan_save_decision(vault_, save_json.c_str(), mtime.c_str(), device_id_.c_str(), 1 /* Prompt */, dav_, raw_json);
-            if (d.decision_type == "conflict_needs_input") {
-                std::string remote_hash, remote_device_id, remote_mtime;
-                char* folded = ws_fold_heads(d.heads_array.c_str());
-                if (folded) {
-                    remote_hash = json_get_string(folded, "hash");
-                    remote_device_id = json_get_string(folded, "device_id");
-                    remote_mtime = json_get_string(folded, "mtime");
-                    ws_string_free(folded);
-                }
-                ConflictItem ci;
-                ci.title_name = titles_[i].name; ci.title_id = titles_[i].title_id; ci.uid = uid_;
-                ci.group_key = d.group_key; ci.local_hash = d.local_hash; ci.local_mtime = mtime;
-                ci.remote_hash = remote_hash; ci.remote_device_id = remote_device_id; ci.remote_mtime = remote_mtime;
-                ci.base_path = d.base_path; ci.heads_array = d.heads_array; ci.raw_json = d.raw_json;
-                { std::lock_guard<std::mutex> lk(mu_); conflicts_.push_back(std::move(ci)); }
+        std::vector<SaveDecision> decisions = scan_title(vault_, titles_[i], uid_,
+                                                         device_id_.c_str(),
+                                                         1 /* Prompt */, dav_);
+        for (const auto& d : decisions) {
+            if (d.decision_type != "conflict_needs_input") continue;
+            std::string remote_hash, remote_device_id, remote_mtime;
+            char* folded = ws_fold_heads(d.heads_array.c_str());
+            if (folded) {
+                remote_hash = json_get_string(folded, "hash");
+                remote_device_id = json_get_string(folded, "device_id");
+                remote_mtime = json_get_string(folded, "mtime");
+                ws_string_free(folded);
             }
+            ConflictItem ci;
+            ci.title_name = titles_[i].name; ci.title_id = titles_[i].title_id; ci.uid = uid_;
+            ci.group_key = d.group_key; ci.local_hash = d.local_hash; ci.local_mtime = d.mtime;
+            ci.remote_hash = remote_hash; ci.remote_device_id = remote_device_id; ci.remote_mtime = remote_mtime;
+            ci.base_path = d.base_path; ci.heads_array = d.heads_array; ci.raw_json = d.raw_json;
+            { std::lock_guard<std::mutex> lk(mu_); conflicts_.push_back(std::move(ci)); }
         }
     }
     size_t found;
