@@ -33,7 +33,7 @@ std::vector<SnapshotEntry> list_snapshots(const char* backups_root, const char* 
 // file's relative path, producing the shape write_save_files consumes.
 // Returns "[]" if the snapshot dir is empty or missing.
 // Returns empty string on I/O error.
-std::string snapshot_to_flat_files_json(const char* snapshot_dir);
+std::string snapshot_to_flat_files_json(const char* snapshot_dir, const char* slot_filter = nullptr);
 
 // Format bytes as human-readable size string. Mirrors desktop helpers.rs human_size.
 std::string human_size(unsigned long long bytes);

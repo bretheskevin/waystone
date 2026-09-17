@@ -18,7 +18,8 @@ std::vector<TitleInfo> list_titles();
 
 // Extract savedata for a title as a RawTreeDto JSON string.
 // Paths formatted for ws_checkpoint_normalize:
-//   "0x<5-hex uniqueID> <name>/main/<relative_file_path>"
+//   "0x<5-hex uniqueID> <name>/main/<relative_file_path>"   (USER_SAVEDATA)
+//   "0x<5-hex uniqueID> <name>/extdata/<relative_file_path>" (EXTDATA, if present)
 // No uid parameter -- 3DS savedata is per-title, not per-user.
 std::string extract_save_json(const TitleInfo& title);
 
@@ -33,9 +34,21 @@ std::string get_device_id();
 // missing/empty/short-read.
 uint8_t* read_keys_file(const char* path, long* len_out);
 
+enum SaveArchiveKind {
+    SaveUser,
+    SaveExtdata
+};
+
 // Restore a flat FileEntryDto JSON array ([{"path":"...","data_b64":"..."},...])
-// into the title's ARCHIVE_USER_SAVEDATA, then commit.
+// into the title's save archive, then commit.
+// kind: SaveUser -> ARCHIVE_USER_SAVEDATA; SaveExtdata -> ARCHIVE_EXTDATA.
 // Returns 0 on success, -1 on mount/commit failure.
-int write_save_files(u64 title_id, const char* files_json);
+int write_save_files(u64 title_id, const char* files_json,
+                     SaveArchiveKind kind = SaveUser);
+
+// Return the extdata archive ID for a given title_id.
+// Uses a quirks table (factual data from Checkpoint reference) for known
+// first-party titles whose extdata ID differs from the default (low>>8).
+u32 extdata_id_for(u64 title_id);
 
 #endif

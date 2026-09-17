@@ -163,40 +163,60 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
     }
     // If raw_json is empty, there is no current save to guard -- proceed.
 
-    // 2. Read the selected snapshot into a flat files_json
-    printf("[snapshot] reading snapshot %s\n", entry.path.c_str());
-    std::string flat_json = snapshot_to_flat_files_json(entry.path.c_str());
-    if (flat_json.empty()) {
-        printf("[snapshot] snapshot_to_flat_files_json FAILED\n");
-        LightLock_Lock(&mu_);
-        snprintf(status_buf_, sizeof(status_buf_),
-                 "Restore failed: could not read snapshot.");
-        LightLock_Unlock(&mu_);
-        phase_.store((int)BrowsePhase::Error);
-        running_.store(false);
-        return;
+    // 2. Restore each slot to its correct archive.
+    // "main"    -> ARCHIVE_USER_SAVEDATA (SaveUser)
+    // "extdata" -> ARCHIVE_EXTDATA       (SaveExtdata)
+    // A slot absent from the snapshot ("[]") is skipped; only a genuine I/O
+    // failure ("") aborts the restore.
+    static const struct { const char* slot; SaveArchiveKind kind; } SLOTS[] = {
+        { "main",    SaveUser    },
+        { "extdata", SaveExtdata },
+    };
+    bool any_written = false;
+    for (size_t si = 0; si < sizeof(SLOTS)/sizeof(SLOTS[0]); si++) {
+        const char* slot = SLOTS[si].slot;
+        SaveArchiveKind kind = SLOTS[si].kind;
+
+        printf("[snapshot] reading snapshot %s slot=%s\n",
+               entry.path.c_str(), slot);
+        std::string flat = snapshot_to_flat_files_json(entry.path.c_str(), slot);
+        if (flat.empty()) {
+            printf("[snapshot] snapshot_to_flat_files_json FAILED slot=%s\n", slot);
+            LightLock_Lock(&mu_);
+            snprintf(status_buf_, sizeof(status_buf_),
+                     "Restore failed: could not read snapshot.");
+            LightLock_Unlock(&mu_);
+            phase_.store((int)BrowsePhase::Error);
+            running_.store(false);
+            return;
+        }
+        if (flat == "[]") {
+            printf("[snapshot] slot=%s has no files in snapshot, skipping\n", slot);
+            continue;
+        }
+
+        printf("[snapshot] restoring slot=%s kind=%s files present\n",
+               slot, (kind == SaveExtdata) ? "extdata" : "user");
+        int wrc = write_save_files(title_.title_id, flat.c_str(), kind);
+        if (wrc != 0) {
+            printf("[snapshot] write_save_files FAILED slot=%s (rc=%d)\n", slot, wrc);
+            LightLock_Lock(&mu_);
+            snprintf(status_buf_, sizeof(status_buf_),
+                     "Restore failed: write error.");
+            LightLock_Unlock(&mu_);
+            phase_.store((int)BrowsePhase::Error);
+            running_.store(false);
+            return;
+        }
+        any_written = true;
     }
-    if (flat_json == "[]") {
+
+    if (!any_written) {
         LightLock_Lock(&mu_);
         snprintf(status_buf_, sizeof(status_buf_),
                  "Snapshot is empty, nothing to restore.");
         LightLock_Unlock(&mu_);
         phase_.store((int)BrowsePhase::Done);
-        running_.store(false);
-        return;
-    }
-
-    // 3. Write the snapshot files to the save archive
-    printf("[snapshot] writing save files for title %016llX\n",
-           (unsigned long long)title_.title_id);
-    int wrc = write_save_files(title_.title_id, flat_json.c_str());
-    if (wrc != 0) {
-        printf("[snapshot] write_save_files FAILED (rc=%d)\n", wrc);
-        LightLock_Lock(&mu_);
-        snprintf(status_buf_, sizeof(status_buf_),
-                 "Restore failed: write error.");
-        LightLock_Unlock(&mu_);
-        phase_.store((int)BrowsePhase::Error);
         running_.store(false);
         return;
     }

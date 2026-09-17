@@ -150,7 +150,17 @@ static std::string strip_two_components(const std::string& path) {
     return path.substr(second + 1);
 }
 
-std::string snapshot_to_flat_files_json(const char* snapshot_dir) {
+// Extract the 2nd slash-delimited component (the slot) from a path of the
+// form "<title_dir>/<slot>/<rel>". Returns "" if the path has fewer than 2 components.
+static std::string extract_slot(const std::string& path) {
+    size_t first = path.find('/');
+    if (first == std::string::npos) return "";
+    size_t second = path.find('/', first + 1);
+    if (second == std::string::npos) return path.substr(first + 1);
+    return path.substr(first + 1, second - first - 1);
+}
+
+std::string snapshot_to_flat_files_json(const char* snapshot_dir, const char* slot_filter) {
     std::vector<WalkFile> files;
     walk_dir_recursive(std::string(snapshot_dir), "", files);
 
@@ -162,6 +172,8 @@ std::string snapshot_to_flat_files_json(const char* snapshot_dir) {
     for (size_t i = 0; i < files.size(); i++) {
         std::string stripped = strip_two_components(files[i].relative_path);
         if (stripped.empty()) continue;
+        if (slot_filter != nullptr &&
+            extract_slot(files[i].relative_path) != slot_filter) continue;
 
         std::string full_path = std::string(snapshot_dir) + "/" +
                                 files[i].relative_path;

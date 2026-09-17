@@ -106,6 +106,43 @@ static void read_smdh(u64 tid, std::string& name, std::vector<uint8_t>& icon) {
            (unsigned long long)tid, name.c_str(), icon.size());
 }
 
+// Return the extdata archive ID for a given title_id.
+// Quirks table transcribed verbatim from Checkpoint source/titlequirks.cpp
+// (TitleQuirks::extdataIdFor, GPLv3, BernardoGiordano/FlagBrew).
+// Factual game-title-ID → extdata-archive-ID mappings only; no code structure
+// or comments copied. Default fallback (low >> 8) verified against 3dbrew
+// "Extdata" page formula. All returned IDs are <= 20 bits except where noted.
+u32 extdata_id_for(u64 title_id) {
+    // Quirks: titles whose extdata archive ID differs from the default (low>>8).
+    // Factual archive identifiers transcribed from the Checkpoint reference
+    // (titlequirks.cpp) -- data only. Keyed on the low 32 bits of the title ID.
+    static const struct { u32 low; u32 extdata_id; } EXTDATA_QUIRKS[] = {
+        { 0x00055E00, 0x055D },  // Pokemon Y
+        { 0x0011C400, 0x11C5 },  // Pokemon Omega Ruby
+        { 0x00175E00, 0x1648 },  // Pokemon Moon
+        { 0x00179600, 0x1794 },  // Fire Emblem Conquest SE NA
+        { 0x00179800, 0x1794 },  // Fire Emblem Conquest SE NA
+        { 0x00179700, 0x1795 },  // Fire Emblem Conquest SE EU
+        { 0x0017A800, 0x1795 },  // Fire Emblem Conquest SE EU
+        { 0x0012DD00, 0x12DC },  // Fire Emblem If JP
+        { 0x0012DE00, 0x12DC },  // Fire Emblem If JP
+        { 0x001B5100, 0x1B50 },  // Pokemon Ultramoon
+    };
+    u32 low = static_cast<u32>(title_id & 0xFFFFFFFF);
+    for (size_t i = 0; i < sizeof(EXTDATA_QUIRKS)/sizeof(EXTDATA_QUIRKS[0]); i++) {
+        if (EXTDATA_QUIRKS[i].low == low) {
+            printf("[saves] extdata_id_for tid=%016llX -> quirks 0x%08lX\n",
+                   (unsigned long long)title_id,
+                   (unsigned long)EXTDATA_QUIRKS[i].extdata_id);
+            return EXTDATA_QUIRKS[i].extdata_id;
+        }
+    }
+    u32 unique = (low >> 8) & 0xFFFFF;
+    printf("[saves] extdata_id_for tid=%016llX low=0x%08lX -> default 0x%05lX\n",
+           (unsigned long long)title_id, (unsigned long)low, (unsigned long)unique);
+    return unique;
+}
+
 std::vector<TitleInfo> list_titles() {
     std::vector<TitleInfo> titles;
 
@@ -158,6 +195,28 @@ static Result open_save_archive(u64 title_id, FS_Archive* archive) {
                         static_cast<u32>(title_id >> 32)};
     FS_Path archive_path = {PATH_BINARY, sizeof(path_data), path_data};
     return FSUSER_OpenArchive(archive, ARCHIVE_USER_SAVEDATA, archive_path);
+}
+
+// Open the ARCHIVE_EXTDATA for a given extdata_id (SD card).
+// Caller must FSUSER_CloseArchive on success.
+// PATH_BINARY layout VERIFIED against 3dbrew "Extdata" + Checkpoint io.cpp:
+//   {mediatype=MEDIATYPE_SD, extdata_id_low, extdata_id_high=0}
+// 3dbrew documents the extdata archive path as a 12-byte binary:
+//   u32 mediaType | u32 extdataIdLow | u32 extdataIdHigh
+// Checkpoint opens extdata the same way in its ArchiveHandle for BackupKind::Extdata.
+static Result open_extdata_archive(u64 title_id, u32 extdata_id,
+                                   FS_Archive* archive) {
+    u32 path_data[3] = { MEDIATYPE_SD, extdata_id, 0x00000000 };
+    FS_Path archive_path = {PATH_BINARY, sizeof(path_data), path_data};
+    Result rc = FSUSER_OpenArchive(archive, ARCHIVE_EXTDATA, archive_path);
+    if (R_SUCCEEDED(rc)) {
+        printf("[saves] open_extdata_archive OK tid=%016llX extdata_id=0x%08lX\n",
+               (unsigned long long)title_id, (unsigned long)extdata_id);
+    } else {
+        printf("[saves] open_extdata_archive FAIL tid=%016llX extdata_id=0x%08lX rc=0x%08lX\n",
+               (unsigned long long)title_id, (unsigned long)extdata_id, (unsigned long)rc);
+    }
+    return rc;
 }
 
 // Recursively walk a 3DS save archive directory using libctru FS API.
@@ -232,33 +291,50 @@ static void walk_archive(FS_Archive archive, const char* rel,
 }
 
 std::string extract_save_json(const TitleInfo& title) {
-    FS_Archive archive;
-    if (R_FAILED(open_save_archive(title.title_id, &archive))) {
-        printf("  FSUSER_OpenArchive failed for TID %016llX\n",
-               (unsigned long long)title.title_id);
-        return "";
-    }
-
+    // -- Phase 1: USER_SAVEDATA --
     std::vector<std::pair<std::string, std::vector<uint8_t>>> files;
-    walk_archive(archive, "", &files);
+    {
+        FS_Archive archive;
+        if (R_SUCCEEDED(open_save_archive(title.title_id, &archive))) {
+            walk_archive(archive, "", &files);
+            FSUSER_CloseArchive(archive);
+            printf("[saves] extract USER_SAVEDATA tid=%016llX files=%zu\n",
+                   (unsigned long long)title.title_id, files.size());
+        } else {
+            printf("[saves] extract USER_SAVEDATA open failed tid=%016llX (skipping)\n",
+                   (unsigned long long)title.title_id);
+        }
+    }
+    // -- Phase 2: EXTDATA --
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> extdata_files;
+    {
+        u32 ext_id = extdata_id_for(title.title_id);
+        FS_Archive ext_archive;
+        if (R_SUCCEEDED(open_extdata_archive(title.title_id, ext_id, &ext_archive))) {
+            walk_archive(ext_archive, "", &extdata_files);
+            FSUSER_CloseArchive(ext_archive);
+            printf("[saves] extract EXTDATA tid=%016llX extdata_id=0x%08lX files=%zu\n",
+                   (unsigned long long)title.title_id, (unsigned long)ext_id,
+                   extdata_files.size());
+        } else {
+            printf("[saves] extract EXTDATA open failed tid=%016llX extdata_id=0x%08lX (no extdata, skipping)\n",
+                   (unsigned long long)title.title_id, (unsigned long)ext_id);
+        }
+    }
+    if (files.empty() && extdata_files.empty()) return "";
 
-    FSUSER_CloseArchive(archive);
-
-    if (files.empty()) return "";
-
-    // Wrap file paths in Checkpoint convention:
-    //   "0x<5-hex uniqueID> <Name>/main/<relative_path>"
     char hex_uid[8];
     snprintf(hex_uid, sizeof(hex_uid), "%05X", title.unique_id);
     std::string checkpoint_dir = std::string("0x") + hex_uid + " " + title.name;
 
     std::vector<std::pair<std::string, std::vector<uint8_t>>> wrapped;
-    wrapped.reserve(files.size());
+    wrapped.reserve(files.size() + extdata_files.size());
     for (auto& f : files) {
-        std::string path = checkpoint_dir + "/main/" + f.first;
-        wrapped.push_back({path, std::move(f.second)});
+        wrapped.push_back({checkpoint_dir + "/main/" + f.first, std::move(f.second)});
     }
-
+    for (auto& f : extdata_files) {
+        wrapped.push_back({checkpoint_dir + "/extdata/" + f.first, std::move(f.second)});
+    }
     return build_raw_tree_json(wrapped);
 }
 
@@ -319,22 +395,56 @@ uint8_t* read_keys_file(const char* path, long* len_out) {
     return buf;
 }
 
-int write_save_files(u64 title_id, const char* files_json) {
+int write_save_files(u64 title_id, const char* files_json, SaveArchiveKind kind) {
     FS_Archive archive;
-    if (R_FAILED(open_save_archive(title_id, &archive))) {
-        printf("  write_save_files: FSUSER_OpenArchive failed for TID %016llX\n",
-               (unsigned long long)title_id);
-        return -1;
+    if (kind == SaveExtdata) {
+        u32 ext_id = extdata_id_for(title_id);
+        if (R_FAILED(open_extdata_archive(title_id, ext_id, &archive))) {
+            printf("[saves] write_save_files: open_extdata_archive failed tid=%016llX\n",
+                   (unsigned long long)title_id);
+            return -1;
+        }
+    } else {
+        if (R_FAILED(open_save_archive(title_id, &archive))) {
+            printf("[saves] write_save_files: open_save_archive failed tid=%016llX\n",
+                   (unsigned long long)title_id);
+            return -1;
+        }
     }
+    printf("[saves] write_save_files: opened archive kind=%s tid=%016llX\n",
+           (kind == SaveExtdata) ? "extdata" : "user", (unsigned long long)title_id);
 
-    // Wipe the archive root before writing so stale files from a previous
-    // backup do not survive (mirrors Checkpoint's DeleteDirectoryRecursively
-    // before copyTree). Non-fatal: an empty/fresh archive may return an error.
-    Result del_res = FSUSER_DeleteDirectoryRecursively(archive,
-                         fsMakePath(PATH_ASCII, "/"));
-    if (R_FAILED(del_res)) {
-        printf("  write_save_files: DeleteDirectoryRecursively returned 0x%08lX (non-fatal)\n",
-               (unsigned long)del_res);
+    if (kind == SaveUser) {
+        // Wipe archive root before writing so stale files from a previous
+        // backup do not survive. Non-fatal: an empty/fresh archive may return
+        // an error. Mirrors Checkpoint io::restore (FSUSER_DeleteDirectoryRecursively
+        // for non-TWL saves).
+        Result del_res = FSUSER_DeleteDirectoryRecursively(archive,
+                             fsMakePath(PATH_ASCII, "/"));
+        if (R_FAILED(del_res)) {
+            printf("[saves] write_save_files: DeleteDirRecursively user 0x%08lX (non-fatal)\n",
+                   (unsigned long)del_res);
+        }
+    } else {
+        // DIVERGENCE (extdata root wipe): Checkpoint io::restore calls
+        // deleteFolderRecursively(archive, "/") for extdata — a custom
+        // recursive function that deletes all files and subdirs inside "/"
+        // then tries FSUSER_DeleteDirectory("/") (which fails on root,
+        // ignored). Net effect: all contents of "/" are deleted; the root
+        // directory itself survives. FSUSER_DeleteDirectoryRecursively on "/"
+        // has the same observable effect (wipes contents, root cannot be
+        // removed). We mirror Checkpoint: wipe extdata archive contents
+        // before restore. Hardware verify needed: if FSUSER_DeleteDirectoryRecursively
+        // on extdata root returns a hard failure, change to a manual
+        // walk-and-delete using walk_archive-style iteration.
+        Result del_res = FSUSER_DeleteDirectoryRecursively(archive,
+                             fsMakePath(PATH_ASCII, "/"));
+        if (R_FAILED(del_res)) {
+            printf("[saves] write_save_files: extdata root wipe 0x%08lX (non-fatal, mirrors Checkpoint)\n",
+                   (unsigned long)del_res);
+        } else {
+            printf("[saves] write_save_files: extdata root wiped (mirrors Checkpoint)\n");
+        }
     }
 
     std::vector<std::string> entries = json_split_array(files_json);
@@ -345,7 +455,7 @@ int write_save_files(u64 title_id, const char* files_json) {
         std::string data_b64 = json_get_string(entry_str.c_str(), "data_b64");
 
         if (path.empty()) {
-            printf("  write_save_files: missing path in file entry\n");
+            printf("[saves] write_save_files: missing path in file entry\n");
             ret = -1;
             continue;
         }
@@ -355,7 +465,7 @@ int write_save_files(u64 title_id, const char* files_json) {
         if (!data_b64.empty()) {
             bytes = base64_decode(data_b64);
             if (bytes.empty()) {
-                printf("  write_save_files: base64_decode failed for %s\n", path.c_str());
+                printf("[saves] write_save_files: base64_decode failed for %s\n", path.c_str());
                 ret = -1;
                 continue;
             }
@@ -386,14 +496,14 @@ int write_save_files(u64 title_id, const char* files_json) {
         if (R_FAILED(FSUSER_OpenFile(&fh, archive,
                      fsMakePath(PATH_ASCII, file_path.c_str()),
                      FS_OPEN_CREATE | FS_OPEN_WRITE, 0))) {
-            printf("  write_save_files: FSUSER_OpenFile failed for %s\n", path.c_str());
+            printf("[saves] write_save_files: FSUSER_OpenFile failed for %s\n", path.c_str());
             ret = -1;
             continue;
         }
 
         // Truncate to exact size (FS_OPEN_WRITE does not truncate unlike fopen "wb").
         if (R_FAILED(FSFILE_SetSize(fh, static_cast<u64>(bytes.size())))) {
-            printf("  write_save_files: FSFILE_SetSize failed for %s\n", path.c_str());
+            printf("[saves] write_save_files: FSFILE_SetSize failed for %s\n", path.c_str());
             FSFILE_Close(fh);
             ret = -1;
             continue;
@@ -404,7 +514,7 @@ int write_save_files(u64 title_id, const char* files_json) {
             if (R_FAILED(FSFILE_Write(fh, &written, 0,
                          bytes.data(), static_cast<u32>(bytes.size()),
                          FS_WRITE_FLUSH))) {
-                printf("  write_save_files: FSFILE_Write failed for %s\n", path.c_str());
+                printf("[saves] write_save_files: FSFILE_Write failed for %s\n", path.c_str());
                 FSFILE_Close(fh);
                 ret = -1;
                 continue;
@@ -420,29 +530,44 @@ int write_save_files(u64 title_id, const char* files_json) {
         return -1;
     }
 
-    // Flush all pending writes to the underlying save filesystem.
-    if (R_FAILED(FSUSER_ControlArchive(archive, ARCHIVE_ACTION_COMMIT_SAVE_DATA,
-                                       NULL, 0, NULL, 0))) {
-        printf("  write_save_files: ARCHIVE_ACTION_COMMIT_SAVE_DATA failed\n");
-        FSUSER_CloseArchive(archive);
-        return -1;
+    if (kind == SaveUser) {
+        // Flush all pending writes to the underlying save filesystem.
+        if (R_FAILED(FSUSER_ControlArchive(archive, ARCHIVE_ACTION_COMMIT_SAVE_DATA,
+                                           NULL, 0, NULL, 0))) {
+            printf("[saves] write_save_files: COMMIT_SAVE_DATA failed (user)\n");
+            FSUSER_CloseArchive(archive);
+            return -1;
+        }
+        printf("[saves] write_save_files: committed user save tid=%016llX\n",
+               (unsigned long long)title_id);
+    } else {
+        // DIVERGENCE (extdata commit): Checkpoint io::restore guards the commit
+        // with 'target.kind() == BackupKind::Save && !isTwl'. Extdata skips
+        // ARCHIVE_ACTION_COMMIT_SAVE_DATA entirely — files written to
+        // ARCHIVE_EXTDATA are immediately visible without a commit step.
+        printf("[saves] write_save_files: extdata commit skipped (mirrors Checkpoint)\n");
     }
     FSUSER_CloseArchive(archive);
 
-    // Delete the console secure value so the game regenerates a fresh one
-    // instead of rejecting the restored save. Some titles store an anti-tamper
-    // value outside the archive; after overwriting the save it no longer
-    // matches. Mirrors Checkpoint's !isTwl block in io::restore(). Use raw
-    // title_id & 0xFFFFFF00ULL (NOT unique_id/0xFFFFF) to address the correct
-    // slot. Non-fatal: titles with no secure value error on delete.
-    u8 sv_out = 0;
-    u64 secure_value = ((u64)SECUREVALUE_SLOT_SD << 32) | (u64)(title_id & 0xFFFFFF00ULL);
-    Result sv = FSUSER_ControlSecureSave(SECURESAVE_ACTION_DELETE,
-                    &secure_value, sizeof(secure_value),
-                    &sv_out, sizeof(sv_out));
-    if (R_FAILED(sv)) {
-        printf("  write_save_files: ControlSecureSave delete returned 0x%08lX (non-fatal)\n",
-               (unsigned long)sv);
+    if (kind == SaveUser) {
+        // Delete the console secure value so the game regenerates a fresh one
+        // instead of rejecting the restored save. Mirrors Checkpoint's
+        // !isTwl block in io::restore(). Use raw title_id & 0xFFFFFF00ULL
+        // (NOT unique_id/0xFFFFF) to address the correct slot. Non-fatal.
+        u8 sv_out = 0;
+        u64 secure_value = ((u64)SECUREVALUE_SLOT_SD << 32) | (u64)(title_id & 0xFFFFFF00ULL);
+        Result sv = FSUSER_ControlSecureSave(SECURESAVE_ACTION_DELETE,
+                        &secure_value, sizeof(secure_value),
+                        &sv_out, sizeof(sv_out));
+        if (R_FAILED(sv)) {
+            printf("[saves] write_save_files: ControlSecureSave delete 0x%08lX (non-fatal)\n",
+                   (unsigned long)sv);
+        }
+    } else {
+        // DIVERGENCE (extdata secure value): Checkpoint io::restore only calls
+        // ControlSecureSave for 'BackupKind::Save && !isTwl'. Extdata has no
+        // console secure value — skip entirely.
+        printf("[saves] write_save_files: secure-value delete SKIPPED for extdata\n");
     }
 
     return 0;

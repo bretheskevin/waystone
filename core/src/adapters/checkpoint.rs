@@ -294,6 +294,93 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_normalizes_3ds_extdata_as_separate_save() {
+        let adapter = CheckpointAdapter::new(SystemId::ThreeDS);
+        let raw = RawTree {
+            files: vec![
+                RawFile {
+                    path: "0x0055D Pokemon X/main/main".into(),
+                    content: vec![0xFF; 64],
+                },
+                RawFile {
+                    path: "0x0055D Pokemon X/extdata/00000001/00000002".into(),
+                    content: vec![0xAA; 32],
+                },
+            ],
+        };
+        let saves = adapter.normalize(&raw);
+        assert_eq!(saves.len(), 2, "main + extdata must produce 2 saves");
+
+        let main_save = saves.iter().find(|s| s.id.slot == "main").unwrap();
+        assert_eq!(main_save.group_key, "3ds/pokemonx/main");
+        assert_eq!(main_save.files.len(), 1);
+
+        let ext_save = saves.iter().find(|s| s.id.slot == "extdata").unwrap();
+        assert_eq!(ext_save.group_key, "3ds/pokemonx/extdata");
+        assert_eq!(ext_save.files.len(), 1);
+        assert_eq!(ext_save.files[0].0, "00000001/00000002");
+        assert_eq!(ext_save.id.game.key, "pokemonx");
+        assert_eq!(ext_save.id.game.title_id, Some("0055D".into()));
+    }
+
+    #[test]
+    fn checkpoint_3ds_extdata_group_keys_are_distinct() {
+        let adapter = CheckpointAdapter::new(SystemId::ThreeDS);
+        let raw = RawTree {
+            files: vec![
+                RawFile {
+                    path: "0x0055D Pokemon X/main/main".into(),
+                    content: vec![0xFF; 64],
+                },
+                RawFile {
+                    path: "0x0055D Pokemon X/extdata/boss/00000001".into(),
+                    content: vec![0xBB; 16],
+                },
+            ],
+        };
+        let saves = adapter.normalize(&raw);
+        let keys: Vec<&str> = saves.iter().map(|s| s.group_key.as_str()).collect();
+        assert!(keys.contains(&"3ds/pokemonx/main"));
+        assert!(keys.contains(&"3ds/pokemonx/extdata"));
+        assert_ne!(keys[0], keys[1], "group_keys must differ");
+    }
+
+    #[test]
+    fn checkpoint_3ds_extdata_to_native_round_trip() {
+        let adapter = CheckpointAdapter::new(SystemId::ThreeDS);
+        let raw = RawTree {
+            files: vec![RawFile {
+                path: "0x0055D Pokemon X/extdata/00000001/00000002".into(),
+                content: vec![0xAA; 32],
+            }],
+        };
+        let saves = adapter.normalize(&raw);
+        assert_eq!(saves.len(), 1);
+        let native = adapter.to_native(&saves[0]);
+        assert_eq!(native.files.len(), 1);
+        assert_eq!(
+            native.files[0].path,
+            "0x0055D Pokemon X/extdata/00000001/00000002"
+        );
+        assert_eq!(native.files[0].content, vec![0xAA; 32]);
+    }
+
+    #[test]
+    fn checkpoint_3ds_extdata_only_title() {
+        let adapter = CheckpointAdapter::new(SystemId::ThreeDS);
+        let raw = RawTree {
+            files: vec![RawFile {
+                path: "0x0055D Pokemon X/extdata/boss/001".into(),
+                content: vec![0xCC; 8],
+            }],
+        };
+        let saves = adapter.normalize(&raw);
+        assert_eq!(saves.len(), 1);
+        assert_eq!(saves[0].id.slot, "extdata");
+        assert_eq!(saves[0].group_key, "3ds/pokemonx/extdata");
+    }
+
+    #[test]
     fn jksv_checkpoint_same_game_converge() {
         let jksv_raw = RawTree {
             files: vec![RawFile {

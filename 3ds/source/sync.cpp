@@ -172,7 +172,19 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
         }
     }
 
-    int wrc = write_save_files(title_id, files_json);
+    // Parse slot from group_key ("3ds/<game>/<slot>") to route extdata vs user.
+    SaveArchiveKind kind = SaveUser;
+    {
+        size_t last_slash = group_key.rfind('/');
+        if (last_slash != std::string::npos) {
+            std::string slot = group_key.substr(last_slash + 1);
+            if (slot == "extdata") kind = SaveExtdata;
+        }
+    }
+    printf("[saves] restore routing group_key=%s -> kind=%s\n",
+           group_key.c_str(), (kind == SaveExtdata) ? "extdata" : "user");
+
+    int wrc = write_save_files(title_id, files_json, kind);
     ws_string_free(files_json);
     return wrc;
 }
