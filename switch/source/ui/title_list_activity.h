@@ -13,6 +13,7 @@ class TitleListActivity : public brls::Activity {
   private:
     SyncController* ctrl_;
     Session* session_;
+
     brls::Label* status_label_ = nullptr;
     brls::RepeatingTimer poll_timer_;
     brls::Box* title_list_box_ = nullptr;

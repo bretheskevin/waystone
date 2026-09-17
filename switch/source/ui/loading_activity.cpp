@@ -60,12 +60,15 @@ brls::View* LoadingActivity::createContentView() {
 }
 
 void LoadingActivity::onContentAvailable() {
+    printf("[ui] LoadingActivity content available\n");
     pump_ = new RefreshPump(this);
     pump_->start();
 
     done_.store(false);
+    printf("[ui] LoadingActivity worker thread start\n");
     worker_thread_ = std::thread([this]() {
         result_ = worker_fn_();
+        printf("[ui] LoadingActivity worker done: %s\n", result_.success ? "ok" : result_.error.c_str());
         done_.store(true);
     });
 }
@@ -103,16 +106,14 @@ void LoadingActivity::on_worker_done() {
     // Pump cleanup happens in ~LoadingActivity().
 
     if (result_.success) {
-        push_dashboard_deferred();  // pushActivity — safe
+        printf("[ui] LoadingActivity success -> push_dashboard\n");
+        push_dashboard_deferred();
     } else {
         if (on_failure_) {
-            // Auto-unlock failure: the callback pushes UnlockActivity on top.
-            // pushActivity is safe from here; on_failure_ must NOT popActivity.
+            printf("[ui] LoadingActivity failure (on_failure cb) -> UnlockActivity\n");
             on_failure_(result_.error);
         } else {
-            // Manual-unlock failure: show error + B-button to pop back.
-            // popActivity from a registered action (B button) is safe because
-            // it runs from borealis's action dispatch, not inside a RepeatingTask.
+            printf("[ui] LoadingActivity failure -> show_error_ui: %s\n", result_.error.c_str());
             show_error_ui(result_.error);
         }
     }
@@ -133,6 +134,13 @@ void LoadingActivity::show_error_ui(const std::string& error) {
 }
 
 void LoadingActivity::push_dashboard_deferred() {
+    // BUG 2 fix: make LoadingActivity translucent before pushActivity so borealis
+    // uses fadeOut=false. With fadeOut=true, setAlpha(0.0f) is called on the incoming
+    // activity; View::show() early-returns (hidden=false on a fresh view), so alpha
+    // is never animated back → permanent black screen.
+    // With fadeOut=false (last->isTranslucent()), setAlpha(0) is skipped entirely
+    // and the dashboard stays at alpha=1.0f (Animatable default).
+    if (auto* cv = getContentView()) cv->setInFadeAnimation(true);
     auto* ctrl = new SyncController(session_->vault, session_->uid, session_->device_id,
                                     session_->dav.as_cfg(), std::move(result_.titles));
     brls::Application::pushActivity(new TitleListActivity(ctrl, session_));

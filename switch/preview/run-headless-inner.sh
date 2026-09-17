@@ -76,6 +76,20 @@ fi
 # Binary runs from PREVIEW_DIR so ./resources/ → switch/preview/resources/
 # (preview-only; never the shared borealis resources that feed the .nro).
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# CAPTURE_ONLY=<mode>: when set, capture only that mode and exit immediately.
+# Unset → capture all modes (default, unchanged full path).
+# ---------------------------------------------------------------------------
+if [ -n "${CAPTURE_ONLY:-}" ]; then
+    capture "$WIZARD_OUT/${CAPTURE_ONLY}.png" "$PREVIEW_DIR" "$WIZARD_BIN" "${CAPTURE_ONLY}"
+    kill "$XVFB_PID" 2>/dev/null || true
+    wait "$XVFB_PID" 2>/dev/null || true
+    echo ""
+    echo "=== Screenshot written: $WIZARD_OUT/${CAPTURE_ONLY}.png ==="
+    ls -lh "$WIZARD_OUT/${CAPTURE_ONLY}.png"
+    exit 0
+fi
+
 echo "=== Capturing wizard: setup-welcome ==="
 capture "$WIZARD_OUT/setup-welcome.png" "$PREVIEW_DIR" "$WIZARD_BIN" setup-welcome
 
@@ -155,6 +169,9 @@ echo "=== Capturing conflicts: confirm banner ==="
 # conflicts-confirm mode auto-triggers the banner after 1 second.
 # The capture() helper waits 5 seconds, so the banner is visible.
 capture "$WIZARD_OUT/conflicts-confirm.png" "$PREVIEW_DIR" "$WIZARD_BIN" conflicts-confirm
+
+echo "=== Capturing dashboard (AppletFrame + icon+name game list) ==="
+capture "$WIZARD_OUT/dashboard.png" "$PREVIEW_DIR" "$WIZARD_BIN" dashboard
 
 # ---------------------------------------------------------------------------
 # Cleanup

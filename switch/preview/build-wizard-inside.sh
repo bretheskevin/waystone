@@ -70,20 +70,33 @@ CFLAGS=(
 )
 
 # ---------------------------------------------------------------------------
-# Helper: compile one C++ file → object, echo the object path
+# Helper: compile one C++ file → object, echo the object path.
+# Incremental: skips recompile when the object is newer than the source,
+# unless PREVIEW_FORCE_REBUILD=1 is set.
 # ---------------------------------------------------------------------------
 cxx() {
     local src="$1" tag="$2"
     local obj="$OUT/${tag}.o"
+    if [ "${PREVIEW_FORCE_REBUILD:-0}" != "1" ] && [ -f "$obj" ] && [ "$obj" -nt "$src" ]; then
+        echo "  [CXX] ${tag} (cached)" >&2
+        echo "$obj"
+        return
+    fi
     echo "  [CXX] ${tag}" >&2
     g++ "${CXXFLAGS[@]}" "${INCLUDES[@]}" -c "$src" -o "$obj"
     echo "$obj"
 }
 
-# Helper: compile one C file → object, echo the object path
+# Helper: compile one C file → object, echo the object path.
+# Same incremental logic as cxx().
 cc() {
     local src="$1" tag="$2"
     local obj="$OUT/${tag}.o"
+    if [ "${PREVIEW_FORCE_REBUILD:-0}" != "1" ] && [ -f "$obj" ] && [ "$obj" -nt "$src" ]; then
+        echo "  [CC ] ${tag} (cached)" >&2
+        echo "$obj"
+        return
+    fi
     echo "  [CC ] ${tag}" >&2
     gcc ${CFLAGS[@]} "${INCLUDES[@]}" -c "$src" -o "$obj"
     echo "$obj"
@@ -158,6 +171,7 @@ OBJS+=( $(cxx "$BRL/lib/extern/yoga/src/yoga/Yoga.cpp"                          
 # Waystone wizard UI files (compiled read-only from switch/source/ui/)
 # ---------------------------------------------------------------------------
 echo "=== Compiling wizard UI ===" >&2
+OBJS+=( $(cxx "$UI/applet_footer_hint.cpp"      ws_applet_footer_hint) )
 OBJS+=( $(cxx "$UI/wizard.cpp"                  ws_wizard) )
 OBJS+=( $(cxx "$UI/wizard_activity.cpp"         ws_wizard_activity) )
 OBJS+=( $(cxx "$UI/setup_activity.cpp"          ws_setup_activity) )
@@ -168,6 +182,8 @@ OBJS+=( $(cxx "$UI/loading_activity.cpp"        ws_loading_activity) )
 OBJS+=( $(cxx "$UI/conflicts_activity.cpp"      ws_conflicts_activity) )
 OBJS+=( $(cxx "$UI/history_activity.cpp"        ws_history_activity) )
 OBJS+=( $(cxx "$UI/theme_tint.cpp"              ws_theme_tint) )
+# Real TitleListActivity — compiled from source so the dashboard preview is faithful.
+OBJS+=( $(cxx "$UI/title_list_activity.cpp"     ws_title_list_activity) )
 
 # ---------------------------------------------------------------------------
 # Preview stubs (replace Switch-only or complex real implementations)
@@ -183,7 +199,9 @@ OBJS+=( $(cxx "$PREVIEW/stubs/session_store_stub.cpp"   stub_session_store) )
 OBJS+=( $(cxx "$PREVIEW/stubs/conflict_controller_stub.cpp" stub_conflict_controller) )
 OBJS+=( $(cxx "$PREVIEW/stubs/history_controller_stub.cpp"  stub_history_controller) )
 OBJS+=( $(cxx "$PREVIEW/stubs/sync_controller_stub.cpp"     stub_sync_controller) )
-OBJS+=( $(cxx "$PREVIEW/stubs/title_list_activity_stub.cpp" stub_title_list_activity) )
+OBJS+=( $(cxx "$PREVIEW/stubs/snapshots_controller_stub.cpp" stub_snapshots_controller) )
+OBJS+=( $(cxx "$PREVIEW/stubs/snapshots_activity_stub.cpp"   stub_snapshots_activity) )
+OBJS+=( $(cxx "$PREVIEW/stubs/settings_activity_stub.cpp"    stub_settings_activity) )
 
 # Preview entry point
 OBJS+=( $(cxx "$PREVIEW/main.cpp" preview_main) )
@@ -237,4 +255,13 @@ if [ -f "$REG_SRC" ]; then
     echo "=== Installed stripped Inter (User-Regular.ttf) into preview resources ==="
 else
     echo "WARNING: $REG_SRC not found -- button glyph fallback will not work" >&2
+fi
+
+# Install placeholder icon for dashboard preview rows.
+ICON_SRC=/work/switch/preview/assets/placeholder_icon.jpg
+if [ -f "$ICON_SRC" ]; then
+    cp "$ICON_SRC" "$PREVIEW_RESOURCES/placeholder_icon.jpg"
+    echo "=== Installed placeholder_icon.jpg into preview resources ==="
+else
+    echo "WARNING: $ICON_SRC not found -- dashboard icon rows will show placeholders only" >&2
 fi

@@ -13,6 +13,7 @@
  *   conflicts       — ConflictsActivity with 3 canned conflicts (normal mode)
  *   conflicts-confirm — ConflictsActivity with confirm banner auto-triggered
  *   history           — HistoryActivity with 3 canned history entries
+ *   dashboard         — TitleListActivity (AppletFrame + icon+name rows)
  *
  * Set BOREALIS_THEME=DARK before running to force the dark theme.
  * The binary must be launched from switch/lib/borealis/ so that
@@ -29,6 +30,7 @@
 #include "conflicts_activity.h"
 #include "history_controller.h"
 #include "history_activity.h"
+#include "title_list_activity.h"
 #include "session.h"
 #include <chrono>
 #include <cstring>
@@ -190,6 +192,13 @@ int main(int argc, char** argv)
         auto* hc = new HistoryController(ti, &session);
         hc->start_scan();
         brls::Application::pushActivity(new HistoryActivity(hc));
+
+    } else if (strcmp(mode, "dashboard") == 0) {
+        // Dashboard mode: title list with fixture games from sync_controller_stub.
+        // Exercises the AppletFrame header, icon+name rows, Sync button, and status line.
+        auto* ctrl = new SyncController(nullptr, AccountUid{}, "",
+                                        WebDavCfg{nullptr, nullptr, nullptr}, {});
+        brls::Application::pushActivity(new TitleListActivity(ctrl, &session));
 
     } else {
         brls::Logger::error("Unknown mode: %s", mode);

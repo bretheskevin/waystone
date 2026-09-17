@@ -43,29 +43,48 @@ static bool switch_device_key(uint8_t* out_key, size_t* out_len) {
 int main(int argc, char* argv[])
 {
     socketInitializeDefault();
-    romfsInit();
+    nxlinkStdio();                    // redirect stdout to nxlink host (no-op if not netloaded)
+    setvbuf(stdout, NULL, _IONBF, 0); // unbuffered: every printf reaches nxlink immediately
+    printf("[boot] socket init done\n");
+    Result romfs_rc = romfsInit();
+    printf("[boot] romfs init rc=%d\n", (int)romfs_rc);
     session_store_set_device_key_fn(switch_device_key);  // Task 3: register before any session use
+    printf("[boot] curl init start\n");
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
+        printf("[boot] curl init FAILED\n");
         romfsExit();
         socketExit();
         return 1;
     }
+    printf("[boot] curl init done\n");
 
     Session session;
     session.config_path = "sdmc:/waystone/config.json";
+    printf("[boot] loading config\n");
     session.config = wsconfig_load(session.config_path.c_str());
+    printf("[boot] config loaded\n");
 
-    if (!get_active_account(&session.uid))
+    printf("[boot] resolving account\n");
+    if (!get_active_account(&session.uid)) {
+        printf("[boot] get_active_account FAILED\n");
         goto cleanup;
+    }
+    printf("[boot] account resolved\n");
+    printf("[boot] loading device_id\n");
     session.device_id = get_device_id();
-    if (session.device_id.empty())
+    printf("[boot] device_id: %s\n", session.device_id.c_str());
+    if (session.device_id.empty()) {
+        printf("[boot] device_id empty, abort\n");
         goto cleanup;
+    }
 
     apply_waystone_tint();
 
+    printf("[boot] brls::Application::init\n");
     if (brls::Application::init()) {
         brls::Application::createWindow("Waystone");
         brls::Application::setGlobalQuit(true);
+        printf("[boot] window created\n");
 
         uint8_t* kbuf = nullptr;
 
@@ -115,30 +134,40 @@ int main(int argc, char* argv[])
                                 new UnlockActivity(&session, kbuf, static_cast<size_t>(klen)));
                         };
 
+                        printf("[boot] vault present + session -> LoadingActivity\n");
                         brls::Application::pushActivity(
                             new LoadingActivity(&session, worker, on_failure));
                     } else {
+                        printf("[boot] vault present, no session -> UnlockActivity\n");
                         brls::Application::pushActivity(
                             new UnlockActivity(&session, kbuf, static_cast<size_t>(klen)));
                     }
                 } else {
+                    printf("[boot] no vault -> SetupActivity\n");
                     brls::Application::pushActivity(new SetupActivity(&session));
                 }
             } else {
+                printf("[boot] no keys.json -> SetupActivity\n");
                 brls::Application::pushActivity(new SetupActivity(&session));
             }
         };
 
         if (!network_available()) {
+            printf("[boot] no network -> NoInternetActivity\n");
             brls::Application::pushActivity(
                 new NoInternetActivity(NoInternetReason::NoNetwork,
                                        route_to_first_screen));
         } else {
+            printf("[boot] network ok -> route_to_first_screen\n");
             route_to_first_screen();
         }
 
+        printf("[boot] entering mainloop\n");
         while (brls::Application::mainLoop()) {}
+        printf("[boot] mainloop exited\n");
         free(kbuf);
+    } else {
+        printf("[boot] brls::Application::init FAILED\n");
     }
 
 cleanup:

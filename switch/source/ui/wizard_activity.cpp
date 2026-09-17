@@ -1,8 +1,8 @@
 #include "wizard_activity.h"
+#include "applet_footer_hint.h"
 #include "session.h"
 #include "swkbd_util.h"
-
-static NVGcolor footer_hint_color() { return nvgRGB(0x71, 0x71, 0x7A); }
+#include <cstdio>
 
 // NintendoExt (PlSharedFontType_NintendoExt) private-use button glyph codepoints:
 //   U+E0A0  "\xEE\x82\xA0"  A button
@@ -43,23 +43,13 @@ brls::View* WizardActivity::createContentView() {
 
     // AppletFrame children after setContentView: [header(0), content(1), footer(2)].
     // Clear the debug-placeholder rectangles from the footer and add the full hint bar.
-    auto& af_ch = frame->getChildren();
-    if (af_ch.size() >= 3) {
-        auto* footer = static_cast<brls::Box*>(af_ch[2]);
-        auto& fc = footer->getChildren();
-        while (!fc.empty()) footer->removeView(fc.front());
-
-        hint_label_ = new brls::Label();
-        hint_label_->setText(build_hint_text("Next"));
-        hint_label_->setFontSize(18.0f);
-        hint_label_->setTextColor(footer_hint_color());
-        footer->addView(hint_label_);
-    }
+    hint_label_ = set_footer_hint(frame, build_hint_text("Next"));
 
     return frame;
 }
 
 void WizardActivity::onContentAvailable() {
+    printf("[ui] wizard content available\n");
     refresh();  // synchronous: not inside an action dispatch, safe for frame 1
 
     pump_.start();

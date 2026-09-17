@@ -9,7 +9,8 @@
 
 struct TitleInfo {
     uint64_t title_id;
-    std::string name; // display name from NACP, or hex TID fallback
+    std::string name;      // display name from NACP, or hex TID fallback
+    std::string icon_path; // path to cached icon JPEG on sdmc (empty if none)
 };
 
 // Enumerate installed titles. Initializes/exits ns internally.

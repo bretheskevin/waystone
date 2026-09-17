@@ -73,4 +73,5 @@ private:
     void on_worker_done();
     void push_dashboard_deferred();
     void show_error_ui(const std::string& error);
+
 };

@@ -11,6 +11,38 @@
 #include <sys/types.h>
 #include <switch.h>
 
+// Max icon JPEG size from NsApplicationControlData.
+static const size_t ICON_MAX_BYTES = 0x20000;
+
+// Cache icon JPEG to sdmc:/waystone/icons/<TID>.jpg (write once, skip if present).
+// Returns the cached file path, or empty string on failure / empty icon.
+static std::string cache_icon(uint64_t title_id, const uint8_t* icon, size_t icon_size) {
+    if (icon_size < 3) return "";
+    // Basic JPEG magic check (SOI: FF D8)
+    if (icon[0] != 0xFF || icon[1] != 0xD8) return "";
+
+    const char* dir = "sdmc:/waystone/icons";
+    char path[128];
+    snprintf(path, sizeof(path), "%s/%016lX.jpg", dir, title_id);
+
+    // Skip write if already cached
+    struct stat st;
+    if (stat(path, &st) == 0 && st.st_size > 0) return path;
+
+    // Ensure directory exists
+    mkdir("sdmc:/waystone", 0755);
+    mkdir(dir, 0755);
+
+    FILE* f = fopen(path, "wb");
+    if (!f) return "";
+    size_t written = fwrite(icon, 1, icon_size, f);
+    fclose(f);
+    if (written != icon_size) return "";
+
+    printf("[titles] cached icon tid=%016lX -> %s\n", title_id, path);
+    return path;
+}
+
 std::vector<TitleInfo> list_titles() {
     std::vector<TitleInfo> titles;
 
@@ -21,6 +53,7 @@ std::vector<TitleInfo> list_titles() {
 
     NsApplicationRecord records[256];
     s32 offset = 0;
+    int icons_found = 0;
 
     while (true) {
         s32 got = 0;
@@ -31,7 +64,7 @@ std::vector<TitleInfo> list_titles() {
             TitleInfo info;
             info.title_id = records[i].application_id;
 
-            // Get display name from NACP. ~128 KiB -- heap-allocated.
+            // Get display name AND icon from NACP control data. ~128 KiB -- heap-allocated.
             NsApplicationControlData* ctrl =
                 static_cast<NsApplicationControlData*>(malloc(sizeof(NsApplicationControlData)));
             if (ctrl) {
@@ -45,6 +78,15 @@ std::vector<TitleInfo> list_titles() {
                     if (lang && lang->name[0] != '\0') {
                         info.name = lang->name;
                     }
+                    // Icon JPEG follows the NACP in NsApplicationControlData.
+                    // actual covers nacp + icon bytes; clamp to declared max.
+                    size_t icon_size = 0;
+                    if (actual > sizeof(NacpStruct)) {
+                        icon_size = actual - sizeof(NacpStruct);
+                        if (icon_size > ICON_MAX_BYTES) icon_size = ICON_MAX_BYTES;
+                    }
+                    info.icon_path = cache_icon(info.title_id, ctrl->icon, icon_size);
+                    if (!info.icon_path.empty()) ++icons_found;
                 }
                 free(ctrl);
             }
@@ -63,6 +105,7 @@ std::vector<TitleInfo> list_titles() {
     }
 
     nsExit();
+    printf("[titles] extracted %zu titles (%d with icons)\n", titles.size(), icons_found);
     return titles;
 }
 
