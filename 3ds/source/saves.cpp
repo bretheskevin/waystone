@@ -2,11 +2,109 @@
 #include "base64.h"
 #include "json.h"
 
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <sys/stat.h>
+#include <3ds.h>
+
+// SMDH large-icon size: 48×48 pixels × 2 bytes/pixel (RGB565) = 4608 bytes.
+static const size_t SMDH_SIZE     = 0x36C0;
+static const size_t SMDH_ICON_OFF = 0x24C0;
+static const size_t SMDH_ICON_LEN = 0x1200; // 4608 bytes
+
+// Read SMDH metadata for the given title_id via the ExeFS "icon" file.
+// On success, writes the real UTF-8 name into `name` and the 4608-byte
+// RGB565 tiled icon into `icon`. On any failure, leaves both unchanged
+// (caller pre-sets the hex-uid fallback name).
+static void read_smdh(u64 tid, std::string& name, std::vector<uint8_t>& icon) {
+    // Archive binary path: {low32, high32, mediatype, 0}
+    u32 arch_data[4] = {
+        static_cast<u32>(tid & 0xFFFFFFFF),
+        static_cast<u32>(tid >> 32),
+        static_cast<u32>(MEDIATYPE_SD),
+        0
+    };
+    FS_Path arch_path = { PATH_BINARY, sizeof(arch_data), arch_data };
+
+    // File binary path: ExeFS "icon" entry {0, 0, 0x2, 0x6E6F6369}
+    u32 file_data[4] = { 0, 0, 0x2, 0x6E6F6369 };
+    FS_Path file_path = { PATH_BINARY, sizeof(file_data), file_data };
+
+    Handle fh = 0;
+    Result rc = FSUSER_OpenFileDirectly(
+        &fh,
+        ARCHIVE_SAVEDATA_AND_CONTENT,
+        arch_path,
+        file_path,
+        FS_OPEN_READ,
+        0
+    );
+    if (R_FAILED(rc)) {
+        printf("[titles] smdh open failed tid=%016llX rc=0x%08lX (name/icon fallback)\n",
+               (unsigned long long)tid, (unsigned long)rc);
+        return;
+    }
+
+    uint8_t smdh[SMDH_SIZE];
+    u32 bytes_read = 0;
+    rc = FSFILE_Read(fh, &bytes_read, 0, smdh, static_cast<u32>(SMDH_SIZE));
+    FSFILE_Close(fh);
+
+    if (R_FAILED(rc) || bytes_read < static_cast<u32>(SMDH_SIZE)) {
+        printf("[titles] smdh read failed tid=%016llX rc=0x%08lX bytes=%lu (name/icon fallback)\n",
+               (unsigned long long)tid, (unsigned long)rc, (unsigned long)bytes_read);
+        return;
+    }
+
+    // Verify "SMDH" magic at offset 0.
+    if (memcmp(smdh, "SMDH", 4) != 0) {
+        printf("[titles] smdh bad magic tid=%016llX (name/icon fallback)\n",
+               (unsigned long long)tid);
+        return;
+    }
+
+    // Extract the short description (first 0x40 UTF-16LE code units) from the
+    // English title struct (index 1), then Japanese (index 0), then any non-empty.
+    // Each title struct is 0x200 bytes; the short desc is the first 0x80 bytes.
+    std::string resolved_name;
+    int lang_order[] = { 1, 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 };
+    for (int li = 0; li < 16 && resolved_name.empty(); li++) {
+        int lang = lang_order[li];
+        const uint16_t* utf16 = reinterpret_cast<const uint16_t*>(
+            smdh + 0x0008 + lang * 0x200
+        );
+        // Max UTF-8 output: 0x40 code units × 3 bytes each + null.
+        uint8_t utf8_buf[0x40 * 3 + 1];
+        memset(utf8_buf, 0, sizeof(utf8_buf));
+        ssize_t written = utf16_to_utf8(utf8_buf, utf16, sizeof(utf8_buf) - 1);
+        if (written <= 0) continue;
+        utf8_buf[written] = '\0';
+        // Trim trailing whitespace and null bytes.
+        int end = static_cast<int>(written) - 1;
+        while (end >= 0 && (utf8_buf[end] == 0 || utf8_buf[end] == ' ' ||
+                             utf8_buf[end] == '\t' || utf8_buf[end] == '\r' ||
+                             utf8_buf[end] == '\n')) {
+            end--;
+        }
+        if (end >= 0) {
+            resolved_name = std::string(reinterpret_cast<const char*>(utf8_buf),
+                                        static_cast<size_t>(end + 1));
+        }
+    }
+
+    if (!resolved_name.empty()) {
+        name = resolved_name;
+    }
+
+    // Copy the 48×48 large icon RGB565 tiled data.
+    icon.assign(smdh + SMDH_ICON_OFF, smdh + SMDH_ICON_OFF + SMDH_ICON_LEN);
+
+    printf("[titles] smdh tid=%016llX name='%s' icon=%zuB\n",
+           (unsigned long long)tid, name.c_str(), icon.size());
+}
 
 std::vector<TitleInfo> list_titles() {
     std::vector<TitleInfo> titles;
@@ -29,26 +127,24 @@ std::vector<TitleInfo> list_titles() {
         return titles;
     }
 
+    int icons_found = 0;
     for (u32 i = 0; i < read; i++) {
         TitleInfo info;
         info.title_id = title_ids[i];
         info.unique_id = (info.title_id >> 8) & 0xFFFFF;
 
-        // Default name: hex uniqueID
+        // Default name: hex uniqueID (overwritten by read_smdh on success).
         char hex_uid[8];
         snprintf(hex_uid, sizeof(hex_uid), "%05X", info.unique_id);
         info.name = hex_uid;
 
-        // Try SMDH short title via AM_GetTitleInfo
-        AM_TitleEntry entry;
-        if (R_SUCCEEDED(AM_GetTitleInfo(MEDIATYPE_SD, 1, &info.title_id, &entry))) {
-            // AM_TitleEntry carries size but not the display name directly.
-            // SMDH must be read from the title's content. Hex uniqueID fallback
-            // is acceptable per the spec; SMDH names are a non-goal.
-        }
+        read_smdh(info.title_id, info.name, info.icon);
+        if (!info.icon.empty()) icons_found++;
 
         titles.push_back(info);
     }
+
+    printf("[titles] %zu titles (%d with icons)\n", titles.size(), icons_found);
 
     amExit();
     return titles;

@@ -3,6 +3,7 @@
 #include "session.h"
 #include "sync_worker.h"
 #include "saves.h"
+#include "icon_tex.h"
 #include <vector>
 
 class TitleListScreen : public Screen {
@@ -22,7 +23,9 @@ private:
     size_t cursor_;
     std::string status_text_;
     bool syncing_;
-    static const size_t VISIBLE_ROWS = 5;
+    static const size_t VISIBLE_ROWS = 3;
+    std::vector<IconImage*> icon_cache_;
+    void init_icon_cache();
     void start_sync();
     void start_sync_or_gate();
     TitleListScreen(const TitleListScreen&);

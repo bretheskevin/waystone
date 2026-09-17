@@ -77,3 +77,10 @@ void draw_step_dots(C2D_TextBuf buf, float cx, float y, size_t current, size_t t
     float start_x = cx - total_w/2.0f + dot_r;
     for (size_t i=0;i<total;i++){ u32 c=(i==current)?CLR_PRIMARY_500:CLR_NEUTRAL_200; float dx=start_x+(float)i*(dot_r*2.0f+gap); C2D_DrawCircleSolid(dx,y,Z,dot_r,c); }
 }
+
+void draw_image(C2D_Image img, float x, float y, float w, float h) {
+    if (!img.tex || !img.subtex) return;
+    float sx = w / (float)img.subtex->width;
+    float sy = h / (float)img.subtex->height;
+    C2D_DrawImageAt(img, x, y, Z, NULL, sx, sy);
+}

@@ -22,3 +22,4 @@ void draw_status_bar(C2D_TextBuf buf, C3D_RenderTarget* top, const char* text, u
 void draw_progress_bar(float x, float y, float w, float h, float progress, u32 fill_color, u32 bg_color);
 void draw_footer_hint(C2D_TextBuf buf, const char* text);
 void draw_step_dots(C2D_TextBuf buf, float cx, float y, size_t current, size_t total);
+void draw_image(C2D_Image img, float x, float y, float w, float h);

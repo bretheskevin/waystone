@@ -10,6 +10,7 @@ struct TitleInfo {
     u64 title_id;
     u32 unique_id; // (title_id >> 8) & 0xFFFFF
     std::string name;
+    std::vector<uint8_t> icon; // 4608 B RGB565 tiled 48x48 SMDH large icon, or empty
 };
 
 // Enumerate installed SD titles via AM service.
