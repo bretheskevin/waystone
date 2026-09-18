@@ -19,7 +19,7 @@ NoInternetScreen::NoInternetScreen(NoInternetReason reason,
 
 void NoInternetScreen::draw_top(C3D_RenderTarget* /*target*/) {
     C2D_TextBuf buf = App::instance().text_buf();
-    draw_text_centered(buf, 0, 60.0f, 0.5f, TEXT_LG, CLR_WHITE,
+    draw_text_centered(buf, 0, 60.0f, 0.5f, TEXT_LG, CLR_TEXT,
                        "No Internet Connection", (float)SCREEN_TOP_W);
 
     // Draw message lines (split on '\n' for 3DS line-by-line rendering)

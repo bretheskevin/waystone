@@ -54,6 +54,9 @@ int main(int argc, char* argv[]) {
     session_store_set_device_key_fn(ctr_device_key);
     if (socInit(SOC_buffer, 0x100000) != 0) { printf("FATAL: socInit failed\n"); goto cleanup; }
     soc_ok = true;
+    // Redirect stdout/stderr to the `3dslink -s` host so tagged [vault]/[sync]/[saves]
+    // logs stream to the dev machine on hardware (no-op when not launched via netload).
+    printf("[net] link3dsStdio fd=%d\n", link3dsStdio());
     if (romfsInit() != 0) { printf("FATAL: romfsInit failed\n"); goto cleanup; }
     romfs_ok = true;
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) { printf("FATAL: curl_global_init failed\n"); goto cleanup; }

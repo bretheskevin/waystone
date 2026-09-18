@@ -88,11 +88,20 @@ static bool tok_eq(const char* json, const jsmntok_t& tok, const char* key) {
     return (strlen(key) == len && strncmp(json + tok.start, key, len) == 0);
 }
 
-std::string json_get_string(const char* json, const char* key) {
+// Parse `json` into a heap-allocated token buffer and return the jsmn count.
+// The buffer is heap- rather than stack-resident on purpose: MAX_TOKENS jsmntok_t
+// is ~32 KiB, and a stack array that size blows the 3DS's 32 KiB main-thread
+// stack (Luma data-abort in wsconfig_load's json_get_string). Fine on the heap.
+static int json_parse_tokens(const char* json, std::vector<jsmntok_t>& tokens) {
+    tokens.resize(MAX_TOKENS);
     jsmn_parser parser;
-    jsmntok_t tokens[MAX_TOKENS];
     jsmn_init(&parser);
-    int n = jsmn_parse(&parser, json, strlen(json), tokens, MAX_TOKENS);
+    return jsmn_parse(&parser, json, strlen(json), tokens.data(), MAX_TOKENS);
+}
+
+std::string json_get_string(const char* json, const char* key) {
+    std::vector<jsmntok_t> tokens;
+    int n = json_parse_tokens(json, tokens);
     if (n < 2 || tokens[0].type != JSMN_OBJECT) return "";
 
     for (int i = 1; i < n - 1; i++) {
@@ -130,10 +139,8 @@ static int skip_token(const jsmntok_t* tokens, int idx, int total) {
 std::string json_get_nested_string(const char* json,
                                    const char* outer_key,
                                    const char* inner_key) {
-    jsmn_parser parser;
-    jsmntok_t tokens[MAX_TOKENS];
-    jsmn_init(&parser);
-    int n = jsmn_parse(&parser, json, strlen(json), tokens, MAX_TOKENS);
+    std::vector<jsmntok_t> tokens;
+    int n = json_parse_tokens(json, tokens);
     if (n < 2 || tokens[0].type != JSMN_OBJECT) return "";
 
     int top_children = tokens[0].size;
@@ -153,22 +160,20 @@ std::string json_get_nested_string(const char* json,
                         static_cast<size_t>(tokens[j + 1].end - tokens[j + 1].start));
                 }
                 j++; // skip key
-                j = skip_token(tokens, j, n); // skip value
+                j = skip_token(tokens.data(), j, n); // skip value
             }
             return ""; // outer found but inner not found
         }
         i++; // skip key
-        i = skip_token(tokens, i, n); // skip value
+        i = skip_token(tokens.data(), i, n); // skip value
     }
     return "";
 }
 
 std::vector<std::string> json_split_array(const char* json) {
     std::vector<std::string> result;
-    jsmn_parser parser;
-    jsmntok_t tokens[MAX_TOKENS];
-    jsmn_init(&parser);
-    int n = jsmn_parse(&parser, json, strlen(json), tokens, MAX_TOKENS);
+    std::vector<jsmntok_t> tokens;
+    int n = json_parse_tokens(json, tokens);
     if (n < 1 || tokens[0].type != JSMN_ARRAY) return result;
 
     int count = tokens[0].size;
@@ -178,7 +183,7 @@ std::vector<std::string> json_split_array(const char* json) {
         // For objects/arrays, tokens[idx].end IS the end of the whole subtree.
         int end = tokens[idx].end;
         result.push_back(std::string(json + start, static_cast<size_t>(end - start)));
-        idx = skip_token(tokens, idx, n);
+        idx = skip_token(tokens.data(), idx, n);
     }
     return result;
 }

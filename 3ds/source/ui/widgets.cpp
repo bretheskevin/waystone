@@ -1,6 +1,8 @@
 #include "widgets.h"
 #include "theme.h"
 #include <cstring>
+#include <cmath>
+#include <string>
 
 static const float Z = 0.5f;
 
@@ -22,6 +24,51 @@ float text_height(C2D_TextBuf buf, float scale, const char* str) {
 }
 void draw_text_centered(C2D_TextBuf buf, float cx, float y, float z, float scale, u32 color, const char* str, float area_w) {
     float tw = text_width(buf, scale, str); draw_text(buf, cx + (area_w - tw)/2.0f, y, z, scale, color, str);
+}
+void draw_text_centered_fit(C2D_TextBuf buf, float cx, float y, float z, float base_scale, u32 color, const char* str, float area_w, float min_scale) {
+    if (!str || str[0]=='\0') return;
+    float tw = text_width(buf, base_scale, str);
+    float scale = base_scale;
+    if (tw > area_w && tw > 0.0f) {
+        scale = base_scale * (area_w / tw);
+        if (scale < min_scale) scale = min_scale;
+    }
+    draw_text_centered(buf, cx, y, z, scale, color, str, area_w);
+}
+float draw_text_wrapped_centered(C2D_TextBuf buf, float cx, float y, float z, float scale, u32 color, const char* str, float area_w, float line_h) {
+    if (!str || str[0]=='\0') return y;
+    std::string s(str);
+    size_t i = 0, n = s.size();
+    while (i < n) {
+        size_t line_end = i;
+        while (line_end < n) {
+            // advance one UTF-8 code point past line_end
+            size_t cp = line_end + 1;
+            while (cp < n && (static_cast<unsigned char>(s[cp]) & 0xC0) == 0x80) cp++;
+            std::string cand = s.substr(i, cp - i);
+            if (text_width(buf, scale, cand.c_str()) > area_w && line_end > i) break;
+            line_end = cp;
+        }
+        std::string line = s.substr(i, line_end - i);
+        draw_text_centered(buf, cx, y, z, scale, color, line.c_str(), area_w);
+        y += line_h;
+        i = line_end;
+    }
+    return y;
+}
+void draw_spinner(C2D_TextBuf buf, float cx, float cy, float angle) {
+    (void)buf;
+    const int   N      = 4;
+    const float dot_r  = 4.0f;
+    const float spread = 18.0f;
+    float base_x = cx - ((float)(N - 1) * spread) / 2.0f;
+    for (int i = 0; i < N; i++) {
+        float alpha = 0.5f + 0.5f * sinf(angle + (float)i * 1.57f);
+        u8    a     = static_cast<u8>(255.0f * alpha);
+        u32   color = C2D_Color32(0x63, 0x66, 0xF1, a);
+        float x     = base_x + (float)i * spread;
+        draw_rounded_rect(x - dot_r, cy - dot_r, 0.5f, dot_r * 2.0f, dot_r * 2.0f, dot_r, color);
+    }
 }
 void draw_rounded_rect(float x, float y, float z, float w, float h, float radius, u32 color) {
     if (radius <= 0.0f) { C2D_DrawRectSolid(x,y,z,w,h,color); return; }
@@ -65,10 +112,30 @@ void draw_progress_bar(float x, float y, float w, float h, float progress, u32 f
     draw_rounded_rect(x,y,Z,w,h,h/2.0f,bg_color);
     if (progress > 0.0f) { float fw = w*(progress>1.0f?1.0f:progress); if (fw>h) draw_rounded_rect(x,y,Z+0.01f,fw,h,h/2.0f,fill_color); }
 }
+void draw_confirm_banner(C2D_TextBuf buf, float area_y, float area_h,
+                         const char* line1, const char* line2, const char* line3,
+                         float banner_h) {
+    float banner_y = area_y + (area_h - banner_h) / 2.0f;
+    if (banner_y < area_y) banner_y = area_y;
+    C2D_DrawRectSolid(0, banner_y, 0.6f, (float)SCREEN_BOT_W, banner_h, CLR_WARNING);
+    draw_text_centered(buf, 0, banner_y + 4.0f, 0.61f, TEXT_BASE,
+                       CLR_NEUTRAL_900, line1, (float)SCREEN_BOT_W);
+    if (line3 && line3[0]) {
+        draw_text_centered(buf, 0, banner_y + 20.0f, 0.61f, TEXT_SM,
+                           CLR_NEUTRAL_800, line2, (float)SCREEN_BOT_W);
+        draw_text_centered(buf, 0, banner_y + 36.0f, 0.61f, TEXT_SM,
+                           CLR_NEUTRAL_800, line3, (float)SCREEN_BOT_W);
+    } else {
+        draw_text_centered(buf, 0, banner_y + 22.0f, 0.61f, TEXT_SM,
+                           CLR_NEUTRAL_800, line2, (float)SCREEN_BOT_W);
+    }
+}
 void draw_footer_hint(C2D_TextBuf buf, const char* text) {
     float th = text_height(buf, TEXT_SM, text);
     float y = (float)SCREEN_BOT_H - SP_MD - th;
-    draw_text_centered(buf, 0, y, Z, TEXT_SM, CLR_TEXT_HINT, text, (float)SCREEN_BOT_W);
+    // Shrink to fit so long shortcut lines never overflow the 320px bottom screen.
+    draw_text_centered_fit(buf, 0, y, Z, TEXT_SM, CLR_TEXT_HINT, text,
+                           (float)SCREEN_BOT_W - 2.0f * (float)SP_XS, TEXT_SM * 0.6f);
 }
 void draw_step_dots(C2D_TextBuf buf, float cx, float y, size_t current, size_t total) {
     (void)buf;

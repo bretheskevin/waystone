@@ -41,7 +41,7 @@ void Wizard::go_back() {
 }
 void Wizard::draw_top(C3D_RenderTarget* target, C2D_TextBuf buf, const char* screen_title) {
     (void)target;
-    draw_text_centered(buf, 0, 40.0f, 0.5f, TEXT_2XL, CLR_WHITE, screen_title, (float)SCREEN_TOP_W);
+    draw_text_centered(buf, 0, 40.0f, 0.5f, TEXT_2XL, CLR_TEXT, screen_title, (float)SCREEN_TOP_W);
     draw_text_centered(buf, 0, 10.0f, 0.5f, TEXT_SM, CLR_NEUTRAL_400, "Waystone", (float)SCREEN_TOP_W);
     if (!error_.empty())
         draw_text_centered(buf, 0, (float)SCREEN_TOP_H-40.0f, 0.5f, TEXT_BASE, CLR_ERROR, error_.c_str(), (float)SCREEN_TOP_W);
@@ -57,7 +57,8 @@ void Wizard::draw_bottom(C3D_RenderTarget* target, C2D_TextBuf buf, const char* 
     draw_text_centered(buf, 0, 20.0f, 0.5f, TEXT_LG, CLR_TEXT, step.title.c_str(), (float)SCREEN_BOT_W);
     if (step.fields.empty() && !step.hint.empty()) {
         draw_text_centered(buf, 0, (float)SCREEN_BOT_H-60.0f, 0.5f, TEXT_BASE, CLR_TEXT_HINT, step.hint.c_str(), (float)SCREEN_BOT_W);
-        draw_footer_hint(buf, "R: Next"); return;
+        if (current_step_ != 0) draw_footer_hint(buf, "R: Next");
+        return;
     }
     for (size_t i=0;i<step.fields.size();i++) {
         const WizardFieldDef& f = step.fields[i]; bool focused=(cursor_==i);

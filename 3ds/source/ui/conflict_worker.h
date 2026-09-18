@@ -36,6 +36,13 @@ public:
     void resolve_keep_local(size_t index) { start_resolve(index, true); }
     void resolve_keep_remote(size_t index) { start_resolve(index, false); }
     void join();
+    // Ask the scan loop to stop before the next title so a screen pop's join()
+    // doesn't block the render thread for the whole title list.
+    void request_cancel() { cancel_.store(true); }
+    // True while the worker thread body is still executing. Lets a detached
+    // worker be reaped (deleted) only once its thread has finished, so join()
+    // in the destructor returns immediately instead of blocking the caller.
+    bool is_running() const { return running_.load(); }
 
     ConflictPhase phase() const;            // atomic load
     std::string status();                   // LightLock-guarded copy
@@ -51,6 +58,7 @@ private:
     std::vector<TitleInfo> titles_;
     std::atomic<int> phase_;
     std::atomic<bool> running_;
+    std::atomic<bool> cancel_;
     LightLock mu_;
     char status_buf_[256];
     std::vector<ConflictItem> conflicts_;

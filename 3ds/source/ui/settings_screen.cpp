@@ -22,7 +22,7 @@ void SettingsScreen::draw_top(C3D_RenderTarget* target) {
     (void)target;
     C2D_TextBuf buf = App::instance().text_buf();
     draw_text_centered(buf, 0, 10.0f, 0.5f, TEXT_SM, CLR_NEUTRAL_400, "Waystone", (float)SCREEN_TOP_W);
-    draw_text_centered(buf, 0, 30.0f, 0.5f, TEXT_XL, CLR_WHITE, "Settings", (float)SCREEN_TOP_W);
+    draw_text_centered(buf, 0, 30.0f, 0.5f, TEXT_XL, CLR_TEXT, "Settings", (float)SCREEN_TOP_W);
     if (!status_text_.empty()) {
         draw_text_centered(buf, 0, 80.0f, 0.5f, TEXT_BASE, CLR_NEUTRAL_400, status_text_.c_str(), (float)SCREEN_TOP_W);
     }

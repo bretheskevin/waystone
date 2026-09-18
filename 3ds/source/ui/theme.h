@@ -22,7 +22,7 @@
 #define CLR_SYNC     C2D_Color32(0x06,0xB6,0xD4,0xFF)
 #define CLR_WHITE    C2D_Color32(0xFF,0xFF,0xFF,0xFF)
 // Semantic aliases
-#define CLR_BG_TOP      CLR_NEUTRAL_900
+#define CLR_BG_TOP      CLR_NEUTRAL_50
 #define CLR_BG_BOTTOM   CLR_NEUTRAL_50
 #define CLR_TEXT        CLR_NEUTRAL_800
 #define CLR_TEXT_HINT   CLR_NEUTRAL_500

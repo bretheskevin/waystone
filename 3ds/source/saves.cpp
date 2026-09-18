@@ -29,8 +29,11 @@ static void read_smdh(u64 tid, std::string& name, std::vector<uint8_t>& icon) {
     };
     FS_Path arch_path = { PATH_BINARY, sizeof(arch_data), arch_data };
 
-    // File binary path: ExeFS "icon" entry {0, 0, 0x2, 0x6E6F6369}
-    u32 file_data[4] = { 0, 0, 0x2, 0x6E6F6369 };
+    // File binary path: ExeFS "icon" entry. The name is the 8-byte "icon\0\0\0\0",
+    // i.e. TWO words {0x6E6F6369, 0}, so this lowpath must be 5 words / 0x14 bytes.
+    // Dropping the trailing 0 (4 words / 0x10) makes FS reject it as InvalidArgument
+    // (rc=0xE0E046BE) for every title. Matches Checkpoint smdh.cpp / FBI extractsmdh.c.
+    u32 file_data[5] = { 0, 0, 0x2, 0x6E6F6369, 0 };
     FS_Path file_path = { PATH_BINARY, sizeof(file_data), file_data };
 
     Handle fh = 0;
@@ -143,6 +146,45 @@ u32 extdata_id_for(u64 title_id) {
     return unique;
 }
 
+// Collapse per-game duplicates. The SD title list holds the base app
+// (00040000...), its update (0004000E...) and any DLC (0004008C...) as
+// separate entries, but they are ONE game sharing a unique_id. The savable
+// entry is the base application: USER_SAVEDATA is keyed by its title_id and
+// extdata by an id derived from its unique_id -- updates/DLC carry no save of
+// their own. So per unique_id we keep the base app and drop the rest; when the
+// base's own SMDH icon can't be read (icon empty) we borrow the name+icon from
+// a sibling that has one, so the row still shows the real game.
+static std::vector<TitleInfo> collapse_by_unique_id(const std::vector<TitleInfo>& raw) {
+    std::vector<TitleInfo> out;
+    std::vector<bool> used(raw.size(), false);
+    for (size_t i = 0; i < raw.size(); i++) {
+        if (used[i]) continue;
+        u32 uid = raw[i].unique_id;
+        int base_idx = -1, icon_idx = -1, group_n = 0;
+        for (size_t j = i; j < raw.size(); j++) {
+            if (raw[j].unique_id != uid) continue;
+            used[j] = true;
+            group_n++;
+            if ((u32)(raw[j].title_id >> 32) == 0x00040000 && base_idx < 0) base_idx = (int)j;
+            if (!raw[j].icon.empty() && icon_idx < 0) icon_idx = (int)j;
+        }
+        int canon = (base_idx >= 0) ? base_idx : (int)i;
+        TitleInfo t = raw[canon];
+        if (t.icon.empty() && icon_idx >= 0) {
+            printf("[titles] uid=%05lX base tid=%016llX borrows name/icon from tid=%016llX\n",
+                   (unsigned long)uid, (unsigned long long)t.title_id,
+                   (unsigned long long)raw[icon_idx].title_id);
+            t.name = raw[icon_idx].name;
+            t.icon = raw[icon_idx].icon;
+        }
+        if (group_n > 1)
+            printf("[titles] uid=%05lX collapsed %d entries -> tid=%016llX '%s'\n",
+                   (unsigned long)uid, group_n, (unsigned long long)t.title_id, t.name.c_str());
+        out.push_back(t);
+    }
+    return out;
+}
+
 std::vector<TitleInfo> list_titles() {
     std::vector<TitleInfo> titles;
 
@@ -184,7 +226,9 @@ std::vector<TitleInfo> list_titles() {
     printf("[titles] %zu titles (%d with icons)\n", titles.size(), icons_found);
 
     amExit();
-    return titles;
+    std::vector<TitleInfo> games = collapse_by_unique_id(titles);
+    printf("[titles] collapsed to %zu game(s)\n", games.size());
+    return games;
 }
 
 // Open the ARCHIVE_USER_SAVEDATA for a given title_id (SD card).

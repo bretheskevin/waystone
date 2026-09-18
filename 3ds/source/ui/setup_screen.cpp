@@ -2,6 +2,7 @@
 #include "recovery_screen.h"
 #include "app.h"
 #include "theme.h"
+#include "widgets.h"
 #include "worker_thread.h"
 #include "session_store.h"
 #include <cstdio>
@@ -57,7 +58,7 @@ struct VaultWorkerCtx {
 
 SetupScreen::SetupScreen(Session* session)
     : session_(session), wizard_(setup_steps(), NUM_VALUES),
-      creating_(false), vault_done_(false), vault_thread_(NULL) {}
+      creating_(false), vault_done_(false), vault_thread_(NULL), spinner_angle_(0.0f) {}
 
 SetupScreen::~SetupScreen() {
     if (creating_) {
@@ -74,7 +75,9 @@ SetupScreen::~SetupScreen() {
 }
 
 void SetupScreen::draw_top(C3D_RenderTarget* target) {
-    wizard_.draw_top(target, App::instance().text_buf(), "Waystone Setup");
+    wizard_.draw_top(target, App::instance().text_buf(), "Setup");
+    if (creating_)
+        draw_spinner(App::instance().text_buf(), (float)SCREEN_TOP_W / 2.0f, 130.0f, spinner_angle_);
 }
 
 void SetupScreen::draw_bottom(C3D_RenderTarget* target) {
@@ -199,6 +202,7 @@ void SetupScreen::handle_input(u32 kDown, touchPosition touch) {
 }
 
 void SetupScreen::poll() {
+    if (creating_) spinner_angle_ += 0.05f;
     if (!creating_ || !vault_done_.load()) return;
 
     threadJoin(vault_thread_, U64_MAX);

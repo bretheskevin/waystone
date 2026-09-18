@@ -21,6 +21,7 @@ ConflictWorker::ConflictWorker(WsVault* vault, const std::string& device_id,
       titles_(titles),
       phase_((int)ConflictPhase::Idle),
       running_(false),
+      cancel_(false),
       thread_(0),
       pending_resolve_(0)
 {
@@ -92,6 +93,7 @@ void ConflictWorker::start_scan() {
 void ConflictWorker::scan_worker() {
     const size_t n = titles_.size();
     for (size_t i = 0; i < n; i++) {
+        if (cancel_.load()) { printf("[conflict] scan cancelled at %zu/%zu\n", i, n); break; }
         {
             LightLock_Lock(&mu_);
             snprintf(status_buf_, sizeof(status_buf_),

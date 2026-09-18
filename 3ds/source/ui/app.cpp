@@ -24,6 +24,7 @@ void App::set_screen(Screen* s) {
 }
 void App::push_screen(Screen* s) { stack_.push_back(s); screen_changed_ = true; }
 void App::pop_screen() { if (!stack_.empty()) { delete stack_.back(); stack_.pop_back(); screen_changed_ = true; } }
+void App::defer_reap(const std::function<bool()>& fn) { reapers_.push_back(fn); }
 void App::quit() { running_ = false; }
 void App::run() {
     while (running_ && aptMainLoop()) {
@@ -31,6 +32,11 @@ void App::run() {
         u32 kDown = hidKeysDown();
         touchPosition touch; hidTouchRead(&touch);
         if (kDown & KEY_START) { quit(); break; }
+        // Reap deferred background workers; drop each once it reports finished.
+        for (size_t i = 0; i < reapers_.size(); ) {
+            if (reapers_[i]()) reapers_.erase(reapers_.begin() + (long)i);
+            else i++;
+        }
         if (!stack_.empty()) stack_.back()->poll();
         if (screen_changed_) {
             screen_changed_ = false;

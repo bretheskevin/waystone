@@ -57,21 +57,8 @@ void LoadingScreen::worker_entry(void* arg) {
 void LoadingScreen::draw_top(C3D_RenderTarget* /*target*/) {
     C2D_TextBuf buf = App::instance().text_buf();
     draw_text_centered(buf, SCREEN_TOP_W / 2.0f, 88.0f, 0.5f,
-                       TEXT_LG, CLR_WHITE, "Loading...", SCREEN_TOP_W);
-
-    // Spinning dots: 4 dots with pulsing alpha
-    const int   N      = 4;
-    const float dot_r  = 4.0f;
-    const float spread = 18.0f;
-    const float cy     = 126.0f;
-    const float base_x = SCREEN_TOP_W / 2.0f - ((N - 1) * spread) / 2.0f;
-    for (int i = 0; i < N; i++) {
-        float alpha = 0.5f + 0.5f * sinf(spinner_angle_ + i * 1.57f);
-        u8    a     = static_cast<u8>(255.0f * alpha);
-        u32   color = C2D_Color32(0x63, 0x66, 0xF1, a);
-        float x     = base_x + i * spread;
-        draw_rounded_rect(x - dot_r, cy - dot_r, 0.5f, dot_r * 2.0f, dot_r * 2.0f, dot_r, color);
-    }
+                       TEXT_LG, CLR_TEXT, "Loading...", SCREEN_TOP_W);
+    draw_spinner(buf, SCREEN_TOP_W / 2.0f, 126.0f, spinner_angle_);
 }
 
 void LoadingScreen::draw_bottom(C3D_RenderTarget* /*target*/) {

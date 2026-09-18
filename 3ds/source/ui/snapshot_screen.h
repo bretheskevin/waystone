@@ -1,31 +1,38 @@
 #pragma once
-#include "screen.h"
+#include "restore_browse_screen.h"
 #include "session.h"
 #include "snapshot_worker.h"
 #include <vector>
 #include <string>
 
-class SnapshotScreen : public Screen {
+class SnapshotScreen : public RestoreBrowseScreen {
 public:
     SnapshotScreen(Session* session, TitleInfo selected);
     ~SnapshotScreen();
-    void draw_top(C3D_RenderTarget* target);
-    void draw_bottom(C3D_RenderTarget* target);
-    void handle_input(u32 kDown, touchPosition touch);
     void poll();
+
+protected:
+    // ListScreen content hooks
+    const char* screen_title()          { return "Snapshots"; }
+    std::string subtitle();
+    size_t      item_count()            { return items_.size(); }
+    float       row_height() const      { return 28.0f; }
+    void        draw_row(C2D_TextBuf buf, size_t i,
+                         float x, float y, float w, bool focused);
+    void        draw_selected_detail(C2D_TextBuf buf, float area_y, float area_h);
+
+    // RestoreBrowseScreen accessors
+    BrowsePhase browse_phase()              const { return phase_; }
+    void        browse_start_restore(size_t index);
+    const char* confirm_line1()             const { return "Restore this snapshot?"; }
+    const char* log_tag()                   const { return "snapshot"; }
+
 private:
     Session* session_;
     TitleInfo title_;
     SnapshotWorker* worker_;
     std::vector<SnapshotEntry> items_;
-    size_t cursor_;
-    size_t scroll_offset_;
-    static const size_t VISIBLE_ROWS = 5;
-    bool confirm_restore_;
-    std::string status_text_;
     BrowsePhase phase_;
-
-    void clamp_cursor();
 
     SnapshotScreen(const SnapshotScreen&);
     SnapshotScreen& operator=(const SnapshotScreen&);

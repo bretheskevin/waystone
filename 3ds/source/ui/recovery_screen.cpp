@@ -17,7 +17,7 @@ void RecoveryScreen::draw_top(C3D_RenderTarget* target) {
     (void)target;
     C2D_TextBuf buf = App::instance().text_buf();
     draw_text_centered(buf, 0, 10.0f, 0.5f, TEXT_SM,   CLR_NEUTRAL_400, "Waystone",        (float)SCREEN_TOP_W);
-    draw_text_centered(buf, 0, 40.0f, 0.5f, TEXT_2XL,  CLR_WHITE,        "Recovery Key",   (float)SCREEN_TOP_W);
+    draw_text_centered(buf, 0, 40.0f, 0.5f, TEXT_2XL,  CLR_TEXT,        "Recovery Key",   (float)SCREEN_TOP_W);
     draw_text_centered(buf, 0, 80.0f, 0.5f, TEXT_BASE,  CLR_ERROR,
         "Write this down or keep it on your SD card.",   (float)SCREEN_TOP_W);
     draw_text_centered(buf, 0, 100.0f, 0.5f, TEXT_BASE, CLR_ERROR,
@@ -29,13 +29,15 @@ void RecoveryScreen::draw_top(C3D_RenderTarget* target) {
 void RecoveryScreen::draw_bottom(C3D_RenderTarget* target) {
     (void)target;
     C2D_TextBuf buf = App::instance().text_buf();
-    draw_text_centered(buf, 0, 16.0f, 0.5f, TEXT_BASE, CLR_TEXT_HINT,
+    float area_w = (float)SCREEN_BOT_W - 2.0f * (float)SP_MD;
+    draw_text_centered(buf, 0, 12.0f, 0.5f, TEXT_BASE, CLR_TEXT_HINT,
                        "Your recovery key:", (float)SCREEN_BOT_W);
-    draw_text_centered(buf, 0, 36.0f, 0.5f, TEXT_SM,   CLR_TEXT,
-                       recovery_hex_.c_str(), (float)SCREEN_BOT_W);
+    // Wrap the key across lines so a long hex string stays on-screen and readable.
+    draw_text_wrapped_centered(buf, (float)SP_MD, 32.0f, 0.51f, TEXT_SM, CLR_TEXT,
+                               recovery_hex_.c_str(), area_w, 15.0f);
     std::string path_line = "Saved to: " + recovery_path_;
-    draw_text_centered(buf, 0, 96.0f, 0.5f, TEXT_SM, CLR_TEXT_HINT,
-                       path_line.c_str(), (float)SCREEN_BOT_W);
+    draw_text_centered_fit(buf, (float)SP_MD, 96.0f, 0.5f, TEXT_SM, CLR_TEXT_HINT,
+                           path_line.c_str(), area_w, TEXT_SM * 0.6f);
     float btn_w = 160.0f, btn_h = 32.0f;
     float btn_x = ((float)SCREEN_BOT_W - btn_w) / 2.0f;
     draw_button(buf, btn_x, 130.0f, btn_w, btn_h, "I've saved it", ButtonStyle::PRIMARY, true);

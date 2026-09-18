@@ -18,6 +18,7 @@ private:
     Session* session_; Wizard wizard_;
     bool creating_; std::atomic<bool> vault_done_;
     Thread vault_thread_; VaultCreateResult vault_result_;
+    float spinner_angle_;
     static const size_t FIELD_SERVER=0, FIELD_USERNAME=1, FIELD_PASSWORD=2, FIELD_PASSPHRASE=3, FIELD_CONFIRM=4, NUM_VALUES=5;
     bool validate_step(size_t step);
     void on_finish();
