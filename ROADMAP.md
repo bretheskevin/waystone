@@ -1,6 +1,6 @@
 # Waystone — Status & Roadmap
 
-_Last updated: 2026-09-08_
+_Last updated: 2026-09-18_
 
 Cross-platform game-save sync (backup **and** cross-device sync) spanning emulator
 saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
@@ -119,7 +119,71 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   base + `WizardRenderer` + `vault_helpers`. Compile+link verified (GUI + `CONSOLE=1`); **on-device re-test of
   the wizard in progress.**
 
-**Quality:** 103 tests pass (11 new checkpoint core tests + 3 checkpoint FFI tests), clippy clean.
+### Milestone 2.5 — console on-hardware bring-up + UX parity (2026-09-09 → 2026-09-18)
+- **Switch NRO boots on hardware**: force-static the Rust FFI lib (RELATIVE-only relocations) fixed the
+  on-device boot. The wizard was hardened against real-hardware crashes: borealis use-after-free fixes
+  (field editing, `reload_steps`, orphaned views, secret SSO remnant), a multi-field wizard layout with
+  confirm button + slide-fade animation, and an AppletFrame footer with real controller button glyphs
+  (A/RB/LB/+, NintendoExt PUA). Create-Vault no longer black-screens — the Argon2 KDF runs on a worker
+  thread with progress + error surfacing.
+- **Headless borealis desktop preview harness** (`switch/preview/`): renders the real wizard/dashboard UI
+  to PNG screenshots without hardware — borealis compiled from source against GLFW with swkbd/FFI/saves
+  stubs, a NintendoExt glyph font generated from real Switch button shapes, and a dashboard mode with
+  fixture titles. Preview fonts are kept out of the shipped `.nro` romfs.
+- **No-internet handling (both consoles)**: connectivity gate at startup + before sync, curl timeouts, a
+  `NoInternetActivity`/`NoInternetScreen` with retry, and the message strings DRY-extracted to shared
+  `shell-common/net_status.h` helpers.
+- **Persistent login (both consoles)**: an MDK-based session store (`session_store`) enables auto-unlock
+  on launch — Switch gained auto-unlock + a Settings "Log out", 3DS gained the same plus a CFGU-backed
+  device key (`ctr_device_key`) so no passphrase is needed on return visits. Secrets zeroized; logout
+  clears the store and frees the vault.
+- **3DS citro2d GUI (M4 core slice)**: the 3DS shell is no longer console-only — a citro2d/citro3d UI
+  with the same screen model as Switch (`Screen` stack, theme from `design/tokens.json`, widgets, swkbd
+  wrapper): onboarding wizard (Setup → recovery key), Unlock (passphrase or recovery key), Loading
+  (auto-unlock), and a title list driving push/pull sync. Default build is the GUI; `CONSOLE=1` keeps the
+  text driver. Compile+link verified in both modes.
+- **Conflict-resolution inbox at parity (both consoles)**: 3DS gained the conflict inbox (dedicated
+  Prompt-policy scan on a worker thread, dual-screen UI, keep-local/keep-remote resolution); Switch gained
+  a confirm-before-keep-remote gate (focusable rows + amber confirm banner — also fixed a pre-existing
+  bug where non-focusable label rows made selection stuck at 0).
+- **On-device recovery surfaces (both consoles)**: the desktop's history and snapshot restore arcs are
+  now on-device — remote-history browse + restore and local-snapshot browse + restore on both Switch and
+  3DS, going through the same safety-backup guard as desktop.
+- **Dashboard redesign (both consoles)**: Switch's title list is now an AppletFrame with 56×56 icon +
+  real game name rows (icons extracted from NACP and cached to `sdmc:/waystone/icons/`), wired nxlink
+  logging; 3DS reached parity — real game names + 48×48 SMDH icons (UTF-16LE short-desc, tiled RGB565 →
+  `C3D_Tex` on the render thread), no title IDs shown anywhere. 3DS layout flipped to list-on-top /
+  action-panel-on-bottom.
+- **3DS two-way extdata backup + restore**: `extract_save_json` also walks `ARCHIVE_EXTDATA` (Checkpoint
+  `TitleQuirks` extdata-ID table, GPLv3-clean transcription), emitting a second independent save group
+  (`3ds/<game>/extdata`) that rides the existing sync loops with **zero core/FFI change** (4 new
+  checkpoint.rs tests). Restore routes by archive kind — extdata skips the commit + secure-value delete,
+  matching Checkpoint. Snapshot restore is extdata-aware. **Runtime extdata read/write pending
+  on-hardware.**
+- **Deploy**: the `dufs` WebDAV service joins `dokploy-network` so Traefik routes it over HTTPS.
+
+### Milestone 4 (foundation) — 3DS engine, TLS, shared shell-common
+- **3DS save-sync engine (host-verified, compile+link)**: a `3ds/` shell (devkitARM/libctru, Docker image
+  `waystone-3ds`) mirrors the Switch M2 engine console-driven: libctru title enumeration + FS-archive
+  savedata extraction → `ws_checkpoint_normalize("3ds", …)` → package → vault-encrypt → WebDAV **two-way
+  sync** (push AND pull/restore): pull mirrors the Switch slice — PROPFIND heads → `ws_decide_pull`
+  (NewestWins) → GET+decrypt blob → `ws_unzip` → `write_save_files` (FS-archive write-back +
+  `ARCHIVE_ACTION_COMMIT_SAVE_DATA`; restore correctness cross-checked against Checkpoint `io::restore` —
+  root wipe, no partial commits, secure-value delete). Cross-compiles to `armv6k-nintendo-3ds` into a
+  `.3dsx`, with a 3DS `getrandom` shim over `PS_GenerateRandomBytes`.
+- **DRY generalization for the second console**: FFI/core no_std runtime + entropy generalized
+  (`console_runtime`/`console_entropy`, gated `any(feature = "switch", feature = "3ds")`, Switch
+  byte-identical), and `json`/`jsmn`/`base64`/`snapshot`/`net` extracted to a shared **`shell-common/`**
+  consumed by both console Makefiles — including the single shared libcurl WebDAV client
+  (`shell-common/net.{h,cpp}`) with one `curl_apply_tls`.
+- **3DS verified HTTPS/TLS (compile+link)**: mirrors the Switch TLS slice — `curl_apply_tls`
+  (`SSL_VERIFYPEER=1`, `SSL_VERIFYHOST=2`, `CAINFO=romfs:/cacert.pem`) on every handle; `3ds-curl` is
+  built against `3ds-mbedtls`, so the Mozilla CA bundle (reused byte-for-byte from
+  `switch/romfs/cacert.pem`) ships via romfs. CA bundle bytes confirmed embedded in the `.3dsx`.
+
+**Quality:** `cargo test --workspace` green throughout (103+ tests — checkpoint extdata and mobile
+adapter-parity tests added since), clippy clean; every console slice compile+link-verified in both GUI
+and `CONSOLE=1` modes.
 
 ### Adapter source references
 - **JKSV**: https://github.com/J-D-K/JKSV
@@ -192,11 +256,10 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   -p waystone-desktop` green (4 new reducer tests), clippy/fmt clean, reviewed CLEAN (0 findings).
 
 ## Next
-- **M2 (remaining) — Switch shell: first on-hardware run**: the two-way save engine (push +
-  pull/restore), verified HTTPS, the **borealis GUI vertical slice**, and the **full-parity screens**
-  (runtime Setup / Unlock via swkbd, Settings, and the conflict inbox — see Done) are all built and
-  compile+link-verified end-to-end in both GUI and `CONSOLE=1`. Remaining: the **first on-hardware run** —
-  eyeball the borealis UI and exercise setup / unlock / sync / conflict-resolution on real Switch hardware.
+- **M2 (remaining) — Switch shell: on-device validation pass**: the first on-hardware run happened and
+  drove the wizard redesign + boot/UAF/KDF fixes (see Done). Remaining: a full on-device pass over the
+  redesigned shell — wizard setup/unlock, auto-unlock, dashboard sync, conflict inbox, history/snapshot
+  restore — on real Switch hardware.
 - **M3 (adapter parity landed) — Android shell**: the **UniFFI binding foundation** is built and
   host-verified. A shared **`waystone-sync`** crate owns sync orchestration; **desktop** delegates to
   it; and **`waystone-mobile`** (uniffi 0.32) exposes a complete vertical slice to Kotlin — `Vault`,
@@ -205,33 +268,18 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   to_native, with lossless `NormalizedSave` fidelity (`serial`/`rom_crc`/`confidence`). Committed
   Kotlin binding kept honest by an up-to-date test. Remaining: the **Kotlin/Compose UI** + Kotlin SAF
   (storage) & OkHttp (WebDAV) trait impls, and a first on-device run.
-- **M4 (engine foundation landed) — 3DS shell**: the 3DS save-sync ENGINE is built and
-  host-verified (compile+link via a new devkitARM Docker image `waystone-3ds`). A new `3ds/` shell
-  (devkitARM/libctru) mirrors the Switch M2 engine console-driven: libctru title enumeration +
-  FS-archive savedata extraction → `ws_checkpoint_normalize("3ds", …)` → package → vault-encrypt →
-  WebDAV **two-way sync** (push AND pull/restore) over plain HTTP: pull mirrors the Switch
-  slice — PROPFIND heads → `ws_decide_pull` (NewestWins) → GET+decrypt blob → `ws_unzip` →
-  `write_save_files` (FS-archive write-back + `ARCHIVE_ACTION_COMMIT_SAVE_DATA`). To keep it DRY, the
-  FFI/core no_std runtime + entropy were generalized (`console_runtime`/`console_entropy`, gated
-  `any(feature = "switch", feature = "3ds")`) and `json`/`jsmn`/`base64` extracted to a shared
-  `shell-common/` consumed by both console shells; the Switch build stayed green throughout.
-  Cross-compiles to `armv6k-nintendo-3ds` into a `.3dsx` (with a 3DS `getrandom` shim over
-  `PS_GenerateRandomBytes`).
-- **3DS verified HTTPS/TLS (compile+link)**: the 3DS WebDAV client now uses verified HTTPS, mirroring
-  the Switch TLS slice exactly — `curl_apply_tls` (`SSL_VERIFYPEER=1`, `SSL_VERIFYHOST=2`,
-  `CAINFO=romfs:/cacert.pem`) on every handle. The 3DS `3ds-curl` port is built against `3ds-mbedtls`,
-  so the Mozilla CA bundle (reused byte-for-byte from `switch/romfs/cacert.pem`) is read directly from
-  romfs — no system-store augmentation. Added romfs to the 3DS build (`ROMFS := romfs`, `_3DSXFLAGS
-  --romfs`, `romfsInit`/`romfsExit` in `main.cpp`; `3dsxtool` needs `--smdh` alongside `--romfs`). CA
-  bundle bytes confirmed embedded in the `.3dsx`. **Compile+link verified; not yet run on hardware
-  (clock must be correct for cert date validation).** Remaining for M4: the citro2d GUI and a first
-  on-hardware run.
-- **Shared WebDAV net layer (DRY)**: the duplicate libcurl WebDAV client (`net.h`/`net.cpp`, incl. the
-  shared `curl_apply_tls`) was extracted from both console shells into a single **`shell-common/net.{h,cpp}`**
-  consumed by both via the existing `../shell-common` Makefile glob (no Makefile change needed — `net.o`
-  basename already in the Switch `OUR_ENGINE_OBJS`). Zero logic change; all three builds green (Switch GUI +
-  `CONSOLE=1`, 3DS). The shared file keeps `#include <sys/select.h>` — required by devkitARM's `curl/multi.h`
-  (`fd_set`), harmless on devkitA64.
+- **M4 (engine + citro2d GUI landed) — 3DS shell**: engine, verified HTTPS/TLS, persistent login,
+  conflict inbox, no-internet gate, history/snapshot restore, dashboard with SMDH icons, and two-way
+  extdata are all built and compile+link-verified (see Done). Remaining, codeable without hardware:
+  - **Extended enumeration**: gamecard (`MEDIATYPE_GAME_CARD` + `FSUSER_GetCardType`), NAND system saves
+    (`ARCHIVE_SYSTEM_SAVEDATA`), and TWL/DSiWare (`ARCHIVE_NAND_TWL_FS`, guard commit + secure-value
+    with `!isTwl`) — only `MEDIATYPE_SD` is enumerated today.
+  - **Title pre-filtering** (Checkpoint `isSystemExcluded`: skip `0x0004000E` updates, `0x0004800F` DSi
+    archives, `0x00021A00` garbage) — efficiency only; open-fails-then-skip keeps us correct.
+  Remaining, needs hardware: the **first on-hardware run** of the citro2d GUI, runtime extdata
+  read/write validation, and a visual check of SMDH icon rendering (flip `subtex.top`/`bottom` in
+  `3ds/source/ui/icon_tex.cpp` if icons render upside-down). 3DS clock must be correct for cert
+  date validation.
 
 All shells share one design system (`design/tokens.json`), rendered natively per
 platform — premium and platform-appropriate, not a forced single skin.
