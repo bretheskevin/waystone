@@ -41,8 +41,9 @@ BOREALIS_PATCH	:=	borealis-patch
 BOREALIS_PATH	:=	lib/borealis
 # Compiled deko3d shaders will be written to $(ROMFS)/$(OUT_SHADERS)/ at build time.
 OUT_SHADERS	:=	shaders
-# Borealis romfs resources (fonts/i18n/img/xml) are assembled from the submodule at
-# build time. switch/romfs/{i18n,img,...} are NOT committed; submodule is the single source.
+# Borealis romfs resources (fonts/i18n/img/xml) are assembled from the vendored
+# borealis tree at build time. switch/romfs/{i18n,img,...} are NOT committed;
+# lib/borealis is the single source.
 BOREALIS_RESOURCES	:=	$(BOREALIS_PATH)/resources
 # borealis TUs we intentionally drop from this slice.
 # swkbd.cpp calls swkbdConfigSetStringLenMaxExt which was removed from current libnx.
@@ -89,7 +90,7 @@ LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 # Appends to SOURCES, INCLUDES, LIBS, CXXFLAGS (-DYG_ENABLE_EVENTS, -fdata-sections,
 # -DBRLS_RESOURCES="romfs:/"), and links -ldeko3d -lm.
 # deko3d (including uam shader compiler and libdeko3d.a) ships in the devkita64 base image.
-# Pinned submodule: switch/lib/borealis @ 20e2d33b6c4ffce139ce304c503c04f5b94da920
+# Vendored borealis: switch/lib/borealis (from upstream 20e2d33b6c4ffce139ce304c503c04f5b94da920)
 ifneq ($(CONSOLE),1)
 include $(TOPDIR)/$(BOREALIS_PATH)/library/borealis.mk
 endif
@@ -184,7 +185,7 @@ all: $(ROMFS_ASSETS) $(ROMFS_TARGETS) $(BOREALIS_PATCH) | $(BUILD)
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
 
-# Copy borealis fonts/i18n/img/xml from submodule into romfs before packaging (GUI only).
+# Copy borealis fonts/i18n/img/xml from the vendored tree into romfs before packaging (GUI only).
 # Idempotent: cp -R src/. dest/ overwrites in place on repeated builds.
 # Remove the .gitignore that cp -R brings in so it never lands in the embedded romfs.
 ifneq ($(CONSOLE),1)

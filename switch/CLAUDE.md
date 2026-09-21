@@ -13,7 +13,7 @@ The Nintendo Switch shell: a **borealis** (deko3d) GUI `.nro` that statically li
 | Switch OS / NRO / hardware internals | https://switchbrew.org/wiki |
 | devkitPro toolchain (devkitA64, portlibs, `switch_rules`) | https://devkitpro.org , https://github.com/devkitPro |
 | deko3d (GPU) | https://github.com/devkitPro/deko3d |
-| borealis (UI lib, pinned submodule `lib/borealis`) | https://github.com/natinusala/borealis — but this repo pins an OLD/minimal commit; **read the pinned submodule source**, not upstream docs (many widgets/APIs are absent). |
+| borealis (UI lib, vendored in `lib/borealis`) | https://github.com/natinusala/borealis — but this repo vendors an OLD/minimal commit; **read the vendored source**, not upstream docs (many widgets/APIs are absent). |
 
 ## HARD CONSTRAINT — NRO relocations (crashes at boot if violated)
 
@@ -57,7 +57,7 @@ after input dispatch unwinds. Two safe patterns: (1) mutate views in place (`set
   `docker run --rm -v "$PWD":/work -w /work/switch waystone-switch bash -lc "make"` (GUI) and
   `… make CONSOLE=1` (console variant). Incremental `make` (no `clean`) only recompiles changed
   files — skip `make clean` while iterating. The Makefile applies the borealis theme-tint patch
-  and assembles romfs from the submodule at build time.
+  and assembles romfs from the vendored borealis tree at build time.
 - On-hardware: launch in **full application mode** (hold **R** over a game) for save-mount + enough
   heap; Atmosphère dumps crash logs to `sdmc:/atmosphere/crash_reports/*.log` — symbolize with
   `aarch64-none-elf-addr2line -f -C -i -e switch/waystone-spike.elf <module-offset…>`.
