@@ -146,6 +146,50 @@ u32 extdata_id_for(u64 title_id) {
     return unique;
 }
 
+SaveArchiveKind main_save_kind(const TitleInfo& title) {
+    if (title.is_twl) return SaveTwl;
+    return SaveUser;
+}
+
+// System-title exclusion list transcribed data-only from Checkpoint
+// 3ds/source/titlequirks.cpp (TitleQuirks::isSystemExcluded, GPLv3,
+// BernardoGiordano/FlagBrew), fetched 2026-09-18. Factual title IDs only;
+// no code structure or comments copied. Applied BEFORE read_smdh on the SD
+// path (updates and system entries carry no save of their own; per-title
+// SMDH reads on them would be wasted) and as a first-pass filter on the
+// NAND path, which lists hundreds of system titles.
+static bool is_system_excluded(u64 title_id) {
+    switch (static_cast<u32>(title_id & 0xFFFFFFFF)) {
+        case 0x00008602:  // Instruction Manual
+        case 0x00009202:
+        case 0x00009B02:
+        case 0x0000A402:
+        case 0x0000AC02:
+        case 0x0000B402:
+        case 0x00021A00:  // Garbage
+            return true;
+    }
+    u32 high = static_cast<u32>(title_id >> 32);
+    if (high == 0x0004000E) return true;  // updates (no save of their own)
+    if (high == 0x0004800F) return true;  // DSi non-executable data archives
+    return false;
+}
+
+// TWL/DSiWare predicate transcribed data-only from Checkpoint
+// 3ds/source/loader.cpp (scanInstalledTitles), fetched 2026-09-18:
+//   const bool isTwl = ((id >> 44) & 0xF) == 8;
+// (High32 0x00048xxx: DSiWare and system TWL titles on NAND.)
+static bool is_twl_title(u64 title_id) {
+    return ((title_id >> 44) & 0xF) == 8;
+}
+
+// Forward declarations: these helpers are defined next to open_save_archive
+// below, but list_titles() calls them earlier in the file.
+static Result open_twl_save_archive(FS_Archive* archive);
+static std::string twl_save_root(u64 title_id);
+static bool twl_save_accessible(FS_Archive archive, u64 title_id);
+static void delete_dir_contents(FS_Archive archive, const std::string& dir);
+
 // Collapse per-game duplicates. The SD title list holds the base app
 // (00040000...), its update (0004000E...) and any DLC (0004008C...) as
 // separate entries, but they are ONE game sharing a unique_id. The savable
@@ -186,59 +230,235 @@ static std::vector<TitleInfo> collapse_by_unique_id(const std::vector<TitleInfo>
 }
 
 std::vector<TitleInfo> list_titles() {
-    std::vector<TitleInfo> titles;
+    std::vector<TitleInfo> sd_raw;
+    std::vector<TitleInfo> nand_raw;
 
     if (R_FAILED(amInit())) {
-        printf("amInit failed\n");
-        return titles;
+        printf("[titles] amInit failed\n");
+        return sd_raw;
     }
 
-    u32 count = 0;
-    if (R_FAILED(AM_GetTitleCount(MEDIATYPE_SD, &count)) || count == 0) {
-        amExit();
-        return titles;
+    // -- Source 1: SD titles --
+    {
+        u32 count = 0;
+        Result count_rc = AM_GetTitleCount(MEDIATYPE_SD, &count);
+        if (R_FAILED(count_rc)) {
+            printf("[titles] AM_GetTitleCount(SD) failed rc=0x%08lX\n",
+                   (unsigned long)count_rc);
+        } else if (count > 0) {
+            std::vector<u64> title_ids(count);
+            u32 read = 0;
+            Result list_rc = AM_GetTitleList(&read, MEDIATYPE_SD, count, title_ids.data());
+            if (R_SUCCEEDED(list_rc)) {
+                int icons_found = 0;
+                for (u32 i = 0; i < read; i++) {
+                    u64 tid = title_ids[i];
+                    if (is_system_excluded(tid)) {
+                        printf("[titles] sd tid=%016llX excluded (system)\n",
+                               (unsigned long long)tid);
+                        continue;
+                    }
+                    TitleInfo info;
+                    info.title_id = tid;
+                    info.unique_id = (tid >> 8) & 0xFFFFF;
+                    info.is_twl = false;
+
+                    // Default name: hex uniqueID (overwritten by read_smdh on success).
+                    char hex_uid[8];
+                    snprintf(hex_uid, sizeof(hex_uid), "%05X", info.unique_id);
+                    info.name = hex_uid;
+
+                    read_smdh(info.title_id, info.name, info.icon);
+                    if (!info.icon.empty()) icons_found++;
+
+                    sd_raw.push_back(info);
+                }
+                printf("[titles] SD: %zu titles (%d with icons)\n",
+                       sd_raw.size(), icons_found);
+            } else {
+                printf("[titles] AM_GetTitleList(SD) failed rc=0x%08lX\n",
+                       (unsigned long)list_rc);
+            }
+        }
     }
 
-    std::vector<u64> title_ids(count);
-    u32 read = 0;
-    if (R_FAILED(AM_GetTitleList(&read, MEDIATYPE_SD, count, title_ids.data()))) {
-        amExit();
-        return titles;
+    // -- Source 2: NAND TWL/DSiWare titles --
+    // NAND lists hundreds of system titles; only TWL/DSiWare saves are in
+    // scope. is_system_excluded + the TWL accessibility probe (mirrors
+    // Checkpoint's SaveDataSource::accessible) keep noise rows out. TWL
+    // titles have no SMDH, so no read_smdh — the hex-uid name stands.
+    {
+        u32 count = 0;
+        Result count_rc = AM_GetTitleCount(MEDIATYPE_NAND, &count);
+        if (R_FAILED(count_rc)) {
+            printf("[titles] AM_GetTitleCount(NAND) failed rc=0x%08lX\n",
+                   (unsigned long)count_rc);
+        } else if (count > 0) {
+            std::vector<u64> title_ids(count);
+            u32 read = 0;
+            Result list_rc = AM_GetTitleList(&read, MEDIATYPE_NAND, count, title_ids.data());
+            if (R_SUCCEEDED(list_rc)) {
+                // Mount the TWL NAND FAT ONCE for all probes (Checkpoint
+                // mounts it a single time and checks each title inside).
+                FS_Archive twl_archive;
+                if (R_FAILED(open_twl_save_archive(&twl_archive))) {
+                    printf("[titles] TWL archive unavailable — skipping NAND source\n");
+                } else {
+                    for (u32 i = 0; i < read; i++) {
+                        u64 tid = title_ids[i];
+                        if (is_system_excluded(tid)) continue;
+                        if (!is_twl_title(tid)) continue;
+                        if (!twl_save_accessible(twl_archive, tid)) continue;
+                        TitleInfo info;
+                        info.title_id = tid;
+                        info.unique_id = (tid >> 8) & 0xFFFFF;
+                        info.is_twl = true;
+                        char hex_uid[8];
+                        snprintf(hex_uid, sizeof(hex_uid), "%05X", info.unique_id);
+                        info.name = hex_uid;
+                        nand_raw.push_back(info);
+                    }
+                    FSUSER_CloseArchive(twl_archive);
+                }
+                printf("[titles] NAND TWL: %zu kept of %lu listed\n",
+                       nand_raw.size(), (unsigned long)read);
+            } else {
+                printf("[titles] AM_GetTitleList(NAND) failed rc=0x%08lX\n",
+                       (unsigned long)list_rc);
+            }
+        }
     }
-
-    int icons_found = 0;
-    for (u32 i = 0; i < read; i++) {
-        TitleInfo info;
-        info.title_id = title_ids[i];
-        info.unique_id = (info.title_id >> 8) & 0xFFFFF;
-
-        // Default name: hex uniqueID (overwritten by read_smdh on success).
-        char hex_uid[8];
-        snprintf(hex_uid, sizeof(hex_uid), "%05X", info.unique_id);
-        info.name = hex_uid;
-
-        read_smdh(info.title_id, info.name, info.icon);
-        if (!info.icon.empty()) icons_found++;
-
-        titles.push_back(info);
-    }
-
-    printf("[titles] %zu titles (%d with icons)\n", titles.size(), icons_found);
 
     amExit();
-    std::vector<TitleInfo> games = collapse_by_unique_id(titles);
-    printf("[titles] collapsed to %zu game(s)\n", games.size());
-    return games;
+
+    // Collapse SD per unique_id (base app vs update/DLC sharing one save).
+    // TWL NAND titles are singleton groups — a TWL title has no update/DLC
+    // siblings — so they are appended without collapsing.
+    std::vector<TitleInfo> out = collapse_by_unique_id(sd_raw);
+    out.insert(out.end(), nand_raw.begin(), nand_raw.end());
+    printf("[titles] total %zu title(s) (sd + nand twl)\n", out.size());
+    return out;
 }
 
-// Open the ARCHIVE_USER_SAVEDATA for a given title_id (SD card).
+// Open the ARCHIVE_USER_SAVEDATA for a given title_id on SD media.
+// PATH_BINARY layout {mediatype, lowid, highid} verified byte-identical
+// against Checkpoint 3ds/source/archive.cpp Archive::save (non-NAND branch).
 // Caller must FSUSER_CloseArchive on success.
 static Result open_save_archive(u64 title_id, FS_Archive* archive) {
-    u32 path_data[3] = {MEDIATYPE_SD,
+    u32 path_data[3] = {static_cast<u32>(MEDIATYPE_SD),
                         static_cast<u32>(title_id & 0xFFFFFFFF),
                         static_cast<u32>(title_id >> 32)};
     FS_Path archive_path = {PATH_BINARY, sizeof(path_data), path_data};
-    return FSUSER_OpenArchive(archive, ARCHIVE_USER_SAVEDATA, archive_path);
+    Result rc = FSUSER_OpenArchive(archive, ARCHIVE_USER_SAVEDATA, archive_path);
+    if (R_FAILED(rc)) {
+        printf("[saves] open_save_archive FAIL tid=%016llX rc=0x%08lX\n",
+               (unsigned long long)title_id, (unsigned long)rc);
+    }
+    return rc;
+}
+
+// Open the ARCHIVE_NAND_TWL_FS (whole TWL NAND FAT). Transcribed data-only
+// from Checkpoint 3ds/source/archive.cpp (SaveDataSource::open, Kind::TwlSave):
+// the archive opens with PATH_EMPTY; the per-title save lives at a path
+// inside it (see twl_save_root). Caller must FSUSER_CloseArchive on success.
+static Result open_twl_save_archive(FS_Archive* archive) {
+    Result rc = FSUSER_OpenArchive(archive, ARCHIVE_NAND_TWL_FS,
+                                   fsMakePath(PATH_EMPTY, ""));
+    if (R_FAILED(rc)) {
+        printf("[saves] open_twl_save_archive FAIL rc=0x%08lX\n", (unsigned long)rc);
+    }
+    return rc;
+}
+
+// Per-title save root inside ARCHIVE_NAND_TWL_FS, WITHOUT leading slash
+// (e.g. "title/00030004/000012AB/data"). Transcribed data-only from
+// Checkpoint 3ds/source/archive.cpp (Archive::twlSaveDataPath): TWLN stores
+// titles under 000300xx even though AM reports them as 00048xxx, so the
+// high id is normalized via (high & 0x00000FFF) | 0x00030000.
+static std::string twl_save_root(u64 title_id) {
+    u32 high = static_cast<u32>(title_id >> 32);
+    u32 low  = static_cast<u32>(title_id & 0xFFFFFFFF);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "title/%08lX/%08lX/data",
+             (unsigned long)((high & 0x00000FFF) | 0x00030000),
+             (unsigned long)low);
+    return std::string(buf);
+}
+
+// Accessibility probe for TWL/DSiWare titles, mirroring Checkpoint's
+// SaveDataSource::accessible (archive.cpp): a TWL title is listable only
+// if its per-title data directory inside ARCHIVE_NAND_TWL_FS exists.
+// Without this, the NAND enumeration would surface TWL titles whose saves
+// do not exist. `archive` is the already-mounted TWL NAND FAT (mounted
+// once by the caller for the whole enumeration).
+static bool twl_save_accessible(FS_Archive archive, u64 title_id) {
+    Handle dir;
+    std::string path = "/" + twl_save_root(title_id);
+    bool ok = R_SUCCEEDED(FSUSER_OpenDirectory(&dir, archive,
+                          fsMakePath(PATH_ASCII, path.c_str())));
+    if (ok) FSDIR_Close(dir);
+    printf("[titles] twl probe tid=%016llX accessible=%d\n",
+           (unsigned long long)title_id, (int)ok);
+    return ok;
+}
+
+// Convert a directory entry's UTF-16 name to a NUL-terminated ASCII C
+// string in `out` (>= 256 bytes). Non-ASCII code units are dropped —
+// sufficient for save file names.
+static void entry_name_ascii(const FS_DirectoryEntry& entry, char* out) {
+    int j = 0;
+    for (int k = 0; k < 256 && entry.name[k] != 0; k++) {
+        if (entry.name[k] < 128)
+            out[j++] = static_cast<char>(entry.name[k]);
+    }
+    out[j] = '\0';
+}
+
+// Delete the CONTENTS of `dir` (a path relative to the archive root, no
+// leading slash) but keep `dir` itself. Two passes — collect the listing,
+// close the directory, then delete — so we never delete entries out from
+// under an open FSDIR_Read cursor. Mirrors Checkpoint io::restore's TWL
+// branch ("the TWL FAT `data` directory must survive; only its contents
+// go"), which uses deleteFolderContentsRecursively instead of
+// FSUSER_DeleteDirectoryRecursively.
+static void delete_dir_contents(FS_Archive archive, const std::string& dir) {
+    Handle dh;
+    std::string open_path = "/" + dir;
+    if (R_FAILED(FSUSER_OpenDirectory(&dh, archive,
+                 fsMakePath(PATH_ASCII, open_path.c_str())))) {
+        printf("[saves] delete_dir_contents: open failed %s (non-fatal)\n",
+               open_path.c_str());
+        return;
+    }
+    std::vector<std::pair<std::string, bool>> children; // (name, is_dir)
+    FS_DirectoryEntry entry;
+    u32 n = 0;
+    while (R_SUCCEEDED(FSDIR_Read(dh, &n, 1, &entry)) && n > 0) {
+        char name[256];
+        entry_name_ascii(entry, name);
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+            continue;
+        children.push_back({name, (entry.attributes & FS_ATTRIBUTE_DIRECTORY) != 0});
+    }
+    FSDIR_Close(dh);
+    for (const auto& child : children) {
+        std::string child_path = "/" + dir + "/" + child.first;
+        Result rc;
+        if (child.second) {
+            delete_dir_contents(archive, dir + "/" + child.first);
+            rc = FSUSER_DeleteDirectory(archive,
+                     fsMakePath(PATH_ASCII, child_path.c_str()));
+        } else {
+            rc = FSUSER_DeleteFile(archive,
+                     fsMakePath(PATH_ASCII, child_path.c_str()));
+        }
+        if (R_FAILED(rc)) {
+            printf("[saves] delete_dir_contents: delete failed %s rc=0x%08lX (non-fatal)\n",
+                   child_path.c_str(), (unsigned long)rc);
+        }
+    }
+    printf("[saves] delete_dir_contents %s: %zu entr(ies) removed\n",
+           open_path.c_str(), children.size());
 }
 
 // Open the ARCHIVE_EXTDATA for a given extdata_id (SD card).
@@ -283,12 +503,7 @@ static void walk_archive(FS_Archive archive, const char* rel,
 
         // Convert UTF-16 name to ASCII (sufficient for save file names)
         char name[256];
-        int j = 0;
-        for (int k = 0; k < 256 && entry.name[k] != 0; k++) {
-            if (entry.name[k] < 128)
-                name[j++] = static_cast<char>(entry.name[k]);
-        }
-        name[j] = '\0';
+        entry_name_ascii(entry, name);
 
         if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
             continue;
@@ -335,18 +550,41 @@ static void walk_archive(FS_Archive archive, const char* rel,
 }
 
 std::string extract_save_json(const TitleInfo& title) {
-    // -- Phase 1: USER_SAVEDATA --
+    // -- Phase 1: user/TWL savedata (routed by title origin) --
     std::vector<std::pair<std::string, std::vector<uint8_t>>> files;
     {
         FS_Archive archive;
-        if (R_SUCCEEDED(open_save_archive(title.title_id, &archive))) {
-            walk_archive(archive, "", &files);
-            FSUSER_CloseArchive(archive);
-            printf("[saves] extract USER_SAVEDATA tid=%016llX files=%zu\n",
-                   (unsigned long long)title.title_id, files.size());
+        bool opened = false;
+        std::string walk_root; // "" for user saves; per-title path for TWL
+        const char* kind_name;
+        if (title.is_twl) {
+            kind_name = "TWL";
+            opened = R_SUCCEEDED(open_twl_save_archive(&archive));
+            walk_root = twl_save_root(title.title_id);
         } else {
-            printf("[saves] extract USER_SAVEDATA open failed tid=%016llX (skipping)\n",
-                   (unsigned long long)title.title_id);
+            kind_name = "USER_SAVEDATA";
+            opened = R_SUCCEEDED(open_save_archive(title.title_id, &archive));
+        }
+        if (opened) {
+            walk_archive(archive, walk_root.c_str(), &files);
+            FSUSER_CloseArchive(archive);
+            if (title.is_twl) {
+                // Strip the per-title root prefix: write_save_files
+                // re-prepends twl_save_root() on restore, so stored paths
+                // must be relative to the data dir — otherwise the
+                // extract->restore round-trip doubles the prefix and files
+                // land in a nested, never-read directory.
+                const std::string prefix = walk_root + "/";
+                for (auto& f : files) {
+                    if (f.first.compare(0, prefix.size(), prefix) == 0)
+                        f.first.erase(0, prefix.size());
+                }
+            }
+            printf("[saves] extract %s tid=%016llX files=%zu\n",
+                   kind_name, (unsigned long long)title.title_id, files.size());
+        } else {
+            printf("[saves] extract %s open failed tid=%016llX (skipping)\n",
+                   kind_name, (unsigned long long)title.title_id);
         }
     }
     // -- Phase 2: EXTDATA --
@@ -439,8 +677,11 @@ uint8_t* read_keys_file(const char* path, long* len_out) {
     return buf;
 }
 
-int write_save_files(u64 title_id, const char* files_json, SaveArchiveKind kind) {
+int write_save_files(const TitleInfo& title, const char* files_json, SaveArchiveKind kind) {
+    const u64 title_id = title.title_id;
     FS_Archive archive;
+    // Path prefix inside the archive for TWL saves ("" for all other kinds).
+    std::string root_prefix;
     if (kind == SaveExtdata) {
         u32 ext_id = extdata_id_for(title_id);
         if (R_FAILED(open_extdata_archive(title_id, ext_id, &archive))) {
@@ -448,6 +689,13 @@ int write_save_files(u64 title_id, const char* files_json, SaveArchiveKind kind)
                    (unsigned long long)title_id);
             return -1;
         }
+    } else if (kind == SaveTwl) {
+        if (R_FAILED(open_twl_save_archive(&archive))) {
+            printf("[saves] write_save_files: open_twl_save_archive failed tid=%016llX\n",
+                   (unsigned long long)title_id);
+            return -1;
+        }
+        root_prefix = twl_save_root(title_id);
     } else {
         if (R_FAILED(open_save_archive(title_id, &archive))) {
             printf("[saves] write_save_files: open_save_archive failed tid=%016llX\n",
@@ -456,19 +704,24 @@ int write_save_files(u64 title_id, const char* files_json, SaveArchiveKind kind)
         }
     }
     printf("[saves] write_save_files: opened archive kind=%s tid=%016llX\n",
-           (kind == SaveExtdata) ? "extdata" : "user", (unsigned long long)title_id);
+           save_kind_name(kind), (unsigned long long)title_id);
 
     if (kind == SaveUser) {
         // Wipe archive root before writing so stale files from a previous
         // backup do not survive. Non-fatal: an empty/fresh archive may return
         // an error. Mirrors Checkpoint io::restore (FSUSER_DeleteDirectoryRecursively
-        // for non-TWL saves).
+        // for non-TWL, non-extdata saves).
         Result del_res = FSUSER_DeleteDirectoryRecursively(archive,
                              fsMakePath(PATH_ASCII, "/"));
         if (R_FAILED(del_res)) {
             printf("[saves] write_save_files: DeleteDirRecursively user 0x%08lX (non-fatal)\n",
                    (unsigned long)del_res);
         }
+    } else if (kind == SaveTwl) {
+        // TWL: wipe ONLY the contents of the per-title data directory; the
+        // directory itself must survive (Checkpoint io::restore isTwl branch
+        // uses deleteFolderContentsRecursively, NOT DeleteDirectoryRecursively).
+        delete_dir_contents(archive, root_prefix);
     } else {
         // DIVERGENCE (extdata root wipe): Checkpoint io::restore calls
         // deleteFolderRecursively(archive, "/") for extdata — a custom
@@ -502,6 +755,12 @@ int write_save_files(u64 title_id, const char* files_json, SaveArchiveKind kind)
             printf("[saves] write_save_files: missing path in file entry\n");
             ret = -1;
             continue;
+        }
+
+        // TWL saves live under a per-title directory inside ARCHIVE_NAND_TWL_FS;
+        // all other kinds write at the archive root.
+        if (!root_prefix.empty()) {
+            path = root_prefix + "/" + path;
         }
 
         // Decode file content (empty data_b64 → 0-byte file, which is valid).
@@ -576,28 +835,33 @@ int write_save_files(u64 title_id, const char* files_json, SaveArchiveKind kind)
 
     if (kind == SaveUser) {
         // Flush all pending writes to the underlying save filesystem.
+        // Mirrors Checkpoint io::restore: commit only when
+        // 'kind == Save && !isTwl' (i.e. never for TWL or extdata).
         if (R_FAILED(FSUSER_ControlArchive(archive, ARCHIVE_ACTION_COMMIT_SAVE_DATA,
                                            NULL, 0, NULL, 0))) {
-            printf("[saves] write_save_files: COMMIT_SAVE_DATA failed (user)\n");
+            printf("[saves] write_save_files: COMMIT_SAVE_DATA failed (kind=%s)\n",
+                   save_kind_name(kind));
             FSUSER_CloseArchive(archive);
             return -1;
         }
-        printf("[saves] write_save_files: committed user save tid=%016llX\n",
-               (unsigned long long)title_id);
+        printf("[saves] write_save_files: committed save tid=%016llX kind=%s\n",
+               (unsigned long long)title_id, save_kind_name(kind));
     } else {
-        // DIVERGENCE (extdata commit): Checkpoint io::restore guards the commit
-        // with 'target.kind() == BackupKind::Save && !isTwl'. Extdata skips
-        // ARCHIVE_ACTION_COMMIT_SAVE_DATA entirely — files written to
-        // ARCHIVE_EXTDATA are immediately visible without a commit step.
-        printf("[saves] write_save_files: extdata commit skipped (mirrors Checkpoint)\n");
+        // SaveTwl: a TWL FAT write needs no commit (Checkpoint io::restore).
+        // SaveExtdata: files written to ARCHIVE_EXTDATA are immediately
+        // visible without a commit step (existing divergence comment).
+        printf("[saves] write_save_files: commit skipped kind=%s (mirrors Checkpoint)\n",
+               save_kind_name(kind));
     }
     FSUSER_CloseArchive(archive);
 
     if (kind == SaveUser) {
         // Delete the console secure value so the game regenerates a fresh one
         // instead of rejecting the restored save. Mirrors Checkpoint's
-        // !isTwl block in io::restore(). Use raw title_id & 0xFFFFFF00ULL
-        // (NOT unique_id/0xFFFFF) to address the correct slot. Non-fatal.
+        // 'kind == Save && !isTwl' block in io::restore — Checkpoint uses
+        // SECUREVALUE_SLOT_SD with (uniqueId << 8) == (low & 0xFFFFFF00).
+        // Use the RAW low id (title_id & 0xFFFFFF00ULL), NOT the 20-bit
+        // unique_id. Non-fatal.
         u8 sv_out = 0;
         u64 secure_value = ((u64)SECUREVALUE_SLOT_SD << 32) | (u64)(title_id & 0xFFFFFF00ULL);
         Result sv = FSUSER_ControlSecureSave(SECURESAVE_ACTION_DELETE,
@@ -608,10 +872,10 @@ int write_save_files(u64 title_id, const char* files_json, SaveArchiveKind kind)
                    (unsigned long)sv);
         }
     } else {
-        // DIVERGENCE (extdata secure value): Checkpoint io::restore only calls
-        // ControlSecureSave for 'BackupKind::Save && !isTwl'. Extdata has no
-        // console secure value — skip entirely.
-        printf("[saves] write_save_files: secure-value delete SKIPPED for extdata\n");
+        // SaveTwl: TWL saves have no console secure value (Checkpoint
+        // !isTwl guard). SaveExtdata: no secure value either.
+        printf("[saves] write_save_files: secure-value delete SKIPPED kind=%s\n",
+               save_kind_name(kind));
     }
 
     return 0;

@@ -128,7 +128,7 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_json,
 
 int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
                         const std::string& base_path, const std::string& group_key,
-                        const std::string& raw_json, u64 title_id,
+                        const std::string& raw_json, const TitleInfo& title,
                         const WebDavCfg& dav) {
     char* blob_name = ws_vault_blob_name(vault, pull_hash.c_str());
     if (!blob_name) {
@@ -172,8 +172,10 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
         }
     }
 
-    // Parse slot from group_key ("3ds/<game>/<slot>") to route extdata vs user.
-    SaveArchiveKind kind = SaveUser;
+    // Parse slot from group_key ("3ds/<game>/<slot>"): "extdata" routes to
+    // SaveExtdata; the "main" slot routes by title origin (TWL / SD) via
+    // main_save_kind.
+    SaveArchiveKind kind = main_save_kind(title);
     {
         size_t last_slash = group_key.rfind('/');
         if (last_slash != std::string::npos) {
@@ -182,9 +184,9 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
         }
     }
     printf("[saves] restore routing group_key=%s -> kind=%s\n",
-           group_key.c_str(), (kind == SaveExtdata) ? "extdata" : "user");
+           group_key.c_str(), save_kind_name(kind));
 
-    int wrc = write_save_files(title_id, files_json, kind);
+    int wrc = write_save_files(title, files_json, kind);
     ws_string_free(files_json);
     return wrc;
 }
@@ -398,7 +400,7 @@ int pull_title(const WsVault* vault,
         }
         printf("pulling hash=%.12s...\n", d.pull_hash.c_str());
         int rc = restore_remote_save(vault, d.pull_hash, d.base_path, d.group_key,
-                                     d.raw_json, title.title_id, dav);
+                                     d.raw_json, title, dav);
         if (rc == 0) {
             printf("  Pulled OK.\n"); pulled++;
         } else {

@@ -47,10 +47,11 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_json,
 
 // Restore a remote save blob to the local filesystem.
 // Safety snapshot taken before write. No AccountUid (3DS).
+// The title's is_twl flag routes the write to the correct archive.
 // Returns 0 on success, -1 on error.
 int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
                         const std::string& base_path, const std::string& group_key,
-                        const std::string& raw_json, u64 title_id,
+                        const std::string& raw_json, const TitleInfo& title,
                         const WebDavCfg& dav);
 
 // Scan all saves for a title: extract -> normalize("3ds") -> split -> per-save scan_save_decision.

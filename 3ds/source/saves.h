@@ -9,11 +9,12 @@
 struct TitleInfo {
     u64 title_id;
     u32 unique_id; // (title_id >> 8) & 0xFFFFF
+    bool is_twl;   // DSiWare on NAND (TWL). Predicate per Checkpoint: (title_id >> 44) & 0xF == 8
     std::string name;
     std::vector<uint8_t> icon; // 4608 B RGB565 tiled 48x48 SMDH large icon, or empty
 };
 
-// Enumerate installed SD titles via AM service.
+// Enumerate installed titles via AM service (SD + NAND TWL/DSiWare).
 std::vector<TitleInfo> list_titles();
 
 // Extract savedata for a title as a RawTreeDto JSON string.
@@ -35,16 +36,33 @@ std::string get_device_id();
 uint8_t* read_keys_file(const char* path, long* len_out);
 
 enum SaveArchiveKind {
-    SaveUser,
-    SaveExtdata
+    SaveUser,    // ARCHIVE_USER_SAVEDATA (SD media)
+    SaveExtdata, // ARCHIVE_EXTDATA (always on SD)
+    SaveTwl      // ARCHIVE_NAND_TWL_FS, per-title /title/.../data root (DSiWare)
 };
 
+// Human-readable kind name for log lines ("user" / "extdata" / "twl").
+inline const char* save_kind_name(SaveArchiveKind kind) {
+    switch (kind) {
+        case SaveUser:    return "user";
+        case SaveExtdata: return "extdata";
+        case SaveTwl:     return "twl";
+    }
+    return "unknown";
+}
+
+// The archive kind for a title's "main" save slot, derived from its origin.
+// TWL -> SaveTwl; SD -> SaveUser.
+SaveArchiveKind main_save_kind(const TitleInfo& title);
+
 // Restore a flat FileEntryDto JSON array ([{"path":"...","data_b64":"..."},...])
-// into the title's save archive, then commit.
-// kind: SaveUser -> ARCHIVE_USER_SAVEDATA; SaveExtdata -> ARCHIVE_EXTDATA.
-// Returns 0 on success, -1 on mount/commit failure.
-int write_save_files(u64 title_id, const char* files_json,
-                     SaveArchiveKind kind = SaveUser);
+// into the title's save archive, then commit (commit/secure-value skipped for
+// SaveTwl and SaveExtdata, mirroring Checkpoint's `kind == Save && !isTwl` guard).
+// kind is mandatory: for the "main" slot callers must route via main_save_kind()
+// so TWL titles never silently take the SaveUser path.
+// Returns 0 on success, -1 on mount/write/commit failure.
+int write_save_files(const TitleInfo& title, const char* files_json,
+                     SaveArchiveKind kind);
 
 // Return the extdata archive ID for a given title_id.
 // Uses a quirks table (factual data from Checkpoint reference) for known

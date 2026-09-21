@@ -164,18 +164,17 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
     // If raw_json is empty, there is no current save to guard -- proceed.
 
     // 2. Restore each slot to its correct archive.
-    // "main"    -> ARCHIVE_USER_SAVEDATA (SaveUser)
+    // "main"    -> routed by title origin via main_save_kind (SaveUser/SaveTwl)
     // "extdata" -> ARCHIVE_EXTDATA       (SaveExtdata)
     // A slot absent from the snapshot ("[]") is skipped; only a genuine I/O
     // failure ("") aborts the restore.
-    static const struct { const char* slot; SaveArchiveKind kind; } SLOTS[] = {
-        { "main",    SaveUser    },
-        { "extdata", SaveExtdata },
-    };
+    static const char* SLOTS[] = { "main", "extdata" };
     bool any_written = false;
     for (size_t si = 0; si < sizeof(SLOTS)/sizeof(SLOTS[0]); si++) {
-        const char* slot = SLOTS[si].slot;
-        SaveArchiveKind kind = SLOTS[si].kind;
+        const char* slot = SLOTS[si];
+        SaveArchiveKind kind = (strcmp(slot, "extdata") == 0)
+                                   ? SaveExtdata
+                                   : main_save_kind(title_);
 
         printf("[snapshot] reading snapshot %s slot=%s\n",
                entry.path.c_str(), slot);
@@ -196,8 +195,8 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
         }
 
         printf("[snapshot] restoring slot=%s kind=%s files present\n",
-               slot, (kind == SaveExtdata) ? "extdata" : "user");
-        int wrc = write_save_files(title_.title_id, flat.c_str(), kind);
+               slot, save_kind_name(kind));
+        int wrc = write_save_files(title_, flat.c_str(), kind);
         if (wrc != 0) {
             printf("[snapshot] write_save_files FAILED slot=%s (rc=%d)\n", slot, wrc);
             LightLock_Lock(&mu_);

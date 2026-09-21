@@ -13,6 +13,7 @@ struct ConflictItem {
     std::string title_name;
     u64 title_id;
     u32 unique_id;              // needed by push_title -> extract_save_json
+    bool is_twl;                // TitleInfo.is_twl — TWL write guards
     std::string group_key;      // "system/game/slot"
     std::string local_hash;
     std::string local_mtime;

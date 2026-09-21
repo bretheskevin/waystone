@@ -180,7 +180,7 @@ void HistoryWorker::restore_worker(const HistoryEntry& entry, size_t index) {
     WebDavCfg dav = session_->dav.as_cfg();
     int rc = restore_remote_save(session_->vault, entry.hash,
                                  base_path_, group_key_, raw_json_,
-                                 title_.title_id, dav);
+                                 title_, dav);
     if (rc != 0) {
         printf("[history] restore FAILED (rc=%d)\n", rc);
         LightLock_Lock(&mu_);

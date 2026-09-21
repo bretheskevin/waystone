@@ -121,6 +121,7 @@ void ConflictWorker::scan_worker() {
             ci.title_name = titles_[i].name;
             ci.title_id = titles_[i].title_id;
             ci.unique_id = titles_[i].unique_id;
+            ci.is_twl = titles_[i].is_twl;
             ci.group_key = d.group_key;
             ci.local_hash = d.local_hash;
             ci.local_mtime = d.raw_json.empty() ? "" : current_utc_time();
@@ -200,15 +201,16 @@ void ConflictWorker::resolve_entry(void* arg) {
 
 void ConflictWorker::resolve_worker(bool keep_local, ConflictItem item, size_t index) {
     int rc;
+    TitleInfo ti;
+    ti.title_id = item.title_id;
+    ti.unique_id = item.unique_id;
+    ti.is_twl = item.is_twl;
+    ti.name = item.title_name;
     if (keep_local) {
-        TitleInfo ti;
-        ti.title_id = item.title_id;
-        ti.unique_id = item.unique_id;
-        ti.name = item.title_name;
         rc = push_title(vault_, ti, device_id_.c_str(), dav_);
     } else {
         rc = restore_remote_save(vault_, item.remote_hash, item.base_path,
-                                 item.group_key, item.raw_json, item.title_id, dav_);
+                                 item.group_key, item.raw_json, ti, dav_);
     }
 
     {
