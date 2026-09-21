@@ -160,6 +160,10 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
             return;
         }
         printf("[snapshot] guard snapshot saved to %s\n", backup_dir.c_str());
+        std::string backup_root = std::string("sdmc:/waystone/backups/") + key_dir_;
+        if (!snapshot_prune(backup_root.c_str(), SNAPSHOT_KEEP)) {
+            printf("[snapshot] prune failed for %s (non-fatal)\n", key_dir_.c_str());
+        }
     }
     // If raw_json is empty, there is no current save to guard -- proceed.
 

@@ -7,7 +7,10 @@
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
+#include <dirent.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <vector>
 
 std::string snapshot_sanitize_key(const std::string& key) {
@@ -123,4 +126,121 @@ bool write_snapshot(const char* backup_dir, const char* files_json) {
     }
 
     return true;
+}
+
+// Recursively delete `path` (a file or directory) over the host FS.
+// Directories: two-pass — collect the listing under the open cursor, close,
+// then delete — so we never mutate under an opendir cursor.
+// Per-delete failures are logged and reported via the return value (false),
+// but deletion continues.
+static bool remove_path_recursive(const std::string& path) {
+    struct stat st;
+    if (stat(path.c_str(), &st) != 0) {
+        printf("[snapshot] prune: stat failed %s: %s (non-fatal)\n",
+               path.c_str(), strerror(errno));
+        return false;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        if (unlink(path.c_str()) != 0) {
+            printf("[snapshot] prune: unlink failed %s: %s (non-fatal)\n",
+                   path.c_str(), strerror(errno));
+            return false;
+        }
+        return true;
+    }
+
+    DIR* d = opendir(path.c_str());
+    if (!d) {
+        printf("[snapshot] prune: opendir failed %s: %s (non-fatal)\n",
+               path.c_str(), strerror(errno));
+        return false;
+    }
+    std::vector<std::string> children;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != 0) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+        children.push_back(ent->d_name);
+    }
+    closedir(d);
+
+    bool ok = true;
+    for (size_t i = 0; i < children.size(); i++) {
+        if (!remove_path_recursive(path + "/" + children[i])) ok = false;
+    }
+    if (rmdir(path.c_str()) != 0) {
+        printf("[snapshot] prune: rmdir failed %s: %s (non-fatal)\n",
+               path.c_str(), strerror(errno));
+        return false;
+    }
+    return ok;
+}
+
+// Strict "YYYYMMDDTHHMMSSZ" check: exactly 16 chars — 8 digits, 'T',
+// 6 digits, 'Z' (history_timestamp() format).
+static bool is_ts_dir_name(const char* name) {
+    if (strlen(name) != 16) return false;
+    for (int i = 0; i < 8; i++)
+        if (name[i] < '0' || name[i] > '9') return false;
+    if (name[8] != 'T') return false;
+    for (int i = 9; i < 15; i++)
+        if (name[i] < '0' || name[i] > '9') return false;
+    return name[15] == 'Z';
+}
+
+bool snapshot_prune(const char* backup_root, int keep) {
+    if (keep < 1) keep = 1;
+
+    std::string root(backup_root);
+    while (!root.empty() && root.back() == '/') root.pop_back();
+
+    DIR* d = opendir(root.c_str());
+    if (!d) {
+        printf("[snapshot] prune: cannot open %s, nothing to prune\n",
+               root.c_str());
+        return true; // nothing to prune is not an error
+    }
+
+    // Direct children of the game root are the ts dirs
+    // (same layout assumption as list_snapshots). Only strict
+    // "YYYYMMDDTHHMMSSZ" names participate: a partial write or a
+    // foreign file/dir must be neither counted toward keep nor deleted.
+    std::vector<std::string> dirs;
+    size_t skipped = 0;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != 0) {
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
+            continue;
+        std::string child = root + "/" + ent->d_name;
+        struct stat st;
+        if (stat(child.c_str(), &st) != 0) continue;
+        if (!S_ISDIR(st.st_mode) || !is_ts_dir_name(ent->d_name)) {
+            skipped++;
+            continue;
+        }
+        dirs.push_back(ent->d_name);
+    }
+    closedir(d);
+
+    if (skipped > 0) {
+        printf("[snapshot] prune skipped %zu non-snapshot entr(ies) under %s\n",
+               skipped, root.c_str());
+    }
+
+    // Lexicographic order == chronological (YYYYMMDDTHHMMSSZ).
+    std::sort(dirs.begin(), dirs.end());
+
+    const int total = (int)dirs.size();
+    bool ok = true;
+    int removed = 0;
+    for (size_t i = 0; i + (size_t)keep < dirs.size(); i++) {
+        if (remove_path_recursive(root + "/" + dirs[i])) removed++;
+        else ok = false;
+    }
+
+    if (removed > 0) {
+        printf("[snapshot] pruned %s: kept %d of %d\n",
+               root.c_str(), total - removed, total);
+    }
+    return ok;
 }

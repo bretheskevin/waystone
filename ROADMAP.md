@@ -242,7 +242,10 @@ and `CONSOLE=1` modes.
   **no vault, no WebDAV, no passphrase** — fully **offline**, usable with the server down or before a vault
   exists. A separate **`waystone snapshots list|restore`** CLI + a TUI **`Screen::Snapshots`** (`b` on the
   dashboard, deliberately **not** creds-gated, unlike history's `h`) both go through the safety guard
-  (current save snapshotted before overwrite). Browse+restore only (delete/prune deferred). DRY:
+  (current save snapshotted before overwrite). Browse+restore only. **Snapshot prune landed (both
+  consoles, shared `shell-common/snapshot.cpp`): after each successful snapshot write, only the 10
+  newest per game are kept** — non-fatal, strict `YYYYMMDDTHHMMSSZ` name filter so foreign/partial
+  entries are never deleted. DRY:
   `sanitize_group_key` + `copy_tree` extracted from `snapshot_save_dir` and single-sourced across
   writer/reader; hermetic testable cores take an explicit `backups_root`. Host-verified: `cargo test
   --workspace` green (19 new tests: 9 helpers + 4 CLI + 6 TUI), clippy/fmt clean, reviewed CLEAN (0 findings).
@@ -270,16 +273,17 @@ and `CONSOLE=1` modes.
   (storage) & OkHttp (WebDAV) trait impls, and a first on-device run.
 - **M4 (engine + citro2d GUI landed) — 3DS shell**: engine, verified HTTPS/TLS, persistent login,
   conflict inbox, no-internet gate, history/snapshot restore, dashboard with SMDH icons, and two-way
-  extdata are all built and compile+link-verified (see Done). Remaining, codeable without hardware:
-  - **Extended enumeration**: gamecard (`MEDIATYPE_GAME_CARD` + `FSUSER_GetCardType`), NAND system saves
-    (`ARCHIVE_SYSTEM_SAVEDATA`), and TWL/DSiWare (`ARCHIVE_NAND_TWL_FS`, guard commit + secure-value
-    with `!isTwl`) — only `MEDIATYPE_SD` is enumerated today.
-  - **Title pre-filtering** (Checkpoint `isSystemExcluded`: skip `0x0004000E` updates, `0x0004800F` DSi
-    archives, `0x00021A00` garbage) — efficiency only; open-fails-then-skip keeps us correct.
-  Remaining, needs hardware: the **first on-hardware run** of the citro2d GUI, runtime extdata
-  read/write validation, and a visual check of SMDH icon rendering (flip `subtex.top`/`bottom` in
-  `3ds/source/ui/icon_tex.cpp` if icons render upside-down). 3DS clock must be correct for cert
-  date validation.
+  extdata are all built and compile+link-verified (see Done). **TWL/DSiWare enumeration + title
+  pre-filtering have landed as well** (TWL-only scope by decision — gamecard and NAND system saves
+  descoped; Checkpoint `isSystemExcluded` filter + TWL accessibility probe, `SaveTwl` routing with
+  Checkpoint-exact write guards, `waystone.h` unchanged). Remaining, codeable without hardware:
+  - **Extended enumeration** (descoped 2026-09-21, reference layouts already transcribed from
+    Checkpoint): gamecard (`MEDIATYPE_GAME_CARD` + `FSUSER_GetCardType`) and NAND system saves
+    (`ARCHIVE_SYSTEM_SAVEDATA`).
+  Remaining, needs hardware: the **first on-hardware run** of the citro2d GUI, runtime extdata and
+  TWL/DSiWare extract/restore validation, and a visual check of SMDH icon rendering (flip
+  `subtex.top`/`bottom` in `3ds/source/ui/icon_tex.cpp` if icons render upside-down). 3DS clock
+  must be correct for cert date validation.
 
 All shells share one design system (`design/tokens.json`), rendered natively per
 platform — premium and platform-appropriate, not a forced single skin.

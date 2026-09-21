@@ -90,6 +90,10 @@ void SnapshotsController::restore_worker(SnapshotEntry entry, size_t index) {
             return;
         }
         printf("[snapshot] guard snapshot saved to %s\n", backup_dir.c_str());
+        std::string backup_root = std::string("sdmc:/waystone/backups/") + key_dir_;
+        if (!snapshot_prune(backup_root.c_str(), SNAPSHOT_KEEP)) {
+            printf("[snapshot] prune failed for %s (non-fatal)\n", key_dir_.c_str());
+        }
     }
 
     // 2. Read the selected snapshot into a flat files_json

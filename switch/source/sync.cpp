@@ -147,6 +147,10 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
             ws_string_free(files_json);
             return -1;
         }
+        std::string backup_root = std::string("sdmc:/waystone/backups/") + sanitized;
+        if (!snapshot_prune(backup_root.c_str(), SNAPSHOT_KEEP)) {
+            printf("  [snapshot] WARN: prune failed for %s (non-fatal)\n", group_key.c_str());
+        }
     }
 
     int wrc = write_save_files(title_id, uid, files_json);
