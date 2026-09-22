@@ -1,6 +1,6 @@
 # Waystone — Status & Roadmap
 
-_Last updated: 2026-09-18_
+_Last updated: 2026-09-22_
 
 Cross-platform game-save sync (backup **and** cross-device sync) spanning emulator
 saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
@@ -162,6 +162,26 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   on-hardware.**
 - **Deploy**: the `dufs` WebDAV service joins `dokploy-network` so Traefik routes it over HTTPS.
 
+### Milestone 3 — Android shell (2026-09-21)
+- **`android/`** Gradle multi-module shell — **`:app`** (Jetpack Compose, `dev.waystone.app`),
+  **`:data`** (`dev.waystone.data`), **`:engine`** (`dev.waystone.engine`) — with **`:engine`
+  consuming the committed UniFFI Kotlin bindings from `mobile/bindings/` via a source-set**
+  (never copied). **`:engine` builds the Rust `waystone-mobile` cdylib via `cargo ndk`**
+  (`arm64-v8a` + `x86_64`).
+- **Compose app at desktop parity**: custom theme ported from `design/tokens.json` (not default
+  Material) + nav + screens — **Setup** wizard (overwrite guard + recovery-key sheet),
+  **Unlock** (passphrase / recovery key / MDK **auto-unlock**), **Dashboard** (SAF tree picker +
+  per-source status badges), **Conflicts** inbox, **History** restore, **Snapshots** restore
+  (offline), **Settings**.
+- **`:data`** implements what the UniFFI layer deliberately leaves to Kotlin: **OkHttp WebDAV**
+  (foreign `WebDav` trait), **SAF tree⇄RawTree** (DocumentFile), **SnapshotStore** (safety
+  snapshots + prune), **DataStore settings**, an **AndroidKeyStore-backed MDK session store**
+  (auto-unlock), and **SyncRepository** (status fold, conflict detection via
+  `decidePull`/Prompt, guarded restore with **snapshot-first abort**).
+- **Pure-JVM unit tests** (incl. a golden-vector `CanonicalUnzip` test and suites loading the
+  real host dylib via JNA) — **no Robolectric**.
+- **Host-verified via unit tests + `cargo test --workspace`; not yet run on device/emulator.**
+
 ### Milestone 4 (foundation) — 3DS engine, TLS, shared shell-common
 - **3DS save-sync engine (host-verified, compile+link)**: a `3ds/` shell (devkitARM/libctru, Docker image
   `waystone-3ds`) mirrors the Switch M2 engine console-driven: libctru title enumeration + FS-archive
@@ -263,14 +283,15 @@ and `CONSOLE=1` modes.
   drove the wizard redesign + boot/UAF/KDF fixes (see Done). Remaining: a full on-device pass over the
   redesigned shell — wizard setup/unlock, auto-unlock, dashboard sync, conflict inbox, history/snapshot
   restore — on real Switch hardware.
-- **M3 (adapter parity landed) — Android shell**: the **UniFFI binding foundation** is built and
-  host-verified. A shared **`waystone-sync`** crate owns sync orchestration; **desktop** delegates to
+- **M3 (shell landed) — Android shell**: the **UniFFI binding foundation** is built and
+  host-verified — a shared **`waystone-sync`** crate owns sync orchestration; **desktop** delegates to
   it; and **`waystone-mobile`** (uniffi 0.32) exposes a complete vertical slice to Kotlin — `Vault`,
   records, `SyncDecision`, a foreign `WebDav` trait (for OkHttp), `push_one`/`pull_one` (with
   `ConflictPolicy`), and **full adapter parity**: `jksv`/`mgba`/`twilight`/`checkpoint` normalize +
-  to_native, with lossless `NormalizedSave` fidelity (`serial`/`rom_crc`/`confidence`). Committed
-  Kotlin binding kept honest by an up-to-date test. Remaining: the **Kotlin/Compose UI** + Kotlin SAF
-  (storage) & OkHttp (WebDAV) trait impls, and a first on-device run.
+  to_native, with lossless `NormalizedSave` fidelity (`serial`/`rom_crc`/`confidence`) — and the
+  **Kotlin/Compose shell** on top of it: OkHttp WebDAV, SAF, DataStore settings, AndroidKeyStore
+  session, and every screen at desktop parity (see Done). Committed Kotlin binding kept honest by an
+  up-to-date test. Remaining: the **first on-device/emulator run**.
 - **M4 (engine + citro2d GUI landed) — 3DS shell**: engine, verified HTTPS/TLS, persistent login,
   conflict inbox, no-internet gate, history/snapshot restore, dashboard with SMDH icons, and two-way
   extdata are all built and compile+link-verified (see Done). **TWL/DSiWare enumeration + title
