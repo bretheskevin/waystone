@@ -18,7 +18,7 @@ protected:
     size_t      item_count()            { return items_.size(); }
     float       row_height() const      { return 28.0f; }
     void        draw_row(C2D_TextBuf buf, size_t i,
-                         float x, float y, float w, bool focused);
+                         float x, float y, float w, float h, bool focused);
     void        draw_selected_detail(C2D_TextBuf buf, float area_y, float area_h);
 
     // RestoreBrowseScreen accessors

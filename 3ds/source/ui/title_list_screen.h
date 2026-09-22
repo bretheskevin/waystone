@@ -16,13 +16,13 @@ public:
 protected:
     // ListScreen hooks
     const char* screen_title()          { return "Your Saves"; }
-    std::string subtitle();
     float       status_area_height() const;
     void        draw_top_status(C2D_TextBuf buf, float status_y);
     size_t      item_count()            { return titles_.size(); }
     float       row_height() const      { return 46.0f; }
+    bool        fill_height() const     { return true; }
     void        draw_row(C2D_TextBuf buf, size_t i,
-                         float x, float y, float w, bool focused);
+                         float x, float y, float w, float h, bool focused);
     std::vector<Action> actions();
     void        on_action(int id);
     bool        has_back() const        { return false; }

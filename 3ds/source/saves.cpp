@@ -109,6 +109,40 @@ static void read_smdh(u64 tid, std::string& name, std::vector<uint8_t>& icon) {
            (unsigned long long)tid, name.c_str(), icon.size());
 }
 
+// Best-effort display name for titles whose SMDH cannot be read (corrupt or
+// missing icon metadata -- these also show a broken icon/banner on the 3DS HOME
+// menu). Factual title-ID -> retail-name data only (3dbrew title list; sibling
+// IDs corroborated by the extdata_id_for quirks table below). Keyed on the low
+// 32 bits. Returns 0 when the ID is not recognised.
+static const char* known_title_name(u64 title_id) {
+    static const struct { u32 low; const char* name; } NAMES[] = {
+        { 0x00055D00, "Pokemon X" },
+        { 0x00055E00, "Pokemon Y" },
+        { 0x0011C400, "Pokemon Omega Ruby" },
+        { 0x0011C500, "Pokemon Alpha Sapphire" },
+        { 0x00164800, "Pokemon Sun" },
+        { 0x00175E00, "Pokemon Moon" },
+        { 0x001B5000, "Pokemon Ultra Sun" },
+        { 0x001B5100, "Pokemon Ultra Moon" },
+    };
+    u32 low = static_cast<u32>(title_id & 0xFFFFFFFF);
+    for (size_t i = 0; i < sizeof(NAMES) / sizeof(NAMES[0]); i++)
+        if (NAMES[i].low == low) return NAMES[i].name;
+    return 0;
+}
+
+// Default display name before SMDH is read: a recognised retail name if we know
+// the ID, otherwise the 5-hex-digit unique ID. read_smdh overwrites this with
+// the real SMDH short-description on success.
+static std::string default_title_name(u64 title_id) {
+    const char* known = known_title_name(title_id);
+    if (known) return std::string(known);
+    char hex_uid[8];
+    snprintf(hex_uid, sizeof(hex_uid), "%05X",
+             (unsigned)((title_id >> 8) & 0xFFFFF));
+    return std::string(hex_uid);
+}
+
 // Return the extdata archive ID for a given title_id.
 // Quirks table transcribed verbatim from Checkpoint source/titlequirks.cpp
 // (TitleQuirks::extdataIdFor, GPLv3, BernardoGiordano/FlagBrew).
@@ -263,10 +297,9 @@ std::vector<TitleInfo> list_titles() {
                     info.unique_id = (tid >> 8) & 0xFFFFF;
                     info.is_twl = false;
 
-                    // Default name: hex uniqueID (overwritten by read_smdh on success).
-                    char hex_uid[8];
-                    snprintf(hex_uid, sizeof(hex_uid), "%05X", info.unique_id);
-                    info.name = hex_uid;
+                    // Default name: known retail name or hex uniqueID
+                    // (overwritten by read_smdh on SMDH success).
+                    info.name = default_title_name(info.title_id);
 
                     read_smdh(info.title_id, info.name, info.icon);
                     if (!info.icon.empty()) icons_found++;
@@ -313,9 +346,7 @@ std::vector<TitleInfo> list_titles() {
                         info.title_id = tid;
                         info.unique_id = (tid >> 8) & 0xFFFFF;
                         info.is_twl = true;
-                        char hex_uid[8];
-                        snprintf(hex_uid, sizeof(hex_uid), "%05X", info.unique_id);
-                        info.name = hex_uid;
+                        info.name = default_title_name(tid);
                         nand_raw.push_back(info);
                     }
                     FSUSER_CloseArchive(twl_archive);

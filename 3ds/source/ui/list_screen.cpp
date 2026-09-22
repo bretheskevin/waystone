@@ -8,6 +8,7 @@ static const float BRAND_Y            = 8.0f;
 static const float TITLE_Y            = 26.0f;
 static const float SUBTITLE_Y         = 50.0f;
 static const float HEADER_BASE_Y      = 68.0f;   // status / list starts after this
+static const float HEADER_BASE_Y_NOSUB = 50.0f;  // no subtitle: list starts right after the title
 static const float LIST_BOTTOM_MARGIN = 16.0f;
 static const float SB_W               = 4.0f;    // scrollbar track width
 static const float SB_GAP             = 6.0f;    // gap between list and scrollbar
@@ -30,15 +31,35 @@ void ListScreen::on_back() {
 
 // ---- visible_rows ----
 
-size_t ListScreen::visible_rows() const {
-    float status_h   = status_area_height();
-    float list_top   = HEADER_BASE_Y + status_h;
+size_t ListScreen::visible_rows() {
+    float list_top, pitch, card_h;
+    size_t vis;
+    list_metrics(list_top, vis, pitch, card_h);
+    return vis;
+}
+
+void ListScreen::list_metrics(float& list_top, size_t& vis,
+                              float& pitch, float& card_h) {
+    // Collapse the header band when this screen has no subtitle.
+    float header = subtitle().empty() ? HEADER_BASE_Y_NOSUB : HEADER_BASE_Y;
+    list_top = header + status_area_height();
     float list_bottom = (float)SCREEN_TOP_H - LIST_BOTTOM_MARGIN;
     float avail = list_bottom - list_top;
-    if (avail <= 0.0f) return 1;
-    float pitch = row_height() + (float)SP_XS;
-    size_t rows = (size_t)(avail / pitch);
-    return rows > 0 ? rows : 1;
+    float rh = row_height();
+    float min_pitch = rh + (float)SP_XS;
+    if (avail < rh) { vis = 1; card_h = rh; pitch = min_pitch; return; }
+    size_t n = (size_t)((avail + (float)SP_XS) / min_pitch);
+    if (n < 1) n = 1;
+    vis = n;
+    if (fill_height()) {
+        // Grow rows so the list consumes 100% of the available height,
+        // keeping a fixed SP_XS gap between cards.
+        card_h = (avail - (float)(n - 1) * (float)SP_XS) / (float)n;
+        pitch  = card_h + (float)SP_XS;
+    } else {
+        card_h = rh;
+        pitch  = min_pitch;
+    }
 }
 
 // ---- scroll clamping ----
@@ -82,22 +103,22 @@ void ListScreen::draw_top(C3D_RenderTarget* target) {
         draw_text_centered(buf, 0, SUBTITLE_Y, 0.5f, TEXT_BASE, CLR_NEUTRAL_400,
                            sub.c_str(), (float)SCREEN_TOP_W);
     }
-    // Status area
+    // ---- List geometry (header collapse + optional fill-height) ----
+    float list_top, pitch, card_h;
+    size_t vis;
+    list_metrics(list_top, vis, pitch, card_h);
+
+    // Status area (between header and list); nothing drawn when height is 0.
     float status_h = status_area_height();
     if (status_h > 0.0f) {
-        draw_top_status(buf, HEADER_BASE_Y);
+        draw_top_status(buf, list_top - status_h);
     }
 
-    // ---- List ----
-    float list_top    = HEADER_BASE_Y + status_h;
     float list_x      = (float)SP_XL;                        // 16px left margin
     float list_w_full = (float)SCREEN_TOP_W - 2.0f * list_x;
 
-    size_t vis        = visible_rows();
     bool has_scroll   = count > vis;
     float list_w      = list_w_full - (has_scroll ? (SB_W + SB_GAP) : 0.0f);
-    float rh          = row_height();
-    float pitch       = rh + (float)SP_XS;
 
     size_t end = scroll_offset_ + vis;
     if (end > count) end = count;
@@ -108,11 +129,11 @@ void ListScreen::draw_top(C3D_RenderTarget* target) {
         u32  bg      = focused ? CLR_PRIMARY_50 : CLR_CARD_BG;
         if (focused) {
             draw_rounded_rect(list_x - 1.0f, y - 1.0f, 0.49f,
-                              list_w + 2.0f, rh + 2.0f,
+                              list_w + 2.0f, card_h + 2.0f,
                               RAD_SM + 1.0f, CLR_ACCENT);
         }
-        draw_rounded_rect(list_x, y, 0.5f, list_w, rh, RAD_SM, bg);
-        draw_row(buf, i, list_x, y, list_w, focused);
+        draw_rounded_rect(list_x, y, 0.5f, list_w, card_h, RAD_SM, bg);
+        draw_row(buf, i, list_x, y, list_w, card_h, focused);
         y += pitch;
     }
 

@@ -63,8 +63,8 @@ void ConflictScreen::draw_top_status(C2D_TextBuf buf, float sy) {
 }
 
 void ConflictScreen::draw_row(C2D_TextBuf buf, size_t i,
-                               float x, float y, float w, bool focused) {
-    (void)focused;
+                               float x, float y, float w, float h, bool focused) {
+    (void)focused; (void)h;
     // Title name on the left
     draw_text(buf, x + (float)SP_MD, y + (float)SP_SM, 0.51f,
               TEXT_BASE, CLR_TEXT, items_[i].title_name.c_str());

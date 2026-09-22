@@ -23,7 +23,7 @@ TitleListScreen::TitleListScreen(Session* session)
     titles_ = list_titles();
     printf("[title_list] found %zu titles\n", titles_.size());
     init_icon_cache();
-    status_text_ = "Ready";
+    status_text_ = "";
 }
 
 TitleListScreen::TitleListScreen(Session* session,
@@ -32,7 +32,7 @@ TitleListScreen::TitleListScreen(Session* session,
 {
     titles_ = preloaded_titles;
     init_icon_cache();
-    status_text_ = "Ready";
+    status_text_ = "";
 }
 
 TitleListScreen::~TitleListScreen() {
@@ -57,18 +57,9 @@ void TitleListScreen::poll() {
 
 // ---- ListScreen hooks ----
 
-std::string TitleListScreen::subtitle() {
-    char buf[64];
-    if (titles_.size() == 1)
-        snprintf(buf, sizeof(buf), "1 game");
-    else
-        snprintf(buf, sizeof(buf), "%zu games", titles_.size());
-    return std::string(buf);
-}
-
 float TitleListScreen::status_area_height() const {
     if (worker_ && syncing_) return 50.0f;   // status + counters + progress bar
-    if (!status_text_.empty()) return 20.0f;  // just "Ready" / error text
+    if (!status_text_.empty()) return 20.0f;  // post-sync result / error text
     return 0.0f;
 }
 
@@ -98,10 +89,10 @@ void TitleListScreen::draw_top_status(C2D_TextBuf buf, float sy) {
 }
 
 void TitleListScreen::draw_row(C2D_TextBuf buf, size_t i,
-                                float x, float y, float w, bool focused) {
+                                float x, float y, float w, float h, bool focused) {
     (void)focused;
     float icon_x = x + (float)SP_SM;
-    float icon_y = y + (row_height() - ICON_SZ) / 2.0f;
+    float icon_y = y + (h - ICON_SZ) / 2.0f;
 
     // Icon
     if (i < icon_cache_.size() && !titles_[i].icon.empty()) {
@@ -124,7 +115,7 @@ void TitleListScreen::draw_row(C2D_TextBuf buf, size_t i,
     // Name with UTF-8-safe truncation
     float text_x     = icon_x + ICON_SZ + (float)SP_MD;
     float max_text_w = x + w - text_x - (float)SP_MD;
-    float text_y     = y + (row_height() - text_height(buf, TEXT_BASE, "A")) / 2.0f;
+    float text_y     = y + (h - text_height(buf, TEXT_BASE, "A")) / 2.0f;
 
     std::string display = titles_[i].name;
     if (text_width(buf, TEXT_BASE, display.c_str()) > max_text_w) {

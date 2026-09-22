@@ -44,8 +44,8 @@ void SnapshotScreen::browse_start_restore(size_t index) {
 }
 
 void SnapshotScreen::draw_row(C2D_TextBuf buf, size_t i,
-                               float x, float y, float w, bool focused) {
-    (void)focused;
+                               float x, float y, float w, float h, bool focused) {
+    (void)focused; (void)h;
     draw_text(buf, x + (float)SP_MD, y + (float)SP_SM, 0.51f,
               TEXT_BASE, CLR_TEXT, items_[i].timestamp.c_str());
     std::string sz = human_size(items_[i].total_bytes);

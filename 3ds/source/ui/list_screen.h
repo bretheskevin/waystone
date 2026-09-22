@@ -44,10 +44,13 @@ protected:
     // List content
     virtual size_t item_count() = 0;
     virtual float  row_height() const { return 46.0f; }
+    // When true, visible rows grow to consume 100% of the remaining top-screen
+    // height (used by the title list). Default keeps fixed-height rows.
+    virtual bool   fill_height() const { return false; }
     // Draw one row's CONTENT inside the already-drawn card background.
-    // (x, y) is the card's top-left; w is the card width; focused is cursor==i.
+    // (x, y) is the card's top-left; w/h are the card size; focused is cursor==i.
     virtual void   draw_row(C2D_TextBuf buf, size_t i,
-                            float x, float y, float w, bool focused) = 0;
+                            float x, float y, float w, float h, bool focused) = 0;
 
     // Bottom-screen detail area (above the action bar). Optional.
     virtual void draw_detail(C2D_TextBuf buf, float area_y, float area_h) { (void)buf; (void)area_y; (void)area_h; }
@@ -69,10 +72,14 @@ protected:
     size_t scroll_offset_;
 
     // Computed from (top screen height - header - status - margins) / row pitch.
-    size_t visible_rows() const;
+    size_t visible_rows();
 
 private:
     void clamp_scroll();
+    // Shared top-screen list geometry: collapses the header when there is no
+    // subtitle, drops the idle status band, and (when fill_height()) grows the
+    // rows so the list consumes 100% of the remaining height.
+    void list_metrics(float& list_top, size_t& vis, float& pitch, float& card_h);
     void draw_action_bar(C2D_TextBuf buf, float bar_y, const std::vector<Action>& acts);
 
     // Stored each frame during draw_bottom so touch hit-test in handle_input
