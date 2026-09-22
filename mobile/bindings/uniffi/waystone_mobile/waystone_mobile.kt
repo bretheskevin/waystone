@@ -723,9 +723,19 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_waystone_mobile_checksum_func_checkpoint_to_native(
     ): Int
+    external fun uniffi_waystone_mobile_checksum_func_decide_pull(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_func_fetch_blob(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_func_fold_heads(
+    ): Int
     external fun uniffi_waystone_mobile_checksum_func_jksv_normalize(
     ): Int
     external fun uniffi_waystone_mobile_checksum_func_jksv_to_native(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_func_list_history(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_func_local_hash(
     ): Int
     external fun uniffi_waystone_mobile_checksum_func_mgba_normalize(
     ): Int
@@ -735,9 +745,13 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_waystone_mobile_checksum_func_push_one(
     ): Int
+    external fun uniffi_waystone_mobile_checksum_func_read_remote_heads(
+    ): Int
     external fun uniffi_waystone_mobile_checksum_func_twilight_normalize(
     ): Int
     external fun uniffi_waystone_mobile_checksum_func_twilight_to_native(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_func_vault_from_mdk(
     ): Int
     external fun uniffi_waystone_mobile_checksum_func_vault_init(
     ): Int
@@ -750,6 +764,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_waystone_mobile_checksum_method_vault_encrypt_blob(
     ): Int
     external fun uniffi_waystone_mobile_checksum_method_vault_encrypt_heads(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_method_vault_export_mdk(
     ): Int
     external fun uniffi_waystone_mobile_checksum_method_vault_keys_json(
     ): Int
@@ -806,6 +822,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_method_vault_encrypt_heads(`ptr`: Long,`data`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_method_vault_export_mdk(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_method_vault_keys_json(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_method_vault_path_segment(`ptr`: Long,`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -830,9 +848,19 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_checkpoint_to_native(`save`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_decide_pull(`localHash`: RustBuffer.ByValue,`localMtime`: RustBuffer.ByValue,`heads`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,`policy`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_fetch_blob(`vault`: Long,`save`: RustBuffer.ByValue,`hash`: RustBuffer.ByValue,`dav`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_fold_heads(`heads`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_jksv_normalize(`system`: RustBuffer.ByValue,`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_jksv_to_native(`save`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_list_history(`vault`: Long,`save`: RustBuffer.ByValue,`dav`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_local_hash(`save`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_mgba_normalize(`system`: RustBuffer.ByValue,`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
@@ -842,10 +870,14 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_push_one(`vault`: Long,`save`: RustBuffer.ByValue,`deviceId`: RustBuffer.ByValue,`dav`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_read_remote_heads(`vault`: Long,`save`: RustBuffer.ByValue,`dav`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_twilight_normalize(`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_twilight_to_native(`save`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_vault_from_mdk(`mdk`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
     external fun uniffi_waystone_mobile_fn_func_vault_init(`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_waystone_mobile_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
@@ -973,10 +1005,25 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_waystone_mobile_checksum_func_checkpoint_to_native() != 19389) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_waystone_mobile_checksum_func_decide_pull() != 16687) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_fetch_blob() != 7164) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_fold_heads() != 22716) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_waystone_mobile_checksum_func_jksv_normalize() != 1358) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_func_jksv_to_native() != 53317) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_list_history() != 2879) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_local_hash() != 42071) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_func_mgba_normalize() != 43884) {
@@ -991,10 +1038,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_waystone_mobile_checksum_func_push_one() != 31616) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_waystone_mobile_checksum_func_read_remote_heads() != 36066) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_waystone_mobile_checksum_func_twilight_normalize() != 56064) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_func_twilight_to_native() != 57659) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_vault_from_mdk() != 58647) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_func_vault_init() != 27030) {
@@ -1013,6 +1066,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_method_vault_encrypt_heads() != 15492) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_method_vault_export_mdk() != 20854) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_method_vault_keys_json() != 47337) {
@@ -1437,6 +1493,8 @@ public interface VaultInterface {
     
     fun `encryptHeads`(`data`: kotlin.ByteArray): kotlin.ByteArray
     
+    fun `exportMdk`(): kotlin.ByteArray
+    
     fun `keysJson`(): kotlin.ByteArray
     
     fun `pathSegment`(`name`: kotlin.String): kotlin.String
@@ -1613,6 +1671,19 @@ open class Vault: Disposable, AutoCloseable, VaultInterface
         it,
         
         FfiConverterByteArray.lower(`data`),_status)
+}
+    }
+    )
+    }
+    
+
+    override fun `exportMdk`(): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_method_vault_export_mdk(
+        it,
+        _status)
 }
     }
     )
@@ -2247,6 +2318,54 @@ public object FfiConverterTypeFileEntry: FfiConverterRustBuffer<FileEntry> {
     override fun write(value: FileEntry, buf: ByteBuffer) {
             FfiConverterString.write(value.`path`, buf)
             FfiConverterByteArray.write(value.`content`, buf)
+    }
+}
+
+
+
+data class HistoryEntry (
+    var `timestamp`: kotlin.String
+    , 
+    var `deviceId`: kotlin.String
+    , 
+    var `hash`: kotlin.String
+    , 
+    var `mtime`: kotlin.String
+    
+){
+    
+
+    
+
+    
+    companion object
+}
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeHistoryEntry: FfiConverterRustBuffer<HistoryEntry> {
+    override fun read(buf: ByteBuffer): HistoryEntry {
+        return HistoryEntry(
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+            FfiConverterString.read(buf),
+        )
+    }
+
+    override fun allocationSize(value: HistoryEntry) = (
+            FfiConverterString.allocationSize(value.`timestamp`) +
+            FfiConverterString.allocationSize(value.`deviceId`) +
+            FfiConverterString.allocationSize(value.`hash`) +
+            FfiConverterString.allocationSize(value.`mtime`)
+    )
+
+    override fun write(value: HistoryEntry, buf: ByteBuffer) {
+            FfiConverterString.write(value.`timestamp`, buf)
+            FfiConverterString.write(value.`deviceId`, buf)
+            FfiConverterString.write(value.`hash`, buf)
+            FfiConverterString.write(value.`mtime`, buf)
     }
 }
 
@@ -2992,6 +3111,38 @@ public object FfiConverterOptionalByteArray: FfiConverterRustBuffer<kotlin.ByteA
 /**
  * @suppress
  */
+public object FfiConverterOptionalTypeDeviceHead: FfiConverterRustBuffer<DeviceHead?> {
+    override fun read(buf: ByteBuffer): DeviceHead? {
+        if (buf.get().toInt() == 0) {
+            return null
+        }
+        return FfiConverterTypeDeviceHead.read(buf)
+    }
+
+    override fun allocationSize(value: DeviceHead?): ULong {
+        if (value == null) {
+            return 1UL
+        } else {
+            return 1UL + FfiConverterTypeDeviceHead.allocationSize(value)
+        }
+    }
+
+    override fun write(value: DeviceHead?, buf: ByteBuffer) {
+        if (value == null) {
+            buf.put(0)
+        } else {
+            buf.put(1)
+            FfiConverterTypeDeviceHead.write(value, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterOptionalSequenceTypeFileEntry: FfiConverterRustBuffer<List<FileEntry>?> {
     override fun read(buf: ByteBuffer): List<FileEntry>? {
         if (buf.get().toInt() == 0) {
@@ -3052,6 +3203,34 @@ public object FfiConverterSequenceString: FfiConverterRustBuffer<List<kotlin.Str
 /**
  * @suppress
  */
+public object FfiConverterSequenceTypeDeviceHead: FfiConverterRustBuffer<List<DeviceHead>> {
+    override fun read(buf: ByteBuffer): List<DeviceHead> {
+        val len = buf.getInt()
+        return List<DeviceHead>(len) {
+            FfiConverterTypeDeviceHead.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<DeviceHead>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeDeviceHead.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<DeviceHead>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeDeviceHead.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
 public object FfiConverterSequenceTypeFileEntry: FfiConverterRustBuffer<List<FileEntry>> {
     override fun read(buf: ByteBuffer): List<FileEntry> {
         val len = buf.getInt()
@@ -3070,6 +3249,34 @@ public object FfiConverterSequenceTypeFileEntry: FfiConverterRustBuffer<List<Fil
         buf.putInt(value.size)
         value.iterator().forEach {
             FfiConverterTypeFileEntry.write(it, buf)
+        }
+    }
+}
+
+
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterSequenceTypeHistoryEntry: FfiConverterRustBuffer<List<HistoryEntry>> {
+    override fun read(buf: ByteBuffer): List<HistoryEntry> {
+        val len = buf.getInt()
+        return List<HistoryEntry>(len) {
+            FfiConverterTypeHistoryEntry.read(buf)
+        }
+    }
+
+    override fun allocationSize(value: List<HistoryEntry>): ULong {
+        val sizeForLength = 4UL
+        val sizeForItems = value.map { FfiConverterTypeHistoryEntry.allocationSize(it) }.sum()
+        return sizeForLength + sizeForItems
+    }
+
+    override fun write(value: List<HistoryEntry>, buf: ByteBuffer) {
+        buf.putInt(value.size)
+        value.iterator().forEach {
+            FfiConverterTypeHistoryEntry.write(it, buf)
         }
     }
 }
@@ -3154,6 +3361,48 @@ public object FfiConverterSequenceTypeRawFileEntry: FfiConverterRustBuffer<List<
     }
     
 
+    @Throws(WaystoneException::class) fun `decidePull`(`localHash`: kotlin.String?, `localMtime`: kotlin.String, `heads`: List<DeviceHead>, `deviceId`: kotlin.String, `policy`: ConflictPolicy): SyncDecision {
+            return FfiConverterTypeSyncDecision.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_decide_pull(
+    
+        
+        FfiConverterOptionalString.lower(`localHash`),
+        FfiConverterString.lower(`localMtime`),
+        FfiConverterSequenceTypeDeviceHead.lower(`heads`),
+        FfiConverterString.lower(`deviceId`),
+        FfiConverterTypeConflictPolicy.lower(`policy`),_status)
+}
+    )
+    }
+    
+
+    @Throws(WaystoneException::class) fun `fetchBlob`(`vault`: Vault, `save`: NormalizedSave, `hash`: kotlin.String, `dav`: WebDav): kotlin.ByteArray {
+            return FfiConverterByteArray.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_fetch_blob(
+    
+        
+        FfiConverterTypeVault.lower(`vault`),
+        FfiConverterTypeNormalizedSave.lower(`save`),
+        FfiConverterString.lower(`hash`),
+        FfiConverterTypeWebDav.lower(`dav`),_status)
+}
+    )
+    }
+    
+ fun `foldHeads`(`heads`: List<DeviceHead>): DeviceHead? {
+            return FfiConverterOptionalTypeDeviceHead.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_fold_heads(
+    
+        
+        FfiConverterSequenceTypeDeviceHead.lower(`heads`),_status)
+}
+    )
+    }
+    
+
     @Throws(WaystoneException::class) fun `jksvNormalize`(`system`: kotlin.String, `raw`: RawTree): List<NormalizedSave> {
             return FfiConverterSequenceTypeNormalizedSave.lift(
     uniffiRustCallWithError(WaystoneException) { _status ->
@@ -3171,6 +3420,32 @@ public object FfiConverterSequenceTypeRawFileEntry: FfiConverterRustBuffer<List<
             return FfiConverterTypeRawTree.lift(
     uniffiRustCallWithError(WaystoneException) { _status ->
     UniffiLib.uniffi_waystone_mobile_fn_func_jksv_to_native(
+    
+        
+        FfiConverterTypeNormalizedSave.lower(`save`),_status)
+}
+    )
+    }
+    
+
+    @Throws(WaystoneException::class) fun `listHistory`(`vault`: Vault, `save`: NormalizedSave, `dav`: WebDav): List<HistoryEntry> {
+            return FfiConverterSequenceTypeHistoryEntry.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_list_history(
+    
+        
+        FfiConverterTypeVault.lower(`vault`),
+        FfiConverterTypeNormalizedSave.lower(`save`),
+        FfiConverterTypeWebDav.lower(`dav`),_status)
+}
+    )
+    }
+    
+
+    @Throws(WaystoneException::class) fun `localHash`(`save`: NormalizedSave): kotlin.String {
+            return FfiConverterString.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_local_hash(
     
         
         FfiConverterTypeNormalizedSave.lower(`save`),_status)
@@ -3234,6 +3509,20 @@ public object FfiConverterSequenceTypeRawFileEntry: FfiConverterRustBuffer<List<
     )
     }
     
+
+    @Throws(WaystoneException::class) fun `readRemoteHeads`(`vault`: Vault, `save`: NormalizedSave, `dav`: WebDav): List<DeviceHead> {
+            return FfiConverterSequenceTypeDeviceHead.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_read_remote_heads(
+    
+        
+        FfiConverterTypeVault.lower(`vault`),
+        FfiConverterTypeNormalizedSave.lower(`save`),
+        FfiConverterTypeWebDav.lower(`dav`),_status)
+}
+    )
+    }
+    
  fun `twilightNormalize`(`raw`: RawTree): List<NormalizedSave> {
             return FfiConverterSequenceTypeNormalizedSave.lift(
     uniffiRustCall() { _status ->
@@ -3253,6 +3542,18 @@ public object FfiConverterSequenceTypeRawFileEntry: FfiConverterRustBuffer<List<
     
         
         FfiConverterTypeNormalizedSave.lower(`save`),_status)
+}
+    )
+    }
+    
+
+    @Throws(WaystoneException::class) fun `vaultFromMdk`(`mdk`: kotlin.ByteArray): Vault {
+            return FfiConverterTypeVault.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_vault_from_mdk(
+    
+        
+        FfiConverterByteArray.lower(`mdk`),_status)
 }
     )
     }

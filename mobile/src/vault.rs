@@ -81,4 +81,18 @@ impl Vault {
     pub fn keys_json(&self) -> Result<Vec<u8>, WaystoneError> {
         Ok(self.inner.keys_json()?)
     }
+
+    pub fn export_mdk(&self) -> Vec<u8> {
+        self.inner.export_mdk().to_vec()
+    }
+}
+
+#[uniffi::export]
+pub fn vault_from_mdk(mdk: Vec<u8>) -> Result<Arc<Vault>, WaystoneError> {
+    let arr: [u8; 32] = mdk.try_into().map_err(|_| WaystoneError::Crypto {
+        msg: "mdk must be 32 bytes".into(),
+    })?;
+    Ok(Arc::new(Vault {
+        inner: waystone_core::crypto::Vault::from_mdk(arr),
+    }))
 }

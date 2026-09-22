@@ -55,3 +55,22 @@ impl From<waystone_core::conflict::DeviceHead> for DeviceHead {
         }
     }
 }
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct HistoryEntry {
+    pub timestamp: String,
+    pub device_id: String,
+    pub hash: String,
+    pub mtime: String,
+}
+
+impl From<waystone_sync::HistoryEntry> for HistoryEntry {
+    fn from(e: waystone_sync::HistoryEntry) -> Self {
+        Self {
+            timestamp: e.timestamp,
+            device_id: e.device_id,
+            hash: e.hash,
+            mtime: e.mtime,
+        }
+    }
+}

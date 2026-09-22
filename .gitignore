@@ -36,3 +36,10 @@ switch/romfs/*
 
 # Generated knowledge-graph cache
 graphify-out/
+
+# Android shell build artifacts
+android/.gradle/
+android/.kotlin/
+android/**/build/
+android/local.properties
+android/engine/src/main/jniLibs/

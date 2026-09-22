@@ -1,6 +1,8 @@
 use crate::decision::{ConflictPolicy, PullOutcome, PushOutcome, SyncDecision};
 use crate::error::WaystoneError;
-use crate::types::{Confidence, FileEntry, NormalizedSave, RawFileEntry, RawTree};
+use crate::types::{
+    Confidence, DeviceHead, FileEntry, HistoryEntry, NormalizedSave, RawFileEntry, RawTree,
+};
 use crate::vault::Vault;
 use crate::webdav::{WebDav, WebDavBridge};
 use std::sync::Arc;
@@ -271,4 +273,97 @@ pub fn pull_one(
                 .collect()
         }),
     })
+}
+
+#[uniffi::export]
+pub fn read_remote_heads(
+    vault: Arc<Vault>,
+    save: NormalizedSave,
+    dav: Arc<dyn WebDav>,
+) -> Result<Vec<DeviceHead>, WaystoneError> {
+    let core_save = to_core_save(&save)?;
+    let heads = waystone_sync::read_remote_heads(
+        vault.core_vault(),
+        &core_save,
+        &WebDavBridge { inner: dav },
+    )?;
+    Ok(heads.into_iter().map(DeviceHead::from).collect())
+}
+
+#[uniffi::export]
+pub fn list_history(
+    vault: Arc<Vault>,
+    save: NormalizedSave,
+    dav: Arc<dyn WebDav>,
+) -> Result<Vec<HistoryEntry>, WaystoneError> {
+    let core_save = to_core_save(&save)?;
+    let entries =
+        waystone_sync::list_history(vault.core_vault(), &core_save, &WebDavBridge { inner: dav })?;
+    Ok(entries.into_iter().map(HistoryEntry::from).collect())
+}
+
+#[uniffi::export]
+pub fn fetch_blob(
+    vault: Arc<Vault>,
+    save: NormalizedSave,
+    hash: String,
+    dav: Arc<dyn WebDav>,
+) -> Result<Vec<u8>, WaystoneError> {
+    let core_save = to_core_save(&save)?;
+    Ok(waystone_sync::fetch_blob(
+        vault.core_vault(),
+        &core_save,
+        &hash,
+        &WebDavBridge { inner: dav },
+    )?)
+}
+
+#[uniffi::export]
+pub fn decide_pull(
+    local_hash: Option<String>,
+    local_mtime: String,
+    heads: Vec<DeviceHead>,
+    device_id: String,
+    policy: ConflictPolicy,
+) -> Result<SyncDecision, WaystoneError> {
+    let core_heads: Vec<waystone_core::conflict::DeviceHead> = heads
+        .into_iter()
+        .map(|h| waystone_core::conflict::DeviceHead {
+            device_id: h.device_id,
+            hash: h.hash,
+            mtime: h.mtime,
+        })
+        .collect();
+    Ok(from_core_decision(&waystone_core::conflict::decide_pull(
+        local_hash.as_deref(),
+        &local_mtime,
+        &core_heads,
+        &device_id,
+        map_conflict_policy(policy),
+    )))
+}
+
+// MergedHead has no device_id; the empty string is intentional.
+#[uniffi::export]
+pub fn fold_heads(heads: Vec<DeviceHead>) -> Option<DeviceHead> {
+    let core_heads: Vec<waystone_core::conflict::DeviceHead> = heads
+        .into_iter()
+        .map(|h| waystone_core::conflict::DeviceHead {
+            device_id: h.device_id,
+            hash: h.hash,
+            mtime: h.mtime,
+        })
+        .collect();
+    waystone_core::conflict::fold_heads(&core_heads).map(|m| DeviceHead {
+        device_id: String::new(),
+        hash: m.hash,
+        mtime: m.mtime,
+    })
+}
+
+#[uniffi::export]
+pub fn local_hash(save: NormalizedSave) -> Result<String, WaystoneError> {
+    let core_save = to_core_save(&save)?;
+    let (_, zip) = waystone_core::packaging::package(&core_save);
+    Ok(waystone_core::packaging::content_hash(&zip))
 }
