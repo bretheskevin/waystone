@@ -30,7 +30,7 @@ static const float ROW_GAP       = 12.0f;  // space between icon and name
 //   U+E0A4 "\xEE\x82\xA4" L shoulder
 //   U+E0A5 "\xEE\x82\xA5" R shoulder
 static const char* DASHBOARD_HINT =
-    "\xEE\x82\xA0 Sync all"
+    "\xEE\x82\xA0 Sync Game"
     "   \xc2\xb7   "
     "\xEE\x82\xA2 Conflicts"
     "   \xc2\xb7   "
@@ -45,6 +45,7 @@ TitleListActivity::TitleListActivity(SyncController* ctrl, Session* session)
 
 TitleListActivity::~TitleListActivity() {
     poll_timer_.stop();
+    if (single_ctrl_) { single_ctrl_->join(); delete single_ctrl_; }
     if (ctrl_) { ctrl_->join(); delete ctrl_; }
 }
 
@@ -198,14 +199,19 @@ void TitleListActivity::onContentAvailable() {
     }
 
     poll_timer_.setCallback([this, game_count]() {
-        std::string s = ctrl_->status()
+        std::string sync_status;
+        if (single_ctrl_ && single_ctrl_->phase() == SyncPhase::Running)
+            sync_status = single_ctrl_->status();
+        else
+            sync_status = ctrl_->status();
+        std::string s = sync_status
                       + " \xc2\xb7 " + std::to_string(game_count) + " game"
                       + (game_count != 1 ? "s" : "");
         status_label_->setText(s);
     });
     poll_timer_.start(200);
 
-    registerAction("Sync", brls::BUTTON_A, [this](brls::View*) { start_sync_or_gate(); return true; });
+    registerAction("Sync Game", brls::BUTTON_A, [this](brls::View*) { start_single_sync_or_gate(); return true; });
     registerAction("Conflicts", brls::BUTTON_X, [this](brls::View*) {
         auto titles = ctrl_->titles();
         auto* cc = new ConflictController(session_->vault, session_->uid, session_->device_id,
@@ -241,6 +247,10 @@ void TitleListActivity::onContentAvailable() {
 }
 
 void TitleListActivity::start_sync_or_gate() {
+    if (single_ctrl_ && single_ctrl_->phase() == SyncPhase::Running) {
+        printf("[sync] sync all: single-title sync in progress, skip\n");
+        return;
+    }
     if (!network_available()) {
         brls::Application::pushActivity(
             new NoInternetActivity(NoInternetReason::NoNetwork, [this]() {
@@ -249,6 +259,47 @@ void TitleListActivity::start_sync_or_gate() {
         return;
     }
     ctrl_->start();
+}
+
+void TitleListActivity::start_single_sync_or_gate() {
+    if (ctrl_->phase() == SyncPhase::Running) {
+        printf("[sync] sync single: full sync in progress, skip\n");
+        return;
+    }
+    const auto& titles = ctrl_->titles();
+    const size_t idx = focused_title_index();
+    if (titles.empty() || idx >= titles.size()) {
+        printf("[sync] sync single: no valid focused title (idx=%zu, count=%zu)\n",
+               idx, titles.size());
+        return;
+    }
+    const TitleInfo& t = titles[idx];
+    printf("[sync] sync single: %s (id=%016llx)\n",
+           t.name.c_str(), (unsigned long long)t.title_id);
+
+    // No-op if a single-title sync is already running (don't block UI thread with join).
+    if (single_ctrl_ && single_ctrl_->phase() == SyncPhase::Running) {
+        printf("[sync] sync single: already running, skip\n");
+        return;
+    }
+    // Previous run finished — clean it up.
+    if (single_ctrl_) {
+        single_ctrl_->join();
+        delete single_ctrl_;
+    }
+    single_ctrl_ = new SyncController(session_->vault, session_->uid,
+                                      session_->device_id,
+                                      session_->dav.as_cfg(),
+                                      { t });
+
+    if (!network_available()) {
+        brls::Application::pushActivity(
+            new NoInternetActivity(NoInternetReason::NoNetwork, [this]() {
+                single_ctrl_->start();
+            }));
+        return;
+    }
+    single_ctrl_->start();
 }
 
 size_t TitleListActivity::focused_title_index() const {

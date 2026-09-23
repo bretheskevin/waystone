@@ -13,6 +13,7 @@ class TitleListActivity : public brls::Activity {
   private:
     SyncController* ctrl_;
     Session* session_;
+    SyncController* single_ctrl_ = nullptr;  // owned; single-title sync (A button)
 
     brls::Label* status_label_ = nullptr;
     brls::RepeatingTimer poll_timer_;
@@ -20,5 +21,6 @@ class TitleListActivity : public brls::Activity {
 
     size_t focused_title_index() const;
 
-    void start_sync_or_gate();
+    void start_sync_or_gate();           // syncs all titles via ctrl_
+    void start_single_sync_or_gate();    // syncs focused title only
 };

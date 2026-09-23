@@ -28,7 +28,7 @@ protected:
     bool        has_back() const        { return false; }
 
 private:
-    enum ActionId { ACT_SYNC = 0, ACT_CONFLICTS, ACT_SETTINGS, ACT_SNAPSHOTS, ACT_HISTORY };
+    enum ActionId { ACT_SYNC = 0, ACT_SYNC_ALL, ACT_CONFLICTS, ACT_SETTINGS, ACT_SNAPSHOTS, ACT_HISTORY };
 
     Session* session_;
     std::vector<TitleInfo> titles_;
@@ -38,8 +38,8 @@ private:
     std::vector<IconImage*> icon_cache_;
 
     void init_icon_cache();
-    void start_sync();
-    void start_sync_or_gate();
+    void start_sync(std::vector<TitleInfo> titles);
+    void start_sync_or_gate(std::vector<TitleInfo> titles);
 
     TitleListScreen(const TitleListScreen&);
     TitleListScreen& operator=(const TitleListScreen&);

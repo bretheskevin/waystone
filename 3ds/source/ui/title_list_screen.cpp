@@ -132,10 +132,13 @@ void TitleListScreen::draw_row(C2D_TextBuf buf, size_t i,
 }
 
 std::vector<Action> TitleListScreen::actions() {
-    bool has_sel = !titles_.empty();
+    bool has_sel = !titles_.empty() && cursor_ < titles_.size();
+    bool has_any = !titles_.empty();
     std::vector<Action> a;
-    a.push_back({KEY_A, "A", syncing_ ? "Syncing..." : "Sync All",
-                 ACT_SYNC, !syncing_, ButtonStyle::PRIMARY});
+    a.push_back({KEY_A, "A", syncing_ ? "Syncing..." : "Sync Game",
+                 ACT_SYNC, !syncing_ && has_sel, ButtonStyle::PRIMARY});
+    a.push_back({KEY_SELECT, "Sel", "Sync All",
+                 ACT_SYNC_ALL, !syncing_ && has_any, ButtonStyle::SECONDARY});
     a.push_back({KEY_X, "X", "Conflicts",
                  ACT_CONFLICTS, true, ButtonStyle::SECONDARY});
     a.push_back({KEY_Y, "Y", "Settings",
@@ -150,7 +153,15 @@ std::vector<Action> TitleListScreen::actions() {
 void TitleListScreen::on_action(int id) {
     switch (id) {
     case ACT_SYNC:
-        start_sync_or_gate();
+        if (cursor_ < titles_.size()) {
+            printf("[sync] sync single: %s (id=0x%05x)\n",
+                   titles_[cursor_].name.c_str(), (unsigned int)titles_[cursor_].unique_id);
+            start_sync_or_gate({titles_[cursor_]});
+        }
+        break;
+    case ACT_SYNC_ALL:
+        printf("[sync] sync all: %zu titles\n", titles_.size());
+        start_sync_or_gate(titles_);
         break;
     case ACT_CONFLICTS:
         App::instance().push_screen(new ConflictScreen(session_, titles_));
@@ -173,25 +184,25 @@ void TitleListScreen::on_action(int id) {
 
 // ---- Sync helpers ----
 
-void TitleListScreen::start_sync_or_gate() {
+void TitleListScreen::start_sync_or_gate(std::vector<TitleInfo> titles) {
     if (!network_available()) {
         App::instance().push_screen(
-            new NoInternetScreen(NoInternetReason::NoNetwork, [this]() {
-                start_sync();
+            new NoInternetScreen(NoInternetReason::NoNetwork, [this, titles]() {
+                start_sync(titles);
             }));
         return;
     }
-    start_sync();
+    start_sync(titles);
 }
 
-void TitleListScreen::start_sync() {
+void TitleListScreen::start_sync(std::vector<TitleInfo> titles) {
     if (syncing_) return;
-    if (titles_.empty()) { status_text_ = "No titles to sync"; return; }
+    if (titles.empty()) { status_text_ = "No titles to sync"; return; }
     syncing_ = true;
     status_text_ = "Starting sync...";
-    printf("[title_list] starting sync for %zu titles\n", titles_.size());
+    printf("[sync] starting sync for %zu title(s)\n", titles.size());
     if (worker_) { worker_->join(); delete worker_; }
     worker_ = new SyncWorker(session_->vault, session_->device_id,
-                             session_->dav.as_cfg(), titles_);
+                             session_->dav.as_cfg(), titles);
     worker_->start();
 }
