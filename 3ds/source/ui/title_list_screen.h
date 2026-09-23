@@ -12,6 +12,7 @@ public:
     TitleListScreen(Session* session, const std::vector<TitleInfo>& preloaded_titles);
     ~TitleListScreen();
     void poll();
+    void handle_input(u32 kDown, touchPosition touch);
 
 protected:
     // ListScreen hooks
@@ -23,6 +24,7 @@ protected:
     bool        fill_height() const     { return true; }
     void        draw_row(C2D_TextBuf buf, size_t i,
                          float x, float y, float w, float h, bool focused);
+    void        draw_detail(C2D_TextBuf buf, float area_y, float area_h);
     std::vector<Action> actions();
     void        on_action(int id);
     bool        has_back() const        { return false; }
@@ -36,6 +38,7 @@ private:
     std::string status_text_;
     bool syncing_;
     std::vector<IconImage*> icon_cache_;
+    Rect sync_all_btn_rect_;  // touch target for the bottom-screen Sync All button
 
     void init_icon_cache();
     void start_sync(std::vector<TitleInfo> titles);

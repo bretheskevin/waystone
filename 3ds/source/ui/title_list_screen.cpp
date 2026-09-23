@@ -17,7 +17,7 @@ void TitleListScreen::init_icon_cache() {
 }
 
 TitleListScreen::TitleListScreen(Session* session)
-    : session_(session), worker_(0), syncing_(false)
+    : session_(session), worker_(0), syncing_(false), sync_all_btn_rect_()
 {
     printf("[title_list] enumerating titles...\n");
     titles_ = list_titles();
@@ -28,7 +28,7 @@ TitleListScreen::TitleListScreen(Session* session)
 
 TitleListScreen::TitleListScreen(Session* session,
                                  const std::vector<TitleInfo>& preloaded_titles)
-    : session_(session), worker_(0), syncing_(false)
+    : session_(session), worker_(0), syncing_(false), sync_all_btn_rect_()
 {
     titles_ = preloaded_titles;
     init_icon_cache();
@@ -131,6 +131,25 @@ void TitleListScreen::draw_row(C2D_TextBuf buf, size_t i,
     draw_text(buf, text_x, text_y, 0.51f, TEXT_BASE, CLR_TEXT, display.c_str());
 }
 
+void TitleListScreen::draw_detail(C2D_TextBuf buf, float area_y, float area_h) {
+    (void)area_h;
+    static const float BTN_W = 140.0f;
+    static const float BTN_H = 28.0f;
+    float btn_x = ((float)SCREEN_BOT_W - BTN_W) / 2.0f;
+    float btn_y = area_y + (float)SP_SM;
+    bool enabled = !syncing_ && !titles_.empty();
+    if (enabled) {
+        sync_all_btn_rect_ = draw_button(buf, btn_x, btn_y, BTN_W, BTN_H,
+                                         "Sync All", ButtonStyle::PRIMARY, /*focused=*/false);
+    } else {
+        draw_rounded_rect(btn_x, btn_y, 0.5f, BTN_W, BTN_H, RAD_MD, CLR_NEUTRAL_200);
+        float th = text_height(buf, TEXT_BASE, "Sync All");
+        draw_text_centered(buf, btn_x, btn_y + (BTN_H - th) / 2.0f,
+                           0.51f, TEXT_BASE, CLR_NEUTRAL_400, "Sync All", BTN_W);
+        sync_all_btn_rect_ = {btn_x, btn_y, BTN_W, BTN_H};
+    }
+}
+
 std::vector<Action> TitleListScreen::actions() {
     bool has_sel = !titles_.empty() && cursor_ < titles_.size();
     bool has_any = !titles_.empty();
@@ -180,6 +199,27 @@ void TitleListScreen::on_action(int id) {
                 new HistoryScreen(session_, titles_[cursor_]));
         break;
     }
+}
+
+// ---- handle_input ----
+
+void TitleListScreen::handle_input(u32 kDown, touchPosition touch) {
+    // Check Sync All touch first; zero the touch so no action-bar button
+    // fires on the same tap, but let kDown through to the base class.
+    if (touch.px != 0 || touch.py != 0) {
+        if (sync_all_btn_rect_.contains((float)touch.px, (float)touch.py)) {
+            if (!syncing_ && !titles_.empty()) {
+                printf("[ui] Sync All button tapped\n");
+                start_sync_or_gate(titles_);
+            } else {
+                printf("[ui] Sync All button tapped (no-op: %s)\n",
+                       syncing_ ? "syncing in progress" : "no titles");
+            }
+            touch.px = 0;
+            touch.py = 0;
+        }
+    }
+    ListScreen::handle_input(kDown, touch);
 }
 
 // ---- Sync helpers ----
