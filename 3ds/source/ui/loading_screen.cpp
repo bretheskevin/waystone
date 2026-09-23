@@ -6,7 +6,6 @@
 #include "widgets.h"
 #include "worker_thread.h"
 #include <cstdio>
-#include <cmath>
 
 struct Vault;
 extern "C" {
@@ -34,9 +33,11 @@ void LoadingScreen::worker_entry(void* arg) {
     LoadingScreen* self = static_cast<LoadingScreen*>(arg);
 
     if (self->auto_unlock_) {
+        printf("[vault] auto-unlock: loading session...\n");
         std::string webdav_pass;
         WsVault* v = session_store_load_vault(webdav_pass);
         if (!v) {
+            printf("[vault] auto-unlock: session expired\n");
             self->ctx_.result.success = false;
             self->ctx_.result.error   = "session expired";
             self->ctx_.done.store(true);
@@ -47,18 +48,19 @@ void LoadingScreen::worker_entry(void* arg) {
         self->session_->dav.user       = self->session_->config.username;
         self->session_->dav.pass       = webdav_pass;
         zeroize_string(webdav_pass);
+        printf("[vault] auto-unlock: vault unlocked\n");
     }
 
+    printf("[titles] listing titles...\n");
     self->ctx_.result.titles  = list_titles();
+    printf("[titles] done: %zu titles\n", self->ctx_.result.titles.size());
     self->ctx_.result.success = true;
     self->ctx_.done.store(true);
 }
 
 void LoadingScreen::draw_top(C3D_RenderTarget* /*target*/) {
     C2D_TextBuf buf = App::instance().text_buf();
-    draw_text_centered(buf, SCREEN_TOP_W / 2.0f, 88.0f, 0.5f,
-                       TEXT_LG, CLR_TEXT, "Loading...", SCREEN_TOP_W);
-    draw_spinner(buf, SCREEN_TOP_W / 2.0f, 126.0f, spinner_angle_);
+    draw_spinner(buf, SCREEN_TOP_W / 2.0f, 110.0f, spinner_angle_);
 }
 
 void LoadingScreen::draw_bottom(C3D_RenderTarget* /*target*/) {
