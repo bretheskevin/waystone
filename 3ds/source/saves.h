@@ -5,6 +5,10 @@
 #include <string>
 #include <vector>
 #include <3ds.h>
+#include "net.h"
+
+struct Vault;
+typedef Vault WsVault;
 
 struct TitleInfo {
     u64 title_id;
@@ -15,7 +19,7 @@ struct TitleInfo {
 };
 
 // Enumerate installed titles via AM service (SD + NAND TWL/DSiWare).
-std::vector<TitleInfo> list_titles();
+std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav);
 
 // Extract savedata for a title as a RawTreeDto JSON string.
 // Paths formatted for ws_checkpoint_normalize:

@@ -20,7 +20,10 @@ TitleListScreen::TitleListScreen(Session* session)
     : session_(session), worker_(0), syncing_(false), sync_all_btn_rect_()
 {
     printf("[title_list] enumerating titles...\n");
-    titles_ = list_titles();
+    {
+        WebDavCfg dav = session_->dav.as_cfg();
+        titles_ = list_titles(session_->vault, dav);
+    }
     printf("[title_list] found %zu titles\n", titles_.size());
     init_icon_cache();
     status_text_ = "";

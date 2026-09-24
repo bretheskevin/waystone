@@ -128,7 +128,7 @@ int main(int argc, char* argv[]) {
         WebDavCfg dav = {WAYSTONE_WEBDAV_URL, WAYSTONE_WEBDAV_USER, WAYSTONE_WEBDAV_PASS};
 
         printf("--- Enumerating titles ---\n");
-        std::vector<TitleInfo> titles = list_titles();
+        std::vector<TitleInfo> titles = list_titles(vault, dav);
         printf("Found %zu titles\n\n", titles.size());
 
         printf("--- Push phase ---\n");

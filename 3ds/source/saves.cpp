@@ -2,6 +2,14 @@
 #include "homebrew_filter.h"
 #include "base64.h"
 #include "json.h"
+#include "net.h"
+#include "snapshot_browse.h"
+#include <set>
+
+struct Vault;
+extern "C" {
+#include "waystone.h"
+}
 
 #include <cstdint>
 #include <cstdio>
@@ -224,6 +232,122 @@ static Result open_twl_save_archive(FS_Archive* archive);
 static std::string twl_save_root(u64 title_id);
 static bool twl_save_accessible(FS_Archive archive, u64 title_id);
 static void delete_dir_contents(FS_Archive archive, const std::string& dir);
+static Result open_save_archive(u64 title_id, FS_Archive* archive);
+static Result open_extdata_archive(u64 title_id, u32 extdata_id, FS_Archive* archive);
+static void entry_name_ascii(const FS_DirectoryEntry& entry, char* out);
+
+// Probe whether an already-opened archive root has at least one real entry (not . or ..).
+// Closes the directory handle on all paths. Returns true if any real entry is found.
+static bool probe_archive_has_entry(FS_Archive archive) {
+    Handle dir;
+    if (R_FAILED(FSUSER_OpenDirectory(&dir, archive,
+                 fsMakePath(PATH_ASCII, "/")))) {
+        return false;
+    }
+    FS_DirectoryEntry entry;
+    u32 n;
+    bool found = false;
+    while (!found) {
+        n = 0;
+        if (R_FAILED(FSDIR_Read(dir, &n, 1, &entry)) || n == 0) break;
+        char ename[256];
+        entry_name_ascii(entry, ename);
+        if (strcmp(ename, ".") != 0 && strcmp(ename, "..") != 0) found = true;
+    }
+    FSDIR_Close(dir);
+    return found;
+}
+
+// Light local-save probe: open the title's main save archive and/or extdata archive and
+// check for at least one FS entry. Does NOT call extract_save_json (too heavy).
+// Returns true if the title has any local save data worth syncing.
+// For TWL titles the caller uses twl_save_accessible() instead (TWL FS already mounted).
+static bool has_local_save(const TitleInfo& title) {
+    FS_Archive archive;
+    if (R_SUCCEEDED(open_save_archive(title.title_id, &archive))) {
+        bool ok = probe_archive_has_entry(archive);
+        FSUSER_CloseArchive(archive);
+        if (ok) {
+            printf("[titles] local save found (main) tid=%016llX\n",
+                   (unsigned long long)title.title_id);
+            return true;
+        }
+    }
+    u32 ext_id = extdata_id_for(title.title_id);
+    FS_Archive ext_archive;
+    if (R_SUCCEEDED(open_extdata_archive(title.title_id, ext_id, &ext_archive))) {
+        bool ok = probe_archive_has_entry(ext_archive);
+        FSUSER_CloseArchive(ext_archive);
+        if (ok) {
+            printf("[titles] local save found (extdata) tid=%016llX extdata_id=0x%08lX\n",
+                   (unsigned long long)title.title_id, (unsigned long)ext_id);
+            return true;
+        }
+    }
+    return false;
+}
+
+// Fetch the set of obfuscated {game} directory names that have remote backups.
+// Issues a single PROPFIND on the obfuscated 3ds/ collection at depth 1.
+// Returns true if the PROPFIND completed (even if empty — 404 is legitimate).
+// Returns false on transport/server error: caller must fail-open (show all titles).
+static bool fetch_remote_game_set(const WsVault* vault, const WebDavCfg& dav,
+                                   std::set<std::string>& out_game_set) {
+    out_game_set.clear();
+    if (!vault) return false;
+
+    char* sys_raw = ws_vault_path_segment(vault, "3ds");
+    if (!sys_raw) {
+        printf("[net] fetch_remote_game_set: ws_vault_path_segment('3ds') failed\n");
+        return false;
+    }
+    std::string sys_str(sys_raw);
+    ws_string_free(sys_raw);
+
+    std::vector<std::string> hrefs;
+    int rc = webdav_propfind(dav, sys_str.c_str(), &hrefs);
+    if (rc != 0) {
+        // Transport or server error; 404 returns rc=0 per net.cpp.
+        printf("[net] PROPFIND %s failed rc=%d — remote filter disabled (fail-open)\n",
+               sys_str.c_str(), rc);
+        return false;
+    }
+
+    // hrefs includes the parent collection itself; extract child (game) segments.
+    // Each href: /prefix/<sys_seg>/<game_seg>/ — take the last non-empty component.
+    int game_count = 0;
+    for (size_t i = 0; i < hrefs.size(); i++) {
+        std::string h = hrefs[i];
+        while (!h.empty() && h[h.size() - 1] == '/') h.erase(h.size() - 1);
+        if (h.empty()) continue;
+        size_t slash = h.rfind('/');
+        std::string seg = (slash == std::string::npos) ? h : h.substr(slash + 1);
+        if (seg.empty() || seg == sys_str) continue; // skip parent
+        out_game_set.insert(seg);
+        game_count++;
+    }
+
+    if (hrefs.empty()) {
+        printf("[net] PROPFIND %s -> 404 or empty (no remote backups yet)\n",
+               sys_str.c_str());
+    } else {
+        printf("[net] PROPFIND %s -> %d remote game dir(s) found\n",
+               sys_str.c_str(), game_count);
+    }
+    return true;
+}
+
+// Check whether a title's obfuscated game segment is present in the remote set.
+// Derives the key the same way the Rust normalizer does: normalize the display
+// name, obfuscate via the vault, then look up in the PROPFIND-collected set.
+static bool is_in_remote_set(const WsVault* vault, const std::string& display_name,
+                              const std::set<std::string>& remote_games) {
+    std::string gkey = normalize_game_name(display_name);
+    char* gseg = ws_vault_path_segment(vault, gkey.c_str());
+    bool found = gseg && remote_games.count(std::string(gseg)) > 0;
+    if (gseg) ws_string_free(gseg);
+    return found;
+}
 
 // Collapse per-game duplicates. The SD title list holds the base app
 // (00040000...), its update (0004000E...) and any DLC (0004008C...) as
@@ -264,12 +388,17 @@ static std::vector<TitleInfo> collapse_by_unique_id(const std::vector<TitleInfo>
     return out;
 }
 
-std::vector<TitleInfo> list_titles() {
+std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav) {
     // Fetch homebrew ID list from Universal-DB once per process so we can
     // hide homebrew/utility apps (Anemone3DS, Checkpoint, FBI, …) from the
     // backup list. Fail-open: if the fetch and SD cache both fail the set is
     // empty and all titles are shown.
     homebrew::ensure_loaded();
+
+    // -- Remote backup set (single PROPFIND on the 3ds/ collection) --
+    // filter_active=true even when remote set is empty (404); false only on transport error.
+    std::set<std::string> remote_games;
+    bool filter_active = vault && fetch_remote_game_set(vault, dav, remote_games);
 
     std::vector<TitleInfo> sd_raw;
     std::vector<TitleInfo> nand_raw;
@@ -293,6 +422,8 @@ std::vector<TitleInfo> list_titles() {
             if (R_SUCCEEDED(list_rc)) {
                 int icons_found = 0;
                 int homebrew_hidden = 0;
+                int filter_hidden = 0;
+                int shown_via_remote = 0;
                 for (u32 i = 0; i < read; i++) {
                     u64 tid = title_ids[i];
                     if (is_system_excluded(tid)) {
@@ -307,22 +438,41 @@ std::vector<TitleInfo> list_titles() {
                         homebrew_hidden++;
                         continue;
                     }
+
+                    // Build TitleInfo and read SMDH BEFORE the filter so
+                    // the game-key derivation uses the SMDH display name —
+                    // the same name that extract_save_json / push_title will
+                    // feed to the Rust normalizer.
                     TitleInfo info;
-                    info.title_id = tid;
+                    info.title_id  = tid;
                     info.unique_id = (tid >> 8) & 0xFFFFF;
-                    info.is_twl = false;
-
-                    // Default name: known retail name or hex uniqueID
-                    // (overwritten by read_smdh on SMDH success).
-                    info.name = default_title_name(info.title_id);
-
+                    info.is_twl    = false;
+                    info.name      = default_title_name(info.title_id);
                     read_smdh(info.title_id, info.name, info.icon);
-                    if (!info.icon.empty()) icons_found++;
 
+                    // Save-presence filter: show only titles with local save OR remote backup.
+                    // Fail-open: if remote PROPFIND failed (filter_active==false), skip filter.
+                    if (filter_active) {
+                        bool in_remote = is_in_remote_set(vault, info.name, remote_games);
+
+                        if (!in_remote && !has_local_save(info)) {
+                            printf("[titles] hiding %s (tid=0x%016llX) — no local save, no remote backup\n",
+                                   info.name.c_str(), (unsigned long long)tid);
+                            filter_hidden++;
+                            continue;
+                        }
+                        if (in_remote) shown_via_remote++;
+                    }
+
+                    if (!info.icon.empty()) icons_found++;
                     sd_raw.push_back(info);
                 }
                 printf("[titles] SD: %zu titles (%d with icons, %d homebrew hidden)\n",
                        sd_raw.size(), icons_found, homebrew_hidden);
+                if (filter_active) {
+                    printf("[titles] SD save-presence filter: %d hidden, %d shown via remote backup\n",
+                           filter_hidden, shown_via_remote);
+                }
             } else {
                 printf("[titles] AM_GetTitleList(SD) failed rc=0x%08lX\n",
                        (unsigned long)list_rc);
@@ -352,11 +502,30 @@ std::vector<TitleInfo> list_titles() {
                 if (R_FAILED(open_twl_save_archive(&twl_archive))) {
                     printf("[titles] TWL archive unavailable — skipping NAND source\n");
                 } else {
+                    int nand_filter_hidden = 0;
+                    int nand_shown_via_remote = 0;
                     for (u32 i = 0; i < read; i++) {
                         u64 tid = title_ids[i];
                         if (is_system_excluded(tid)) continue;
                         if (!is_twl_title(tid)) continue;
-                        if (!twl_save_accessible(twl_archive, tid)) continue;
+
+                        bool has_twl_local = twl_save_accessible(twl_archive, tid);
+                        if (filter_active) {
+                            std::string gname = default_title_name(tid);
+                            bool in_remote = is_in_remote_set(vault, gname, remote_games);
+
+                            if (!has_twl_local && !in_remote) {
+                                printf("[titles] hiding %s (tid=0x%016llX) — no TWL save, no remote backup\n",
+                                       gname.c_str(), (unsigned long long)tid);
+                                nand_filter_hidden++;
+                                continue;
+                            }
+                            if (in_remote) nand_shown_via_remote++;
+                        } else if (!has_twl_local) {
+                            // Fail-open: revert to original twl_save_accessible filter
+                            continue;
+                        }
+
                         TitleInfo info;
                         info.title_id = tid;
                         info.unique_id = (tid >> 8) & 0xFFFFF;
@@ -365,6 +534,10 @@ std::vector<TitleInfo> list_titles() {
                         nand_raw.push_back(info);
                     }
                     FSUSER_CloseArchive(twl_archive);
+                    if (filter_active && (nand_filter_hidden || nand_shown_via_remote)) {
+                        printf("[titles] NAND TWL save-presence filter: %d hidden, %d via remote\n",
+                               nand_filter_hidden, nand_shown_via_remote);
+                    }
                 }
                 printf("[titles] NAND TWL: %zu kept of %lu listed\n",
                        nand_raw.size(), (unsigned long)read);
@@ -382,7 +555,7 @@ std::vector<TitleInfo> list_titles() {
     // siblings — so they are appended without collapsing.
     std::vector<TitleInfo> out = collapse_by_unique_id(sd_raw);
     out.insert(out.end(), nand_raw.begin(), nand_raw.end());
-    printf("[titles] %zu title(s) after homebrew filter (sd + nand twl)\n", out.size());
+    printf("[titles] %zu title(s) after save-presence filter (sd + nand twl)\n", out.size());
     return out;
 }
 

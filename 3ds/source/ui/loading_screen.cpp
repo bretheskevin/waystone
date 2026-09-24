@@ -52,7 +52,10 @@ void LoadingScreen::worker_entry(void* arg) {
     }
 
     printf("[titles] listing titles...\n");
-    self->ctx_.result.titles  = list_titles();
+    {
+        WebDavCfg dav = self->session_->dav.as_cfg();
+        self->ctx_.result.titles = list_titles(self->session_->vault, dav);
+    }
     printf("[titles] done: %zu titles\n", self->ctx_.result.titles.size());
     self->ctx_.result.success = true;
     self->ctx_.done.store(true);
