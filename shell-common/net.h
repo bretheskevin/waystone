@@ -37,4 +37,9 @@ int webdav_mkdir_p(const WebDavCfg& cfg, const char* path);
 int webdav_propfind(const WebDavCfg& cfg, const char* path,
                     std::vector<std::string>* out_hrefs);
 
+// Unauthenticated HTTPS GET. On HTTP 200, writes body into *out and returns 200.
+// Returns the HTTP status code on successful transport (non-200 = fetch failed).
+// Returns -1 on curl/transport error. Follows redirects; TLS via romfs:/cacert.pem.
+int http_get(const char* url, std::string* out);
+
 #endif

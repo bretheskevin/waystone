@@ -201,3 +201,30 @@ int webdav_propfind(const WebDavCfg& cfg, const char* path,
     }
     return 0;
 }
+
+int http_get(const char* url, std::string* out) {
+    CURL* c = curl_easy_init();
+    if (!c) return -1;
+    WriteCtx wctx;
+    curl_easy_setopt(c, CURLOPT_URL, url);
+    curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb);
+    curl_easy_setopt(c, CURLOPT_WRITEDATA, &wctx);
+    curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
+    curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 5L);
+    curl_easy_setopt(c, CURLOPT_TIMEOUT, 15L);
+    curl_apply_tls(c);
+    CURLcode res = curl_easy_perform(c);
+    long http_code = 0;
+    curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
+    curl_easy_cleanup(c);
+    if (res != CURLE_OK) {
+        printf("[net] http_get %s transport error: %s\n", url, curl_easy_strerror(res));
+        return -1;
+    }
+    printf("[net] http_get %s status=%ld bytes=%zu\n", url, http_code,
+           wctx.buf.size());
+    if (http_code == 200) {
+        *out = std::move(wctx.buf);
+    }
+    return static_cast<int>(http_code);
+}

@@ -1,4 +1,5 @@
 #include "saves.h"
+#include "homebrew_filter.h"
 #include "base64.h"
 #include "json.h"
 
@@ -264,6 +265,12 @@ static std::vector<TitleInfo> collapse_by_unique_id(const std::vector<TitleInfo>
 }
 
 std::vector<TitleInfo> list_titles() {
+    // Fetch homebrew ID list from Universal-DB once per process so we can
+    // hide homebrew/utility apps (Anemone3DS, Checkpoint, FBI, …) from the
+    // backup list. Fail-open: if the fetch and SD cache both fail the set is
+    // empty and all titles are shown.
+    homebrew::ensure_loaded();
+
     std::vector<TitleInfo> sd_raw;
     std::vector<TitleInfo> nand_raw;
 
@@ -285,11 +292,19 @@ std::vector<TitleInfo> list_titles() {
             Result list_rc = AM_GetTitleList(&read, MEDIATYPE_SD, count, title_ids.data());
             if (R_SUCCEEDED(list_rc)) {
                 int icons_found = 0;
+                int homebrew_hidden = 0;
                 for (u32 i = 0; i < read; i++) {
                     u64 tid = title_ids[i];
                     if (is_system_excluded(tid)) {
                         printf("[titles] sd tid=%016llX excluded (system)\n",
                                (unsigned long long)tid);
+                        continue;
+                    }
+                    if (homebrew::is_homebrew(tid)) {
+                        printf("[titles] hiding %s (tid=0x%016llX) as homebrew\n",
+                               default_title_name(tid).c_str(),
+                               (unsigned long long)tid);
+                        homebrew_hidden++;
                         continue;
                     }
                     TitleInfo info;
@@ -306,8 +321,8 @@ std::vector<TitleInfo> list_titles() {
 
                     sd_raw.push_back(info);
                 }
-                printf("[titles] SD: %zu titles (%d with icons)\n",
-                       sd_raw.size(), icons_found);
+                printf("[titles] SD: %zu titles (%d with icons, %d homebrew hidden)\n",
+                       sd_raw.size(), icons_found, homebrew_hidden);
             } else {
                 printf("[titles] AM_GetTitleList(SD) failed rc=0x%08lX\n",
                        (unsigned long)list_rc);
@@ -367,7 +382,7 @@ std::vector<TitleInfo> list_titles() {
     // siblings — so they are appended without collapsing.
     std::vector<TitleInfo> out = collapse_by_unique_id(sd_raw);
     out.insert(out.end(), nand_raw.begin(), nand_raw.end());
-    printf("[titles] total %zu title(s) (sd + nand twl)\n", out.size());
+    printf("[titles] %zu title(s) after homebrew filter (sd + nand twl)\n", out.size());
     return out;
 }
 
@@ -637,7 +652,7 @@ std::string extract_save_json(const TitleInfo& title) {
     if (files.empty() && extdata_files.empty()) return "";
 
     char hex_uid[8];
-    snprintf(hex_uid, sizeof(hex_uid), "%05X", title.unique_id);
+    snprintf(hex_uid, sizeof(hex_uid), "%05X", (unsigned)title.unique_id);
     std::string checkpoint_dir = std::string("0x") + hex_uid + " " + title.name;
 
     std::vector<std::pair<std::string, std::vector<uint8_t>>> wrapped;
