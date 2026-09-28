@@ -27,6 +27,7 @@ void App::pop_screen() { if (!stack_.empty()) { delete stack_.back(); stack_.pop
 void App::defer_reap(const std::function<bool()>& fn) { reapers_.push_back(fn); }
 void App::quit() { running_ = false; }
 void App::run() {
+    bool first_frame_logged = false;
     while (running_ && aptMainLoop()) {
         hidScanInput();
         u32 kDown = hidKeysDown();
@@ -52,5 +53,9 @@ void App::run() {
         C2D_SceneBegin(bot_target_);
         if (!stack_.empty()) stack_.back()->draw_bottom(bot_target_);
         C3D_FrameEnd(0);
+        if (!first_frame_logged) {
+            printf("[ui] first frame rendered\n");
+            first_frame_logged = true;
+        }
     }
 }

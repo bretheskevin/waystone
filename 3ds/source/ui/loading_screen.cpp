@@ -17,9 +17,16 @@ LoadingScreen::LoadingScreen(Session* session, bool auto_unlock,
                              uint8_t* keys_data, size_t keys_len)
     : session_(session), auto_unlock_(auto_unlock),
       keys_data_(keys_data), keys_len_(keys_len),
-      worker_thread_(0), handled_(false), spinner_angle_(0.0f)
+      worker_thread_(0), worker_started_(false), frame_ready_(false),
+      handled_(false), spinner_angle_(0.0f)
 {
-    worker_thread_ = start_worker_thread(worker_entry, this);
+    // Worker is spawned lazily in poll() — only after at least one frame has
+    // rendered — so the spinner is guaranteed visible before the heavy/crash-prone
+    // vault-unlock + PROPFIND + per-title probe work begins. If that work faults
+    // (a fault on any thread kills the whole app on 3DS), the loading visual has
+    // already shown and the [titles]/[net] logs have started streaming.
+    printf("[loading] screen created (auto_unlock=%d) — worker deferred to first frame\n",
+           auto_unlock_ ? 1 : 0);
 }
 
 LoadingScreen::~LoadingScreen() {
@@ -31,6 +38,7 @@ LoadingScreen::~LoadingScreen() {
 
 void LoadingScreen::worker_entry(void* arg) {
     LoadingScreen* self = static_cast<LoadingScreen*>(arg);
+    printf("[loading] worker_entry: start\n");
 
     if (self->auto_unlock_) {
         printf("[vault] auto-unlock: loading session...\n");
@@ -74,6 +82,26 @@ void LoadingScreen::handle_input(u32 /*kDown*/, touchPosition /*touch*/) {}
 
 void LoadingScreen::poll() {
     spinner_angle_ += 0.05f;
+
+    // Defer the worker until one frame has rendered: the first poll() only arms
+    // frame_ready_ and returns, so the loop draws a spinner frame before we spawn.
+    if (!worker_started_) {
+        if (!frame_ready_) {
+            frame_ready_ = true;
+            return;
+        }
+        printf("[loading] first frame rendered — spawning worker\n");
+        worker_thread_ = start_worker_thread(worker_entry, this);
+        if (!worker_thread_) {
+            printf("[loading] FATAL: start_worker_thread failed\n");
+            ctx_.result.success = false;
+            ctx_.result.error   = "worker thread create failed";
+            ctx_.done.store(true);
+        }
+        worker_started_ = true;
+        return;
+    }
+
     if (!handled_ && ctx_.done.load()) {
         on_done();
     }

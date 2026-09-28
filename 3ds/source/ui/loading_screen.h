@@ -41,6 +41,8 @@ private:
     size_t    keys_len_;
     LoadCtx   ctx_;
     Thread    worker_thread_;
+    bool      worker_started_;   // worker spawned yet? (deferred until 1 frame rendered)
+    bool      frame_ready_;      // has poll() let at least one frame render first?
     bool      handled_;
     float     spinner_angle_;
     void on_done();
