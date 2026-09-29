@@ -187,7 +187,7 @@ void ListScreen::draw_bottom(C3D_RenderTarget* target) {
     float bar_total_h = (rows > 0)
         ? (float)rows * ABTN_H + (float)(rows - 1) * ABTN_GAP_V
         : 0.0f;
-    float bar_y = footer_y - (float)SP_SM - bar_total_h;
+    float bar_y = footer_y - (float)SP_MD - bar_total_h;
 
     // Detail area: from DETAIL_TOP to bar_y - margin
     float detail_h = bar_y - (float)SP_SM - DETAIL_TOP;

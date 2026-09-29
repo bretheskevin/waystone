@@ -1,7 +1,6 @@
 #pragma once
 #include "list_screen.h"
 #include "session.h"
-#include "sync_worker.h"
 #include "saves.h"
 #include "icon_tex.h"
 #include <vector>
@@ -11,14 +10,11 @@ public:
     TitleListScreen(Session* session);
     TitleListScreen(Session* session, const std::vector<TitleInfo>& preloaded_titles);
     ~TitleListScreen();
-    void poll();
     void handle_input(u32 kDown, touchPosition touch);
 
 protected:
     // ListScreen hooks
     const char* screen_title()          { return "Your Saves"; }
-    float       status_area_height() const;
-    void        draw_top_status(C2D_TextBuf buf, float status_y);
     size_t      item_count()            { return titles_.size(); }
     float       row_height() const      { return 46.0f; }
     bool        fill_height() const     { return true; }
@@ -34,9 +30,6 @@ private:
 
     Session* session_;
     std::vector<TitleInfo> titles_;
-    SyncWorker* worker_;
-    std::string status_text_;
-    bool syncing_;
     std::vector<IconImage*> icon_cache_;
     Rect sync_all_btn_rect_;  // touch target for the bottom-screen Sync All button
 

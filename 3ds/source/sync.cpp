@@ -227,6 +227,74 @@ std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& titl
     return results;
 }
 
+std::vector<SaveLocation> resolve_save_locations(const WsVault* vault,
+                                                 const TitleInfo& title,
+                                                 bool* error) {
+    std::vector<SaveLocation> results;
+    if (error) *error = false;
+
+    printf("[history] resolve_save_locations: title=%s\n", title.name.c_str());
+
+    std::string raw_json = extract_save_json(title);
+    if (raw_json.empty()) {
+        printf("[history] resolve_save_locations: no local save data for %s\n",
+               title.name.c_str());
+        return results;
+    }
+
+    char* norm_json = ws_checkpoint_normalize("3ds", raw_json.c_str());
+    if (!norm_json) {
+        printf("[history] resolve_save_locations: ws_checkpoint_normalize failed: %s\n",
+               ws_last_error() ? ws_last_error() : "unknown");
+        if (error) *error = true;
+        return results;
+    }
+
+    std::vector<std::string> saves = json_split_array(norm_json);
+    ws_string_free(norm_json);
+    if (saves.empty()) {
+        printf("[history] resolve_save_locations: no saves after normalize for %s\n",
+               title.name.c_str());
+        return results;
+    }
+
+    std::string mtime = current_utc_time();
+    for (size_t si = 0; si < saves.size(); si++) {
+        std::string save_json = json_set_mtime(saves[si], mtime.c_str());
+
+        WsBuf zip = {nullptr, 0};
+        char* entry_json = ws_package(save_json.c_str(), &zip);
+        if (!entry_json) {
+            printf("[history] resolve_save_locations: ws_package failed save %zu: %s\n",
+                   si, ws_last_error() ? ws_last_error() : "unknown");
+            // zip not allocated when ws_package fails — do not free (mirrors scan_save_decision)
+            continue;
+        }
+
+        SaveLocation loc;
+        loc.raw_json  = raw_json;
+        loc.group_key = json_get_string(entry_json, "group_key");
+        ws_string_free(entry_json);
+        ws_buf_free(zip);
+
+        if (loc.group_key.empty()) {
+            printf("[history] resolve_save_locations: empty group_key for save %zu\n", si);
+            continue;
+        }
+
+        loc.base_path = make_base_path(vault, loc.group_key);
+        printf("[history] resolve_save_locations: save %zu group_key=%s base_path=%s\n",
+               si, loc.group_key.c_str(),
+               loc.base_path.empty() ? "(empty)" : loc.base_path.c_str());
+
+        results.push_back(loc);
+    }
+
+    printf("[history] resolve_save_locations: resolved %zu location(s) for %s\n",
+           results.size(), title.name.c_str());
+    return results;
+}
+
 int push_title(const WsVault* vault,
                const TitleInfo& title,
                const char* device_id,

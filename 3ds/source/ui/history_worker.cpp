@@ -1,6 +1,6 @@
 #include "history_worker.h"
 #include "worker_thread.h"
-#include "sync.h"           // scan_title, restore_remote_save, SaveDecision
+#include "sync.h"           // resolve_save_locations, restore_remote_save, SaveLocation
 #include "history_browse.h" // list_history
 #include <cstdio>
 #include <cstring>
@@ -77,11 +77,9 @@ void HistoryWorker::start_scan() {
 void HistoryWorker::scan_worker() {
     printf("[history] scanning for %s\n", title_.name.c_str());
 
-    WebDavCfg dav = session_->dav.as_cfg();
     bool had_error = false;
-    std::vector<SaveDecision> decisions =
-        scan_title(session_->vault, title_, session_->device_id.c_str(),
-                   0 /* NewestWins */, dav, &had_error);
+    std::vector<SaveLocation> locations =
+        resolve_save_locations(session_->vault, title_, &had_error);
 
     if (had_error) {
         printf("[history] normalize failed for %s\n", title_.name.c_str());
@@ -93,8 +91,8 @@ void HistoryWorker::scan_worker() {
         return;
     }
 
-    if (decisions.empty() || decisions[0].base_path.empty()) {
-        printf("[history] no save decision for %s\n", title_.name.c_str());
+    if (locations.empty() || locations[0].base_path.empty()) {
+        printf("[history] no save location for %s\n", title_.name.c_str());
         LightLock_Lock(&mu_);
         snprintf(status_buf_, sizeof(status_buf_), "No local save found.");
         LightLock_Unlock(&mu_);
@@ -103,9 +101,11 @@ void HistoryWorker::scan_worker() {
         return;
     }
 
-    base_path_ = decisions[0].base_path;
-    group_key_ = decisions[0].group_key;
-    raw_json_  = decisions[0].raw_json;
+    base_path_ = locations[0].base_path;
+    group_key_ = locations[0].group_key;
+    raw_json_  = locations[0].raw_json;
+
+    WebDavCfg dav = session_->dav.as_cfg();
 
     printf("[history] listing %s/history/\n", base_path_.c_str());
     LightLock_Lock(&mu_);

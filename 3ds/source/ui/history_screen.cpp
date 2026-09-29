@@ -50,13 +50,23 @@ void HistoryScreen::browse_start_restore(size_t index) {
 void HistoryScreen::draw_row(C2D_TextBuf buf, size_t i,
                               float x, float y, float w, float h, bool focused) {
     (void)focused; (void)h;
+    const char* ts  = items_[i].timestamp.c_str();
+    const char* dev = items_[i].device_id.c_str();
+
     draw_text(buf, x + (float)SP_MD, y + (float)SP_SM, 0.51f,
-              TEXT_BASE, CLR_TEXT, items_[i].timestamp.c_str());
-    float dw = text_width(buf, TEXT_SM, items_[i].device_id.c_str());
+              TEXT_BASE, CLR_TEXT, ts);
+
+    float tw    = text_width(buf, TEXT_BASE, ts);
+    float avail = w - (float)SP_MD - tw - (float)SP_MD - (float)SP_MD;
+    if (avail < 0.0f) avail = 0.0f;
+
+    std::string truncated = truncate_text_fit(buf, TEXT_SM, dev, avail);
+    float dw = text_width(buf, TEXT_SM, truncated.c_str());
+
     draw_text(buf, x + w - dw - (float)SP_MD,
               y + (float)SP_SM + 2.0f,
               0.51f, TEXT_SM, CLR_TEXT_HINT,
-              items_[i].device_id.c_str());
+              truncated.c_str());
 }
 
 void HistoryScreen::draw_selected_detail(C2D_TextBuf buf,

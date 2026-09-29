@@ -56,6 +56,25 @@ float draw_text_wrapped_centered(C2D_TextBuf buf, float cx, float y, float z, fl
     }
     return y;
 }
+std::string truncate_text_fit(C2D_TextBuf buf, float scale, const char* str, float max_w) {
+    static const char* ELLIPSIS = "\xe2\x80\xa6";
+    if (!str || str[0] == '\0') return std::string();
+    if (text_width(buf, scale, str) <= max_w) return std::string(str);
+    float ew     = text_width(buf, scale, ELLIPSIS);
+    float budget = max_w - ew;
+    std::string s(str);
+    if (budget > 0.0f) {
+        while (!s.empty() && text_width(buf, scale, s.c_str()) > budget) {
+            while (!s.empty() && (static_cast<unsigned char>(s.back()) & 0xC0) == 0x80)
+                s.resize(s.size() - 1);
+            if (!s.empty())
+                s.resize(s.size() - 1);
+        }
+    } else {
+        s.clear();
+    }
+    return s + ELLIPSIS;
+}
 void draw_spinner(C2D_TextBuf buf, float cx, float cy, float angle) {
     (void)buf;
     const int   N      = 4;

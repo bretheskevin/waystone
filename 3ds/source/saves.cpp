@@ -210,6 +210,7 @@ static bool is_system_excluded(u64 title_id) {
         case 0x0000AC02:
         case 0x0000B402:
         case 0x00021A00:  // Garbage
+        case 0x00022800:  // StreetPass Mii Plaza (manually excluded)
             return true;
     }
     u32 high = static_cast<u32>(title_id >> 32);

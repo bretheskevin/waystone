@@ -61,4 +61,22 @@ std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& titl
                                      const char* device_id, int policy,
                                      const WebDavCfg& dav, bool* error = 0);
 
+// Lightweight result of resolving a save's remote location from local data only.
+// No network I/O — unlike scan_title, skips the per-save heads PROPFIND/GET/decrypt.
+// Used by the History browse view to open the remote history listing.
+struct SaveLocation {
+    std::string base_path;  // obfuscated remote base path (empty if make_base_path failed)
+    std::string group_key;
+    std::string raw_json;   // raw extracted local save JSON (same for all entries; needed for restore)
+};
+
+// Resolve the remote base_path/group_key for a title's saves using LOCAL data only:
+// extract_save_json -> ws_checkpoint_normalize -> json_split_array -> per save:
+// ws_package -> group_key -> make_base_path. NO network.
+// Empty vector = no local saves. If a normalize failure occurs and error is non-null,
+// *error is set to true.
+std::vector<SaveLocation> resolve_save_locations(const WsVault* vault,
+                                                 const TitleInfo& title,
+                                                 bool* error = 0);
+
 #endif

@@ -24,6 +24,7 @@ extern "C" {
 #include "ui/setup_screen.h"
 #include "ui/unlock_screen.h"
 #include "ui/loading_screen.h"
+#include "ui/worker_thread.h"
 #include "net_status.h"
 #include "ui/no_internet_screen.h"
 
@@ -45,6 +46,13 @@ int main(int argc, char* argv[]) {
     C3D_Init(C3D_DEFAULT_CMDBUF_SIZE);
     C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
     C2D_Prepare();
+
+    if (is_new_3ds()) {
+        osSetSpeedupEnable(true);
+        printf("[sys] model=New3DS speedup=on\n");
+    } else {
+        printf("[sys] model=Old3DS speedup=n/a\n");
+    }
 
     if (!SOC_buffer) { printf("FATAL: SOC buffer alloc failed\n"); goto cleanup; }
     if (psInit() != 0) { printf("FATAL: psInit failed\n"); goto cleanup; }

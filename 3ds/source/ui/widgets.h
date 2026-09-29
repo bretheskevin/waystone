@@ -20,6 +20,11 @@ float draw_text_wrapped_centered(C2D_TextBuf buf, float cx, float y, float z, fl
 // Animated 4-dot "working" spinner centered at (cx, cy); advance `angle` each frame.
 void draw_spinner(C2D_TextBuf buf, float cx, float cy, float angle);
 float text_width(C2D_TextBuf buf, float scale, const char* str);
+// Returns str truncated on UTF-8 codepoint boundaries with a trailing "…" so that the result's
+// rendered width at `scale` fits within max_w. Returns str unchanged if it already fits.
+// Edge case: if max_w is less than the rendered width of "…" itself, returns "…" alone (which
+// will exceed max_w); callers should ensure max_w is at least a few pixels.
+std::string truncate_text_fit(C2D_TextBuf buf, float scale, const char* str, float max_w);
 float text_height(C2D_TextBuf buf, float scale, const char* str);
 void draw_rounded_rect(float x, float y, float z, float w, float h, float radius, u32 color);
 Rect draw_button(C2D_TextBuf buf, float x, float y, float w, float h, const char* label, ButtonStyle style, bool focused);

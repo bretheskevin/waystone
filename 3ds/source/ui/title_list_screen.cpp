@@ -3,6 +3,7 @@
 #include "conflict_screen.h"
 #include "snapshot_screen.h"
 #include "history_screen.h"
+#include "sync_screen.h"
 #include "no_internet_screen.h"
 #include "net_status.h"
 #include "app.h"
@@ -17,7 +18,7 @@ void TitleListScreen::init_icon_cache() {
 }
 
 TitleListScreen::TitleListScreen(Session* session)
-    : session_(session), worker_(0), syncing_(false), sync_all_btn_rect_()
+    : session_(session), sync_all_btn_rect_()
 {
     printf("[title_list] enumerating titles...\n");
     {
@@ -26,70 +27,23 @@ TitleListScreen::TitleListScreen(Session* session)
     }
     printf("[title_list] found %zu titles\n", titles_.size());
     init_icon_cache();
-    status_text_ = "";
 }
 
 TitleListScreen::TitleListScreen(Session* session,
                                  const std::vector<TitleInfo>& preloaded_titles)
-    : session_(session), worker_(0), syncing_(false), sync_all_btn_rect_()
+    : session_(session), sync_all_btn_rect_()
 {
     titles_ = preloaded_titles;
     init_icon_cache();
-    status_text_ = "";
 }
 
 TitleListScreen::~TitleListScreen() {
     for (size_t i = 0; i < icon_cache_.size(); i++)
         free_icon_image(icon_cache_[i]);
     icon_cache_.clear();
-    if (worker_) { worker_->join(); delete worker_; }
-}
-
-// ---- poll (SyncWorker) ----
-
-void TitleListScreen::poll() {
-    if (!worker_ || !syncing_) return;
-    SyncPhase ph = worker_->phase();
-    status_text_ = worker_->status();
-    if (ph == SyncPhase::Done || ph == SyncPhase::Error) {
-        syncing_ = false;
-        printf("[title_list] sync finished: %s\n",
-               ph == SyncPhase::Done ? "done" : "error");
-    }
 }
 
 // ---- ListScreen hooks ----
-
-float TitleListScreen::status_area_height() const {
-    if (worker_ && syncing_) return 50.0f;   // status + counters + progress bar
-    if (!status_text_.empty()) return 20.0f;  // post-sync result / error text
-    return 0.0f;
-}
-
-void TitleListScreen::draw_top_status(C2D_TextBuf buf, float sy) {
-    u32 status_color = CLR_SYNC;
-    if (worker_) {
-        SyncPhase ph = worker_->phase();
-        if (ph == SyncPhase::Error) status_color = CLR_ERROR;
-        else if (ph == SyncPhase::Done) status_color = CLR_SUCCESS;
-    }
-    draw_text_centered(buf, 0, sy, 0.5f, TEXT_BASE, status_color,
-                       status_text_.c_str(), (float)SCREEN_TOP_W);
-
-    if (worker_ && worker_->phase() == SyncPhase::Running) {
-        int total = worker_->total_count();
-        int done  = worker_->pushed_count() + worker_->restored_count();
-        float progress = (total > 0) ? (float)done / (float)(total * 2) : 0.0f;
-        char prog_text[64];
-        snprintf(prog_text, sizeof(prog_text), "Pushed: %d  Restored: %d",
-                 worker_->pushed_count(), worker_->restored_count());
-        draw_text_centered(buf, 0, sy + 18.0f, 0.5f, TEXT_SM,
-                           CLR_NEUTRAL_400, prog_text, (float)SCREEN_TOP_W);
-        draw_progress_bar(50.0f, sy + 34.0f,
-                          (float)SCREEN_TOP_W - 100.0f, 8.0f,
-                          progress, CLR_SYNC, CLR_NEUTRAL_200);
-    }
-}
 
 void TitleListScreen::draw_row(C2D_TextBuf buf, size_t i,
                                 float x, float y, float w, float h, bool focused) {
@@ -120,17 +74,7 @@ void TitleListScreen::draw_row(C2D_TextBuf buf, size_t i,
     float max_text_w = x + w - text_x - (float)SP_MD;
     float text_y     = y + (h - text_height(buf, TEXT_BASE, "A")) / 2.0f;
 
-    std::string display = titles_[i].name;
-    if (text_width(buf, TEXT_BASE, display.c_str()) > max_text_w) {
-        while (!display.empty() &&
-               text_width(buf, TEXT_BASE, (display + "...").c_str()) > max_text_w) {
-            display.resize(display.size() - 1);
-            while (!display.empty() &&
-                   (static_cast<unsigned char>(display.back()) & 0xC0) == 0x80)
-                display.resize(display.size() - 1);
-        }
-        display += "...";
-    }
+    std::string display = truncate_text_fit(buf, TEXT_BASE, titles_[i].name.c_str(), max_text_w);
     draw_text(buf, text_x, text_y, 0.51f, TEXT_BASE, CLR_TEXT, display.c_str());
 }
 
@@ -140,7 +84,7 @@ void TitleListScreen::draw_detail(C2D_TextBuf buf, float area_y, float area_h) {
     static const float BTN_H = 28.0f;
     float btn_x = ((float)SCREEN_BOT_W - BTN_W) / 2.0f;
     float btn_y = area_y + (float)SP_SM;
-    bool enabled = !syncing_ && !titles_.empty();
+    bool enabled = !titles_.empty();
     if (enabled) {
         sync_all_btn_rect_ = draw_button(buf, btn_x, btn_y, BTN_W, BTN_H,
                                          "Sync All", ButtonStyle::PRIMARY, /*focused=*/false);
@@ -157,10 +101,10 @@ std::vector<Action> TitleListScreen::actions() {
     bool has_sel = !titles_.empty() && cursor_ < titles_.size();
     bool has_any = !titles_.empty();
     std::vector<Action> a;
-    a.push_back({KEY_A, "A", syncing_ ? "Syncing..." : "Sync Game",
-                 ACT_SYNC, !syncing_ && has_sel, ButtonStyle::PRIMARY});
-    a.push_back({KEY_SELECT, "Sel", "Sync All",
-                 ACT_SYNC_ALL, !syncing_ && has_any, ButtonStyle::SECONDARY});
+    a.push_back({KEY_A, "A", "Sync Game",
+                 ACT_SYNC, has_sel, ButtonStyle::PRIMARY});
+    a.push_back({KEY_SELECT, "sel.", "Sync All",
+                 ACT_SYNC_ALL, has_any, ButtonStyle::SECONDARY});
     a.push_back({KEY_X, "X", "Conflicts",
                  ACT_CONFLICTS, true, ButtonStyle::SECONDARY});
     a.push_back({KEY_Y, "Y", "Settings",
@@ -211,12 +155,11 @@ void TitleListScreen::handle_input(u32 kDown, touchPosition touch) {
     // fires on the same tap, but let kDown through to the base class.
     if (touch.px != 0 || touch.py != 0) {
         if (sync_all_btn_rect_.contains((float)touch.px, (float)touch.py)) {
-            if (!syncing_ && !titles_.empty()) {
+            if (!titles_.empty()) {
                 printf("[ui] Sync All button tapped\n");
                 start_sync_or_gate(titles_);
             } else {
-                printf("[ui] Sync All button tapped (no-op: %s)\n",
-                       syncing_ ? "syncing in progress" : "no titles");
+                printf("[ui] Sync All button tapped (no-op: no titles)\n");
             }
             touch.px = 0;
             touch.py = 0;
@@ -239,13 +182,9 @@ void TitleListScreen::start_sync_or_gate(std::vector<TitleInfo> titles) {
 }
 
 void TitleListScreen::start_sync(std::vector<TitleInfo> titles) {
-    if (syncing_) return;
-    if (titles.empty()) { status_text_ = "No titles to sync"; return; }
-    syncing_ = true;
-    status_text_ = "Starting sync...";
-    printf("[sync] starting sync for %zu title(s)\n", titles.size());
-    if (worker_) { worker_->join(); delete worker_; }
-    worker_ = new SyncWorker(session_->vault, session_->device_id,
-                             session_->dav.as_cfg(), titles);
-    worker_->start();
+    if (titles.empty()) { printf("[sync] no titles to sync\n"); return; }
+    printf("[sync] opening modal loader for %zu title(s)\n", titles.size());
+    // Push a modal loader that owns the worker and blocks all input until the
+    // sync finishes — the title list underneath is neither polled nor drawn.
+    App::instance().push_screen(new SyncScreen(session_, titles));
 }
