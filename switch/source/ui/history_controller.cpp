@@ -1,6 +1,7 @@
 #include "history_controller.h"
 #include "sync.h"
 #include "json.h"
+#include "snapshot_browse.h" // human_timestamp
 #include <cstdio>
 
 extern "C" {
@@ -103,18 +104,29 @@ void HistoryController::start_restore(size_t index) {
     if (thread_.joinable()) thread_.join();
     phase_.store(BrowsePhase::Restoring);
     { std::lock_guard<std::mutex> lk(mu_);
-      status_ = "Restoring " + entry.timestamp + "..."; }
+      status_ = "Restoring " + human_timestamp(entry.timestamp) + "..."; }
     thread_ = std::thread(&HistoryController::restore_worker, this,
                           std::move(entry), index);
 }
 
 void HistoryController::restore_worker(HistoryEntry entry, size_t index) {
     (void)index;
-    printf("[history] restoring hash=%s for %s\n",
-           entry.hash.substr(0, 12).c_str(), title_.name.c_str());
-
     WebDavCfg dav = session_->dav.as_cfg();
-    int rc = restore_remote_save(session_->vault, entry.hash,
+
+    // Hash is resolved lazily (list_history only did a single PROPFIND), so fetch
+    // this one entry's head now to learn which blob to restore.
+    std::string hash = fetch_history_hash(session_->vault, entry, dav);
+    if (hash.empty()) {
+        printf("[history] could not resolve hash for %s\n", title_.name.c_str());
+        { std::lock_guard<std::mutex> lk(mu_); status_ = "Could not read version."; }
+        phase_.store(BrowsePhase::Error);
+        running_.store(false);
+        return;
+    }
+
+    printf("[history] restoring hash=%.12s for %s\n", hash.c_str(), title_.name.c_str());
+
+    int rc = restore_remote_save(session_->vault, hash,
                                  base_path_, group_key_, raw_json_,
                                  title_.title_id, session_->uid, dav);
     if (rc != 0) {

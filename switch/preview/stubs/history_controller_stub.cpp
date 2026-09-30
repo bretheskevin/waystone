@@ -34,9 +34,11 @@ void HistoryController::start_scan() {
     {
         std::lock_guard<std::mutex> lk(mu_);
         entries_.clear();
-        entries_.push_back({"20260915T143022Z", "switch-abc1", "a1b2c3d4e5f6a1b2", "2026-09-15T14:30:22Z"});
-        entries_.push_back({"20260914T091500Z", "3ds-def2",    "f6e5d4c3b2a1f6e5", "2026-09-14T09:15:00Z"});
-        entries_.push_back({"20260913T200045Z", "switch-abc1", "1234567890abcdef", "2026-09-13T20:00:45Z"});
+        // Fields: {timestamp, device_id, get_path, hash} — hash stays empty until
+        // resolved lazily at restore, mirroring the real list_history.
+        entries_.push_back({"20260915T143022Z", "switch-abc1", "", ""});
+        entries_.push_back({"20260914T091500Z", "3ds-def2",    "", ""});
+        entries_.push_back({"20260913T200045Z", "switch-abc1", "", ""});
         status_ = "3 history version(s) found";
     }
     phase_.store(BrowsePhase::Ready);

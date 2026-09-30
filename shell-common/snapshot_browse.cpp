@@ -44,6 +44,19 @@ std::string history_timestamp() {
     return buf;
 }
 
+std::string human_timestamp(const std::string& ts) {
+    std::string d = ts;
+    if (!d.empty() && d.back() == 'Z') d.pop_back();
+    size_t dot = d.find('.');
+    if (dot != std::string::npos) d.resize(dot);
+    if (d.size() < 15 || d[8] != 'T') return ts;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%.4s-%.2s-%.2s %.2s:%.2s",
+             d.c_str(), d.c_str() + 4, d.c_str() + 6, d.c_str() + 9,
+             d.c_str() + 11);
+    return buf;
+}
+
 std::string human_size(unsigned long long bytes) {
     char buf[32];
     if (bytes >= 1024ULL * 1024ULL) {

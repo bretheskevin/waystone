@@ -113,7 +113,7 @@ void SnapshotWorker::start_restore(size_t index) {
     {
         LightLock_Lock(&mu_);
         snprintf(status_buf_, sizeof(status_buf_),
-                 "Restoring %s...", entry.timestamp.c_str());
+                 "Restoring %s...", human_timestamp(entry.timestamp).c_str());
         LightLock_Unlock(&mu_);
     }
 

@@ -237,7 +237,9 @@ fn render_history_screen(frame: &mut Frame, app: &App) {
                             Span::styled(hash_short, Style::default().fg(theme::SYNC)),
                             Span::raw(format!(
                                 "  {}  {}  mtime={}",
-                                entry.timestamp, entry.device_id, entry.mtime
+                                helpers::human_timestamp(&entry.timestamp),
+                                entry.device_id,
+                                entry.mtime
                             )),
                         ]),
                     ]
@@ -343,7 +345,10 @@ fn render_snapshots_screen(frame: &mut Frame, app: &App) {
                         )]),
                         Line::from(vec![
                             Span::raw("  "),
-                            Span::styled(&entry.timestamp, Style::default().fg(theme::SYNC)),
+                            Span::styled(
+                                helpers::human_timestamp(&entry.timestamp),
+                                Style::default().fg(theme::SYNC),
+                            ),
                             Span::raw(format!(
                                 "  {} files  {}",
                                 entry.file_count,

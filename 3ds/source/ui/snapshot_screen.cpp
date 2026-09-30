@@ -46,8 +46,9 @@ void SnapshotScreen::browse_start_restore(size_t index) {
 void SnapshotScreen::draw_row(C2D_TextBuf buf, size_t i,
                                float x, float y, float w, float h, bool focused) {
     (void)focused; (void)h;
+    std::string ts = human_timestamp(items_[i].timestamp);
     draw_text(buf, x + (float)SP_MD, y + (float)SP_SM, 0.51f,
-              TEXT_BASE, CLR_TEXT, items_[i].timestamp.c_str());
+              TEXT_BASE, CLR_TEXT, ts.c_str());
     std::string sz = human_size(items_[i].total_bytes);
     float sw = text_width(buf, TEXT_SM, sz.c_str());
     draw_text(buf, x + w - sw - (float)SP_MD,
@@ -70,7 +71,7 @@ void SnapshotScreen::draw_selected_detail(C2D_TextBuf buf,
     float y = area_y + (float)SP_SM;
 
     draw_text_centered_fit(buf, 0, y, 0.5f, TEXT_LG, CLR_TEXT,
-                           se.timestamp.c_str(),
+                           human_timestamp(se.timestamp).c_str(),
                            (float)SCREEN_BOT_W, TEXT_BASE);
     y += 18.0f;
 

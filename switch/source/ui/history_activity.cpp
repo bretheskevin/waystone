@@ -1,4 +1,5 @@
 #include "history_activity.h"
+#include "snapshot_browse.h" // human_timestamp
 #include "borealis_focus.h"
 #include <cstdio>
 
@@ -128,9 +129,9 @@ void HistoryActivity::rebuild_list() {
     for (size_t i = 0; i < items.size(); i++) {
         const auto& e = items[i];
         char buf[256];
-        std::string hash_short = e.hash.size() > 8 ? e.hash.substr(0, 8) : e.hash;
-        snprintf(buf, sizeof(buf), "%s  |  %s  |  %s",
-                 e.timestamp.c_str(), e.device_id.c_str(), hash_short.c_str());
+        snprintf(buf, sizeof(buf), "%s  |  %s",
+                 human_timestamp(e.timestamp).c_str(),
+                 e.device_id.c_str());
 
         auto* row = new brls::Box(brls::Axis::ROW);
         row->setFocusable(true);

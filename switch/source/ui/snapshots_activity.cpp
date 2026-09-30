@@ -1,5 +1,5 @@
 #include "snapshots_activity.h"
-#include "snapshot_browse.h" // human_size
+#include "snapshot_browse.h" // human_size, human_timestamp
 #include "borealis_focus.h"
 #include <cstdio>
 
@@ -152,7 +152,8 @@ void SnapshotsActivity::rebuild_list() {
         char buf[256];
         std::string sz = human_size(snap.total_bytes);
         snprintf(buf, sizeof(buf), "%s  |  %zu file(s), %s",
-                 snap.timestamp.c_str(), snap.file_count, sz.c_str());
+                 human_timestamp(snap.timestamp).c_str(),
+                 snap.file_count, sz.c_str());
 
         auto* row = new brls::Box(brls::Axis::ROW);
         row->setFocusable(true);

@@ -2,6 +2,7 @@
 #include "worker_thread.h"
 #include "sync.h"           // resolve_save_locations, restore_remote_save, SaveLocation
 #include "history_browse.h" // list_history
+#include "snapshot_browse.h" // human_timestamp
 #include <cstdio>
 #include <cstring>
 
@@ -146,7 +147,7 @@ void HistoryWorker::start_restore(size_t index) {
     {
         LightLock_Lock(&mu_);
         snprintf(status_buf_, sizeof(status_buf_),
-                 "Restoring %s...", entry.timestamp.c_str());
+                 "Restoring %s...", human_timestamp(entry.timestamp).c_str());
         LightLock_Unlock(&mu_);
     }
 
@@ -172,13 +173,24 @@ void HistoryWorker::restore_entry(void* arg) {
 
 void HistoryWorker::restore_worker(const HistoryEntry& entry, size_t index) {
     (void)index;
-    printf("[history] restoring hash=%s for %s\n",
-           entry.hash.size() > 12 ? entry.hash.substr(0, 12).c_str()
-                                  : entry.hash.c_str(),
-           title_.name.c_str());
-
     WebDavCfg dav = session_->dav.as_cfg();
-    int rc = restore_remote_save(session_->vault, entry.hash,
+
+    // Hash is resolved lazily (list_history only did a single PROPFIND), so fetch
+    // this one entry's head now to learn which blob to restore.
+    std::string hash = fetch_history_hash(session_->vault, entry, dav);
+    if (hash.empty()) {
+        printf("[history] could not resolve hash for %s\n", title_.name.c_str());
+        LightLock_Lock(&mu_);
+        snprintf(status_buf_, sizeof(status_buf_), "Could not read version.");
+        LightLock_Unlock(&mu_);
+        phase_.store((int)BrowsePhase::Error);
+        running_.store(false);
+        return;
+    }
+
+    printf("[history] restoring hash=%.12s for %s\n", hash.c_str(), title_.name.c_str());
+
+    int rc = restore_remote_save(session_->vault, hash,
                                  base_path_, group_key_, raw_json_,
                                  title_, dav);
     if (rc != 0) {

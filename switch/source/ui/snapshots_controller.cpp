@@ -65,7 +65,7 @@ void SnapshotsController::start_restore(size_t index) {
     if (thread_.joinable()) thread_.join();
     phase_.store(BrowsePhase::Restoring);
     { std::lock_guard<std::mutex> lk(mu_);
-      status_ = "Restoring " + entry.timestamp + "..."; }
+      status_ = "Restoring " + human_timestamp(entry.timestamp) + "..."; }
     thread_ = std::thread(&SnapshotsController::restore_worker, this,
                           std::move(entry), index);
 }

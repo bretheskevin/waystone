@@ -187,6 +187,31 @@ pub fn list_snapshots(group_key: &str) -> Result<Vec<SnapshotEntry>> {
     list_snapshots_in(&backups_root, group_key)
 }
 
+/// Reformat a compact UTC timestamp ("YYYYMMDDTHHMMSS[.fff]Z") as
+/// "YYYY-MM-DD HH:MM" for display. Render-only: the compact form is kept for
+/// storage and lexicographic sorting. Unknown shapes are returned unchanged.
+pub fn human_timestamp(ts: &str) -> String {
+    let mut d = ts.strip_suffix('Z').unwrap_or(ts);
+    if let Some((head, _)) = d.split_once('.') {
+        d = head;
+    }
+    let b = d.as_bytes();
+    // Reject non-ASCII before slicing at fixed byte offsets — a stray multibyte
+    // char (e.g. garbage filename from a backup dir listing) would panic on a
+    // non-char-boundary slice.
+    if b.len() < 15 || b[8] != b'T' || !b[..15].iter().all(|c| c.is_ascii()) {
+        return ts.to_string();
+    }
+    format!(
+        "{}-{}-{} {}:{}",
+        &d[0..4],
+        &d[4..6],
+        &d[6..8],
+        &d[9..11],
+        &d[11..13]
+    )
+}
+
 pub fn human_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * 1024;
@@ -283,6 +308,26 @@ pub fn restore_save_from_blob(
 mod tests {
     use super::*;
     use waystone_core::model::{Confidence, GameRef, NormalizedSave, SaveId, SaveKind, SystemId};
+
+    #[test]
+    fn human_timestamp_formats_compact_and_millis() {
+        assert_eq!(human_timestamp("20260928T124245Z"), "2026-09-28 12:42");
+        assert_eq!(human_timestamp("20260907T143100.000Z"), "2026-09-07 14:31");
+    }
+
+    #[test]
+    fn human_timestamp_passes_through_unknown_shapes() {
+        assert_eq!(human_timestamp("garbage"), "garbage");
+        assert_eq!(human_timestamp(""), "");
+    }
+
+    #[test]
+    fn human_timestamp_passes_through_non_ascii() {
+        // A multibyte char inside the digit run must not panic on a
+        // non-char-boundary slice — return the raw value unchanged.
+        let ts = "20260928T12\u{00E9}45Z";
+        assert_eq!(human_timestamp(ts), ts);
+    }
 
     fn make_test_save() -> NormalizedSave {
         NormalizedSave {
