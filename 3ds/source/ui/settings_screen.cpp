@@ -7,6 +7,8 @@
 #include "session_store.h"
 #include "wsconfig.h"
 #include "saves.h"
+#include "version.h"
+#include "updater.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -15,16 +17,104 @@ extern "C" {
 #include "waystone.h"
 }
 
+static std::string check_error_message(int rc) {
+    switch (rc) {
+    case UP_NET:      return "No connection — couldn't check for updates";
+    case UP_GH:       return "GitHub error or rate-limited — try again later";
+    case UP_NO_ASSET: return "Latest release has no .3dsx build";
+    default:          return "Unexpected GitHub response";
+    }
+}
+
+static std::string install_error_message(int rc) {
+    switch (rc) {
+    case UP_NO_SELF: return "Relaunch from SD card to enable updates";
+    case UP_NET:     return "Download failed — connection lost";
+    default:         return "SD write failed";
+    }
+}
+
 SettingsScreen::SettingsScreen(Session* session)
-    : session_(session), cursor_(0) {}
+    : session_(session),
+      worker_(new UpdateWorker()),
+      cursor_(0),
+      phase_(UpdatePhase::Idle),
+      last_phase_(UpdatePhase::Idle),
+      confirm_update_(false),
+      update_cancelled_(false),
+      install_started_(false) {}
+
+SettingsScreen::~SettingsScreen() {
+    // Only join if we still own the worker (not detached by handle_input B).
+    if (worker_) { worker_->request_cancel(); worker_->join(); delete worker_; }
+}
+
+void SettingsScreen::poll() {
+    if (!worker_) return;
+    phase_ = worker_->phase();
+
+    // Live progress while phases run.
+    if (phase_ == UpdatePhase::Checking) {
+        status_text_ = "Checking for updates...";
+    } else if (phase_ == UpdatePhase::Downloading) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "Downloading... %d%%",
+                 worker_->progress_percent());
+        status_text_ = buf;
+    }
+
+    // ---- Finished a check ----
+    if (last_phase_ == UpdatePhase::Checking &&
+        (phase_ == UpdatePhase::Done || phase_ == UpdatePhase::Error)) {
+        int rc = worker_->check_rc();
+        if (rc == UP_OK) {
+            std::string ver = worker_->latest_version();
+            if (version_newer(ver.c_str(), WS_APP_VERSION)) {
+                pending_ver_ = ver;
+                pending_url_ = worker_->asset_url();
+                confirm_update_ = true;
+                status_text_ = "Update available: v" + ver;
+                printf("[update] newer version available: v%s\n", ver.c_str());
+            } else {
+                status_text_ = "Up to date (v" + ver + ")";
+            }
+        } else {
+            status_text_ = check_error_message(rc);
+            printf("[update] check failed rc=%d\n", rc);
+        }
+    }
+
+    // ---- Finished an install ----
+    if (install_started_ && last_phase_ == UpdatePhase::Downloading &&
+        (phase_ == UpdatePhase::Done || phase_ == UpdatePhase::Error)) {
+        int rc = worker_->install_rc();
+        if (rc == UP_OK) {
+            status_text_ = "Updated to v" + pending_ver_ + ". Restart to apply.";
+            printf("[update] install succeeded\n");
+        } else {
+            status_text_ = install_error_message(rc);
+            printf("[update] install failed rc=%d\n", rc);
+        }
+    }
+
+    last_phase_ = phase_;
+}
 
 void SettingsScreen::draw_top(C3D_RenderTarget* target) {
     (void)target;
     C2D_TextBuf buf = App::instance().text_buf();
-    draw_text_centered(buf, 0, 10.0f, 0.5f, TEXT_SM, CLR_NEUTRAL_400, "Waystone", (float)SCREEN_TOP_W);
+    char header[64];
+    snprintf(header, sizeof(header), "Waystone v%s", WS_APP_VERSION);
+    draw_text_centered(buf, 0, 10.0f, 0.5f, TEXT_SM, CLR_NEUTRAL_400, header, (float)SCREEN_TOP_W);
     draw_text_centered(buf, 0, 30.0f, 0.5f, TEXT_XL, CLR_TEXT, "Settings", (float)SCREEN_TOP_W);
     if (!status_text_.empty()) {
-        draw_text_centered(buf, 0, 80.0f, 0.5f, TEXT_BASE, CLR_NEUTRAL_400, status_text_.c_str(), (float)SCREEN_TOP_W);
+        u32 clr = CLR_NEUTRAL_400;
+        if (phase_ == UpdatePhase::Error) clr = CLR_ERROR;
+        else if (phase_ == UpdatePhase::Done && !confirm_update_ && !update_cancelled_)
+            clr = CLR_SUCCESS;
+        else if (phase_ == UpdatePhase::Checking ||
+                 phase_ == UpdatePhase::Downloading) clr = CLR_SYNC;
+        draw_text_centered(buf, 0, 80.0f, 0.5f, TEXT_BASE, clr, status_text_.c_str(), (float)SCREEN_TOP_W);
     }
 }
 
@@ -36,15 +126,29 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
     float row_h = 28.0f;
     float y = (float)SP_MD;
 
+    // ---- Confirm banner replaces the row list while deciding ----
+    if (confirm_update_) {
+        char line[128];
+        snprintf(line, sizeof(line), "v%s available", pending_ver_.c_str());
+        draw_confirm_banner(buf, y, 150.0f,
+                            line,
+                            "A: Update now   B: Cancel",
+                            0,
+                            56.0f);
+        draw_footer_hint(buf, "A: Update now  B: Cancel");
+        return;
+    }
+
     const char* policy_str = (session_->config.conflict_policy == WsConflictPolicy::Prompt)
         ? "Prompt" : "Newest Wins";
-    char row_labels[6][128];
+    char row_labels[7][128];
     snprintf(row_labels[0], sizeof(row_labels[0]), "Server: %s", session_->config.server_url.c_str());
     snprintf(row_labels[1], sizeof(row_labels[1]), "Username: %s", session_->config.username.c_str());
     snprintf(row_labels[2], sizeof(row_labels[2]), "Conflict: %s", policy_str);
     snprintf(row_labels[3], sizeof(row_labels[3]), "Safety Backup: %s", session_->config.safety_backup ? "ON" : "OFF");
-    snprintf(row_labels[4], sizeof(row_labels[4]), "Save");
-    snprintf(row_labels[5], sizeof(row_labels[5]), "Log out");
+    snprintf(row_labels[4], sizeof(row_labels[4]), "Check for updates");
+    snprintf(row_labels[5], sizeof(row_labels[5]), "Save");
+    snprintf(row_labels[6], sizeof(row_labels[6]), "Log out");
 
     for (size_t i = 0; i < 4; i++) {
         bool focused = (cursor_ == i);
@@ -65,7 +169,7 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
     for (size_t i = 4; i < NUM_ROWS; i++) {
         bool focused = (cursor_ == i);
         u32 bg = focused ? CLR_PRIMARY_50 : CLR_CARD_BG;
-        u32 text_color = (i == 5) ? CLR_ERROR : CLR_TEXT;
+        u32 text_color = (i == 6) ? CLR_ERROR : CLR_TEXT;
         if (focused) {
             draw_rounded_rect(x - 1, y - 1, 0.49f, w + 2, row_h + 2, RAD_SM + 1, CLR_ACCENT);
         }
@@ -79,9 +183,33 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
 
 void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
     (void)touch;
+
+    // ---- Confirm mode (update now?) ----
+    if (confirm_update_) {
+        if (kDown & KEY_A) {
+            printf("[update] confirmed: installing v%s\n", pending_ver_.c_str());
+            confirm_update_ = false;
+            update_cancelled_ = false;
+            install_started_ = true;
+            status_text_ = "Downloading...";
+            last_phase_ = UpdatePhase::Idle;  // re-arm transition detection
+            worker_->start_install(pending_url_);
+        } else if (kDown & KEY_B) {
+            printf("[update] update cancelled\n");
+            confirm_update_ = false;
+            update_cancelled_ = true;  // keep "Update cancelled" out of the success color
+            status_text_ = "Update cancelled";
+        }
+        return;
+    }
+
     if (kDown & KEY_DUP)   { cursor_ = (cursor_ == 0) ? NUM_ROWS - 1 : cursor_ - 1; }
     if (kDown & KEY_DDOWN) { cursor_ = (cursor_ + 1) % NUM_ROWS; }
-    if (kDown & KEY_B) { App::instance().pop_screen(); return; }
+    if (kDown & KEY_B) {
+        reap_worker(worker_);  // instant pop: dtor never joins a live worker
+        App::instance().pop_screen();
+        return;
+    }
     if (kDown & KEY_A) {
         switch (cursor_) {
             case 0: {
@@ -112,13 +240,29 @@ void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
                 break;
             }
             case 4: {
+                printf("[update] check requested from settings\n");
+                install_started_ = false;
+                confirm_update_ = false;
+                update_cancelled_ = false;
+                pending_ver_.clear();
+                pending_url_.clear();
+                status_text_ = "Checking for updates...";
+                last_phase_ = UpdatePhase::Idle;  // re-arm transition detection
+                phase_ = UpdatePhase::Checking;
+                worker_->start_check();
+                break;
+            }
+            case 5: {
                 if (wsconfig_save(session_->config, session_->config_path.c_str()))
                     status_text_ = "Settings saved";
                 else
                     status_text_ = "Failed to save settings";
                 break;
             }
-            case 5: {
+            case 6: {
+                // set_screen/pop_screen below delete this screen; detach first so
+                // ~SettingsScreen never joins a running worker on the render thread.
+                reap_worker(worker_);
                 session_store_clear();
                 if (session_->vault) { ws_vault_free(session_->vault); session_->vault = 0; }
                 zeroize_string(session_->dav.pass);

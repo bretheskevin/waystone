@@ -181,20 +181,7 @@ void ConflictScreen::on_back() {
     // ---- Deferred-cancel: detach worker so B pops instantly ----
     // ~ConflictScreen() would otherwise join() on the render thread,
     // freezing the UI until the in-flight title's network scan returns.
-    // Instead we cancel, hand the worker to App, and delete it once its
-    // thread stops (join() is then immediate). worker_=0 keeps the
-    // destructor hands-off.
-    if (worker_) {
-        ConflictWorker* w = worker_;
-        worker_ = 0;
-        w->request_cancel();
-        App::instance().defer_reap([w]() {
-            if (w->is_running()) return false;
-            printf("[conflict] reaped detached worker\n");
-            delete w;
-            return true;
-        });
-    }
+    reap_worker(worker_);
     printf("[conflict] popping screen\n");
     App::instance().pop_screen();
 }

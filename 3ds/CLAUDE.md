@@ -101,3 +101,17 @@ https://libctru.devkitpro.org/swkbd_8h_source.html before using it.
 - Verify romfs (`cacert.pem`) via the packaging log; `waystone.h` must stay unchanged
   (`git diff --stat ffi/include/waystone.h` empty). Local Docker images get GC-pruned (exit 125 = image
   gone) — rebuild from the Dockerfile.
+
+### Releasing
+
+Releases are cut by pushing a version tag — the GitHub Actions workflow `.github/workflows/release.yml`
+(builds inside `devkitpro/devkitarm`, same toolchain as the Docker image) creates the release and attaches
+the built `waystone-3ds-spike.3dsx`:
+
+1. Bump `WS_APP_VERSION` in `3ds/source/version.h` and commit.
+2. `git tag vX.Y.Z` (must match the version baked into the binary).
+3. `git push origin vX.Y.Z` — the workflow builds and publishes the release.
+4. Verify on the GitHub release page that the attached asset's name ends in `.3dsx` — the in-app
+   updater downloads the release asset by that suffix.
+
+Note: the repo must be **public** — the updater queries the GitHub releases API unauthenticated.

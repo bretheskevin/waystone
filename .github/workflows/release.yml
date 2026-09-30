@@ -1,0 +1,55 @@
+name: Release
+
+# Build the 3DS shell (.3dsx) and publish it as a GitHub Release.
+# Triggered by pushing a version tag (v*) or manually.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Build inside the devkitARM container: it ships devkitARM/libctru/3ds-curl
+    # preinstalled (same base as 3ds/Dockerfile, minus the corp-CA injection,
+    # which is gitignored and absent in CI).
+    container: devkitpro/devkitarm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly + rust-src
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/rustup.sh
+            sh /tmp/rustup.sh -y --default-toolchain nightly --profile minimal
+            rm /tmp/rustup.sh
+          fi
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup component add rust-src
+          rustup --version && rustc --version
+
+      - name: Build 3DS shell
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo +nightly build -Zbuild-std=core,alloc --target armv6k-nintendo-3ds --features 3ds -p waystone-ffi --release
+          make -C 3ds clean
+          make -C 3ds
+          test -f 3ds/waystone-3ds-spike.3dsx
+
+      - name: Publish GitHub Release with .3dsx asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: 3ds/waystone-3ds-spike.3dsx
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

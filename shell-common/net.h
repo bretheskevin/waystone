@@ -40,6 +40,16 @@ int webdav_propfind(const WebDavCfg& cfg, const char* path,
 // Unauthenticated HTTPS GET. On HTTP 200, writes body into *out and returns 200.
 // Returns the HTTP status code on successful transport (non-200 = fetch failed).
 // Returns -1 on curl/transport error. Follows redirects; TLS via romfs:/cacert.pem.
+// Sends User-Agent "waystone-3ds" (GitHub API 403s the default curl UA).
 int http_get(const char* url, std::string* out);
+
+// Streaming download: response body is written to dest_path as it arrives (no
+// full-file buffering). Unauthenticated HTTPS, redirects followed, same TLS.
+// progress(got, total, ctx) is called on the curl thread; returning false aborts.
+// Returns 0 on HTTP 200, the HTTP status code on completed transport with a
+// non-200 status, -1 on curl/IO error. On ANY failure dest_path is removed.
+int http_download(const char* url, const char* dest_path,
+                  bool (*progress)(size_t got, size_t total, void* ctx),
+                  void* ctx);
 
 #endif
