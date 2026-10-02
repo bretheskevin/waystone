@@ -61,6 +61,13 @@ default (GUI) drops `main.cpp` + drops nothing from `source/ui`; `CONSOLE=1` dro
 all of `source/ui/*` **and** the citro2d libs. Mirror `switch/Makefile`'s `CONSOLE` handling. The
 Makefile globs `$(dir)/*.cpp` **non-recursively**, so `source/ui` must be added to `SOURCES` + `INCLUDES`.
 
+## PERMANENT — CIA Title ID `0x000400000FF3FF00`
+
+The `.cia`'s title ID (`UniqueId 0xFF3FF`, homebrew range) is baked into `3ds/app.rsf`
+(`TitleInfo/UniqueId`). **NEVER change it** once any user has installed the CIA — the 3DS treats a
+different title ID as a different application, so a change gives users a duplicate Home-Menu entry
+on update instead of an in-place upgrade.
+
 ## swkbd — differs from libnx (verify against libctru docs)
 
 libctru's software keyboard is **not** the libnx API. Use: `swkbdInit(&sw, SWKBD_TYPE_NORMAL, numButtons,
@@ -93,10 +100,25 @@ https://libctru.devkitpro.org/swkbd_8h_source.html before using it.
 - **Builds** (devkitARM Docker image `waystone-3ds`, from `3ds/Dockerfile`; the base ships
   `3ds-curl`/`3ds-mbedtls`/`libctru`/`3ds_rules` — the Dockerfile does **no** `dkp-pacman`, only injects
   the corp CA from gitignored `3ds/certs/*.pem` + rust nightly):
-  - GUI (default): `docker run --rm -v "$PWD":/work -w /work waystone-3ds bash -lc "cargo +nightly build
+  - GUI (default) — **arm64-native, fast loop**: `docker build -t waystone-3ds -f 3ds/Dockerfile 3ds/`
+    then `docker run --rm -v "$PWD":/work -w /work waystone-3ds bash -lc "cargo +nightly build
     -Zbuild-std=core,alloc --target armv6k-nintendo-3ds --features 3ds -p waystone-ffi --release &&
     make -C 3ds clean && make -C 3ds"` → `3ds/waystone-3ds-spike.3dsx`.
   - Console fallback: `make -C 3ds clean && make -C 3ds CONSOLE=1` (no citro2d) — the verified engine driver.
+  - CIA (installable) — **use `bash 3ds/build-cia.sh`**. This script builds an **amd64** container
+    (via Rosetta on Apple Silicon) because `makerom` and `bannertool` are x86_64-only prebuilts; they
+    cannot execute during an arm64 Docker build and cannot run in an arm64 container at runtime.
+    The normal arm64 image is unchanged and stays fast. The script:
+    1. `docker build --platform linux/amd64 -t waystone-3ds-amd64 -f 3ds/Dockerfile 3ds/`
+    2. `docker run --platform linux/amd64 ...` → runs FFI build + `make -C 3ds cia`
+    → `3ds/waystone-3ds-spike.cia`.
+    **Do NOT** run `make -C 3ds cia` inside the arm64 image — `makerom`/`bannertool` are x86_64 binaries
+    and will SIGILL/exec-format-error on arm64.
+  - Tool version pins (both Dockerfile and CI must match): **makerom v0.18.4** (v0.19.0 needs
+    GLIBC_2.38; the `devkitpro/devkitarm` bookworm base ships 2.36 — v0.19.0 is broken there),
+    **bannertool v1.2.2** (Epicpkmn11 fork; Steveice10's repo is archived/404).
+  - CI (`release.yml`) runs on x86_64 GitHub runners — no platform flag needed; it installs makerom +
+    bannertool natively and runs `make -C 3ds cia` directly.
   - Incremental `make -C 3ds` (no `clean`) recompiles only changed files; `clean` after Makefile/romfs changes.
 - Verify romfs (`cacert.pem`) via the packaging log; `waystone.h` must stay unchanged
   (`git diff --stat ffi/include/waystone.h` empty). Local Docker images get GC-pruned (exit 125 = image
@@ -111,7 +133,10 @@ the built `waystone-3ds-spike.3dsx`:
 1. Bump `WS_APP_VERSION` in `3ds/source/version.h` and commit.
 2. `git tag vX.Y.Z` (must match the version baked into the binary).
 3. `git push origin vX.Y.Z` — the workflow builds and publishes the release.
-4. Verify on the GitHub release page that the attached asset's name ends in `.3dsx` — the in-app
-   updater downloads the release asset by that suffix.
+4. Verify on the GitHub release page that BOTH `.3dsx` and `.cia` are attached. The in-app updater
+   downloads the release asset ending in `.3dsx` (it ignores the `.cia`).
+
+The `.cia` is an alternate installable artifact for users who prefer title-manager install; the
+`.3dsx` remains the self-update path used by the in-app updater.
 
 Note: the repo must be **public** — the updater queries the GitHub releases API unauthenticated.

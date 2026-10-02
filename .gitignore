@@ -32,6 +32,8 @@ switch/romfs/*
 3ds/*.elf
 3ds/*.smdh
 3ds/*.map
+3ds/*.cia
+3ds/app.bnr
 3ds/build.log
 
 # Generated knowledge-graph cache

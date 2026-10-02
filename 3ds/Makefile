@@ -10,6 +10,14 @@ TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/devkitARM/3ds_rules
 
 #---------------------------------------------------------------------------------
+# App metadata (feeds smdhtool for .3dsx SMDH + makerom/bannertool for .cia)
+#---------------------------------------------------------------------------------
+APP_TITLE       := Waystone
+APP_DESCRIPTION := Cross-platform game-save sync
+APP_AUTHOR      := kandid
+APP_ICON        := $(TOPDIR)/app/icon.png
+
+#---------------------------------------------------------------------------------
 TARGET		:=	waystone-3ds-spike
 BUILD		:=	build
 # Build-mode guard.
@@ -93,7 +101,7 @@ ifneq ($(strip $(ROMFS)),)
 	export _3DSXFLAGS += --romfs=$(TOPDIR)/$(ROMFS) --smdh=$(OUTPUT).smdh
 endif
 
-.PHONY: $(BUILD) clean all
+.PHONY: $(BUILD) clean all cia
 
 #---------------------------------------------------------------------------------
 all: $(BUILD)
@@ -105,7 +113,25 @@ $(BUILD):
 #---------------------------------------------------------------------------------
 clean:
 	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).3dsx $(TARGET).elf $(TARGET).smdh
+	@rm -fr $(BUILD) $(TARGET).3dsx $(TARGET).elf $(TARGET).smdh $(TARGET).cia $(TOPDIR)/app.bnr
+
+#---------------------------------------------------------------------------------
+# CIA packaging (post-link). Requires bannertool + makerom on PATH.
+# Usage: make -C 3ds cia   —  Title ID 0x000400000FF3FF00 (UniqueId 0xFF3FF) — NEVER change.
+#---------------------------------------------------------------------------------
+CIA_VERSION_MAJOR := $(shell sed -n 's/.*WS_APP_VERSION "\([0-9]*\)\..*/\1/p' $(TOPDIR)/source/version.h)
+CIA_VERSION_MINOR := $(shell sed -n 's/.*WS_APP_VERSION "[0-9]*\.\([0-9]*\)\..*/\1/p' $(TOPDIR)/source/version.h)
+CIA_VERSION_MICRO := $(shell sed -n 's/.*WS_APP_VERSION "[0-9]*\.[0-9]*\.\([0-9]*\)".*/\1/p' $(TOPDIR)/source/version.h)
+
+cia: all
+	@echo "[cia] building banner ..."
+	bannertool makebanner -i $(TOPDIR)/app/banner.png -a $(TOPDIR)/app/banner.wav -o $(TOPDIR)/app.bnr
+	@echo "[cia] building CIA (title ID 0x000400000FF3FF00) ..."
+	makerom -f cia -o $(TARGET).cia \
+		-elf $(TARGET).elf -rsf $(TOPDIR)/app.rsf \
+		-icon $(TARGET).smdh -banner $(TOPDIR)/app.bnr \
+		-major $(CIA_VERSION_MAJOR) -minor $(CIA_VERSION_MINOR) -micro $(CIA_VERSION_MICRO)
+	@echo "[cia] done -> $(TARGET).cia"
 
 #---------------------------------------------------------------------------------
 else
