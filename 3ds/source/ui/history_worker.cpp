@@ -104,7 +104,7 @@ void HistoryWorker::scan_worker() {
 
     base_path_ = locations[0].base_path;
     group_key_ = locations[0].group_key;
-    raw_json_  = locations[0].raw_json;
+    raw_tree_  = locations[0].raw_tree;
 
     WebDavCfg dav = session_->dav.as_cfg();
 
@@ -191,7 +191,7 @@ void HistoryWorker::restore_worker(const HistoryEntry& entry, size_t index) {
     printf("[history] restoring hash=%.12s for %s\n", hash.c_str(), title_.name.c_str());
 
     int rc = restore_remote_save(session_->vault, hash,
-                                 base_path_, group_key_, raw_json_,
+                                 base_path_, group_key_, raw_tree_,
                                  title_, dav);
     if (rc != 0) {
         printf("[history] restore FAILED (rc=%d)\n", rc);

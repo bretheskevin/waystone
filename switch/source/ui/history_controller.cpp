@@ -76,7 +76,7 @@ void HistoryController::scan_worker() {
     // Stash for restore (written only here, read only by restore_worker — no race)
     base_path_ = d.base_path;
     group_key_ = d.group_key;
-    raw_json_  = d.raw_json;
+    raw_tree_  = d.raw_tree;
 
     // List remote history
     printf("[history] listing %s/history/\n", d.base_path.c_str());
@@ -127,7 +127,7 @@ void HistoryController::restore_worker(HistoryEntry entry, size_t index) {
     printf("[history] restoring hash=%.12s for %s\n", hash.c_str(), title_.name.c_str());
 
     int rc = restore_remote_save(session_->vault, hash,
-                                 base_path_, group_key_, raw_json_,
+                                 base_path_, group_key_, raw_tree_,
                                  title_.title_id, session_->uid, dav);
     if (rc != 0) {
         printf("[history] restore FAILED (rc=%d)\n", rc);

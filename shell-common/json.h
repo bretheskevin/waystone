@@ -12,19 +12,13 @@
 // and control chars U+0000..U+001F).
 std::string json_escape(const std::string& s);
 
-// Build a RawTreeDto JSON object from extracted files.
-// Each pair is (relative_path, file_content_bytes).
-// Output: {"files":[{"path":"<escaped>","data_b64":"<base64>"},...]}'
-std::string build_raw_tree_json(
-    const std::vector<std::pair<std::string, std::vector<uint8_t>>>& files);
-
 // Build a DeviceHead JSON object.
 // Output: {"device_id":"...","hash":"...","mtime":"..."}
 std::string build_device_head_json(const char* device_id,
                                    const char* hash,
                                    const char* mtime);
 
-// Replace the empty mtime field in a NormalizedSaveDto JSON string.
+// Replace the empty mtime field in a save's metadata JSON string.
 // The adapter (ws_jksv_normalize) produces compact JSON with "mtime":"".
 // This replaces the FIRST occurrence of "mtime":"" with "mtime":"<mtime>".
 // Returns the modified JSON string, or the original if no match found.

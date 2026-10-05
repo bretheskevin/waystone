@@ -13,9 +13,9 @@ std::vector<TitleInfo> list_titles()
     return {};
 }
 
-std::string extract_save_json(const TitleInfo& /*title*/, AccountUid /*uid*/)
+std::vector<uint8_t> extract_save_json(const TitleInfo& /*title*/, AccountUid /*uid*/)
 {
-    return "";
+    return {};
 }
 
 bool get_active_account(AccountUid* out_uid)
@@ -34,7 +34,7 @@ std::string get_device_id()
     return "preview-device-0000000000000000";
 }
 
-int write_save_files(u64 /*title_id*/, AccountUid /*uid*/, const char* /*files_json*/)
+int write_save_files(u64 /*title_id*/, AccountUid /*uid*/, const uint8_t* /*ft_ptr*/, size_t /*ft_len*/)
 {
     return 0;
 }

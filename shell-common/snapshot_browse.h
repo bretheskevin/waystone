@@ -1,6 +1,7 @@
 #ifndef WAYSTONE_SNAPSHOT_BROWSE_H
 #define WAYSTONE_SNAPSHOT_BROWSE_H
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -27,13 +28,12 @@ std::string snapshot_key_dir(const char* system, const std::string& game_name);
 // Returns empty vector if the directory doesn't exist.
 std::vector<SnapshotEntry> list_snapshots(const char* backups_root, const char* key_dir);
 
-// Read a snapshot dir back into a FLAT files_json array string:
-//   [{"path":"<save-relative>","data_b64":"..."},...]
-// Strips the leading two path components (<title_dir>/<slot>/) from each
-// file's relative path, producing the shape write_save_files consumes.
-// Returns "[]" if the snapshot dir is empty or missing.
-// Returns empty string on I/O error.
-std::string snapshot_to_flat_files_json(const char* snapshot_dir, const char* slot_filter = nullptr);
+// Read a snapshot dir back into a WsFileTree buffer, stripping the leading two
+// path components (<title_dir>/<slot>/) from each file's relative path.
+// Returns the number of files written to *out (0 = empty snapshot / no match),
+// or -1 on I/O error. *out holds a valid (possibly count=0) WsFileTree.
+int snapshot_to_file_tree(const char* snapshot_dir, const char* slot_filter,
+                          std::vector<uint8_t>* out);
 
 // Format bytes as human-readable size string. Mirrors desktop helpers.rs human_size.
 std::string human_size(unsigned long long bytes);

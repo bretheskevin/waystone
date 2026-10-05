@@ -15,21 +15,46 @@ typedef struct WsBuf {
 
 typedef Vault WsVault;
 
- char *ws_checkpoint_normalize(const char *system, const char *raw_tree_json);
 
- char *ws_checkpoint_to_native(const char *normalized_save_json);
+struct WsBuf ws_checkpoint_normalize(const char *system,
+                                     const uint8_t *raw_files,
+                                     uintptr_t raw_files_len);
 
- char *ws_jksv_normalize(const char *system, const char *raw_tree_json);
 
- char *ws_jksv_to_native(const char *normalized_save_json);
+int32_t ws_checkpoint_to_native(const char *meta_json,
+                                const uint8_t *files,
+                                uintptr_t files_len,
+                                struct WsBuf *out_tree);
 
- char *ws_mgba_normalize(const char *system, const char *raw_tree_json);
 
- char *ws_mgba_to_native(const char *normalized_save_json);
+struct WsBuf ws_jksv_normalize(const char *system,
+                               const uint8_t *raw_files,
+                               uintptr_t raw_files_len);
 
- char *ws_twilight_normalize(const char *raw_tree_json);
 
- char *ws_twilight_to_native(const char *normalized_save_json);
+int32_t ws_jksv_to_native(const char *meta_json,
+                          const uint8_t *files,
+                          uintptr_t files_len,
+                          struct WsBuf *out_tree);
+
+
+struct WsBuf ws_mgba_normalize(const char *system,
+                               const uint8_t *raw_files,
+                               uintptr_t raw_files_len);
+
+
+int32_t ws_mgba_to_native(const char *meta_json,
+                          const uint8_t *files,
+                          uintptr_t files_len,
+                          struct WsBuf *out_tree);
+
+ struct WsBuf ws_twilight_normalize(const uint8_t *raw_files, uintptr_t raw_files_len);
+
+
+int32_t ws_twilight_to_native(const char *meta_json,
+                              const uint8_t *files,
+                              uintptr_t files_len,
+                              struct WsBuf *out_tree);
 
 /**
  * # Safety
@@ -95,14 +120,18 @@ WsVault *ws_vault_init(const char *passphrase,
  */
  const char *ws_last_error(void);
 
- struct WsBuf ws_canonical_zip(const char *files_json);
+ struct WsBuf ws_canonical_zip(const uint8_t *files, uintptr_t files_len);
 
- char *ws_unzip(const uint8_t *data, uintptr_t len);
+ struct WsBuf ws_unzip(const uint8_t *data, uintptr_t len);
 
  char *ws_content_hash(const uint8_t *data, uintptr_t len);
 
  char *ws_file_hash(const uint8_t *data, uintptr_t len);
 
- char *ws_package(const char *normalized_save_json, struct WsBuf *out_zip);
+
+char *ws_package(const char *meta_json,
+                 const uint8_t *files,
+                 uintptr_t files_len,
+                 struct WsBuf *out_zip);
 
 #endif  /* WAYSTONE_H */

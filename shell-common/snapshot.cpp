@@ -1,8 +1,5 @@
 #include "snapshot.h"
-#include "base64.h"
-#include "json.h"
-#define JSMN_HEADER
-#include "jsmn.h"
+#include "file_tree.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -55,76 +52,61 @@ static bool mkdir_p(const std::string& path) {
     return true;
 }
 
-static const int SNAP_MAX_TOKENS = 2048;
-
-bool write_snapshot(const char* backup_dir, const char* files_json) {
-    // Parse outer RawTree object {"files":[...]} with jsmn.
-    jsmn_parser parser;
-    jsmntok_t tokens[SNAP_MAX_TOKENS];
-    jsmn_init(&parser);
-    int n = jsmn_parse(&parser, files_json, strlen(files_json), tokens, SNAP_MAX_TOKENS);
-    if (n < 1 || tokens[0].type != JSMN_OBJECT) return false;
-
-    // Find the "files" key and its array value.
-    int arr_tok = -1;
-    for (int i = 1; i + 1 < n; i++) {
-        if (tokens[i].type != JSMN_STRING) continue;
-        int len = tokens[i].end - tokens[i].start;
-        if (len == 5 && strncmp(files_json + tokens[i].start, "files", 5) == 0) {
-            int vi = i + 1;
-            if (vi < n && tokens[vi].type == JSMN_ARRAY) {
-                arr_tok = vi;
-            }
-            break;
-        }
+bool write_snapshot(const char* backup_dir, const uint8_t* ft_ptr, size_t ft_len) {
+    std::vector<FileTreeEntry> files;
+    if (!file_tree_decode(ft_ptr, ft_len, &files)) {
+        printf("[saves] write_snapshot: file_tree_decode failed (len=%zu)\n", ft_len);
+        return false;
+    }
+    if (files.empty()) {
+        printf("[saves] write_snapshot: empty tree, nothing to back up\n");
+        return true;
     }
 
-    if (arr_tok == -1) return false;
-    if (tokens[arr_tok].size == 0) return true; // empty = nothing to back up
-
-    // Extract the array substring and split into per-file entry strings.
-    std::string arr_str(files_json + tokens[arr_tok].start,
-                        static_cast<size_t>(tokens[arr_tok].end - tokens[arr_tok].start));
-    std::vector<std::string> entries = json_split_array(arr_str.c_str());
-    if (entries.empty()) return true;
-
-    // Normalise backup_dir (strip trailing slash for consistent path building).
     std::string dir(backup_dir);
     while (!dir.empty() && dir.back() == '/') dir.pop_back();
+    printf("[saves] write_snapshot: %zu file(s) -> %s\n", files.size(), dir.c_str());
+    if (!mkdir_p(dir)) {
+        printf("[saves] write_snapshot: mkdir failed %s\n", dir.c_str());
+        return false;
+    }
 
-    if (!mkdir_p(dir)) return false;
-
-    for (const auto& entry : entries) {
-        std::string path     = json_get_string(entry.c_str(), "path");
-        std::string data_b64 = json_get_string(entry.c_str(), "data_b64");
-
-        if (path.empty()) return false;
-
-        std::vector<uint8_t> bytes;
-        if (!data_b64.empty()) {
-            bytes = base64_decode(data_b64);
-            if (bytes.empty()) return false;
+    for (size_t i = 0; i < files.size(); i++) {
+        const std::string& path = files[i].first;
+        const std::vector<uint8_t>& bytes = files[i].second;
+        if (path.empty()) {
+            printf("[saves] write_snapshot: empty path in entry %zu\n", i);
+            return false;
         }
 
-        // Create parent directories under backup_dir.
         size_t last_slash = path.rfind('/');
         if (last_slash != std::string::npos) {
             std::string parent = dir + "/" + path.substr(0, last_slash);
-            if (!mkdir_p(parent)) return false;
+            if (!mkdir_p(parent)) {
+                printf("[saves] write_snapshot: mkdir failed %s\n", parent.c_str());
+                return false;
+            }
         }
 
         std::string full_path = dir + "/" + path;
         FILE* f = fopen(full_path.c_str(), "wb");
-        if (!f) return false;
+        if (!f) {
+            printf("[saves] write_snapshot: fopen failed %s\n", full_path.c_str());
+            return false;
+        }
         if (!bytes.empty()) {
             size_t written = fwrite(bytes.data(), 1, bytes.size(), f);
             fclose(f);
-            if (written != bytes.size()) return false;
+            if (written != bytes.size()) {
+                printf("[saves] write_snapshot: short write %s\n", full_path.c_str());
+                return false;
+            }
         } else {
             fclose(f);
         }
     }
 
+    printf("[saves] write_snapshot: done\n");
     return true;
 }
 

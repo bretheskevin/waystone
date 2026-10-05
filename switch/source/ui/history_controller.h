@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -37,7 +38,7 @@ private:
     // Derived during scan, consumed by restore
     std::string base_path_;
     std::string group_key_;
-    std::string raw_json_;
+    std::vector<uint8_t> raw_tree_;
 
     void scan_worker();
     void restore_worker(HistoryEntry entry, size_t index);

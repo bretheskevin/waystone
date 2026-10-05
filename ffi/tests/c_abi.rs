@@ -5,9 +5,9 @@ use waystone_ffi::adapter_abi::*;
 use waystone_ffi::buffer::{WsBuf, ws_buf_free, ws_string_free};
 use waystone_ffi::conflict_abi::*;
 use waystone_ffi::crypto_abi::*;
-use waystone_ffi::dto::{FileEntryDto, NormalizedSaveDto, RawTreeDto};
 use waystone_ffi::error::{catch_and_set_error, set_last_error, ws_last_error};
 use waystone_ffi::packaging_abi::*;
+use waystone_ffi::wire::{SaveList, decode_file_tree, decode_save_list, encode_file_tree};
 
 // ── Buffer tests ─────────────────────────────────────────────────────────────
 
@@ -71,14 +71,11 @@ fn catch_and_set_error_returns_value_on_success() {
 /// Maps to core/tests/golden_vectors.rs::golden_single_file_zip_and_hash
 #[test]
 fn golden_ffi_single_file_zip_and_hash() {
-    // "Hello" = [0x48, 0x65, 0x6C, 0x6C, 0x6F] -> base64 "SGVsbG8="
-    let files_json = CString::new(r#"[{"path":"save.dat","data_b64":"SGVsbG8="}]"#).unwrap();
-    let zip_buf = unsafe { ws_canonical_zip(files_json.as_ptr()) };
+    let tree = encode_file_tree(&[("save.dat".to_string(), b"Hello".to_vec())]);
+    let zip_buf = unsafe { ws_canonical_zip(tree.as_ptr(), tree.len()) };
     assert!(!zip_buf.ptr.is_null());
-
     let zip_slice = unsafe { std::slice::from_raw_parts(zip_buf.ptr, zip_buf.len) };
 
-    // Core reference: same input produces exactly this zip
     let core_files = vec![("save.dat".to_string(), vec![0x48u8, 0x65, 0x6C, 0x6C, 0x6F])];
     let core_zip = waystone_core::packaging::canonical_zip(&core_files);
     assert_eq!(
@@ -87,7 +84,6 @@ fn golden_ffi_single_file_zip_and_hash() {
         "FFI zip must be byte-identical to core zip"
     );
 
-    // Golden hash
     let hash_ptr = unsafe { ws_content_hash(zip_slice.as_ptr(), zip_slice.len()) };
     let hash = unsafe { CStr::from_ptr(hash_ptr) }.to_str().unwrap();
     assert_eq!(
@@ -104,29 +100,16 @@ fn golden_ffi_single_file_zip_and_hash() {
 /// Golden Vector 2 parity: multi-file order independence through FFI
 #[test]
 fn golden_ffi_multi_file_order_independent() {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as B64;
-
-    let files_a = CString::new(
-        serde_json::to_string(&serde_json::json!([
-            {"path": "b.bin", "data_b64": B64.encode([2u8])},
-            {"path": "a.bin", "data_b64": B64.encode([1u8])}
-        ]))
-        .unwrap(),
-    )
-    .unwrap();
-    let files_b = CString::new(
-        serde_json::to_string(&serde_json::json!([
-            {"path": "a.bin", "data_b64": B64.encode([1u8])},
-            {"path": "b.bin", "data_b64": B64.encode([2u8])}
-        ]))
-        .unwrap(),
-    )
-    .unwrap();
-
-    let zip_a = unsafe { ws_canonical_zip(files_a.as_ptr()) };
-    let zip_b = unsafe { ws_canonical_zip(files_b.as_ptr()) };
-
+    let tree_a = encode_file_tree(&[
+        ("b.bin".to_string(), vec![2u8]),
+        ("a.bin".to_string(), vec![1u8]),
+    ]);
+    let tree_b = encode_file_tree(&[
+        ("a.bin".to_string(), vec![1u8]),
+        ("b.bin".to_string(), vec![2u8]),
+    ]);
+    let zip_a = unsafe { ws_canonical_zip(tree_a.as_ptr(), tree_a.len()) };
+    let zip_b = unsafe { ws_canonical_zip(tree_b.as_ptr(), tree_b.len()) };
     let slice_a = unsafe { std::slice::from_raw_parts(zip_a.ptr, zip_a.len) };
     let slice_b = unsafe { std::slice::from_raw_parts(zip_b.ptr, zip_b.len) };
     assert_eq!(
@@ -134,14 +117,11 @@ fn golden_ffi_multi_file_order_independent() {
         "entry order must not affect FFI zip output"
     );
 
-    // Match core directly
-    let core_files_a = vec![
+    let core_zip = waystone_core::packaging::canonical_zip(&[
         ("b.bin".to_string(), vec![2u8]),
         ("a.bin".to_string(), vec![1u8]),
-    ];
-    let core_zip = waystone_core::packaging::canonical_zip(&core_files_a);
+    ]);
     assert_eq!(slice_a, core_zip.as_slice());
-
     unsafe {
         ws_buf_free(zip_a);
         ws_buf_free(zip_b);
@@ -151,26 +131,29 @@ fn golden_ffi_multi_file_order_independent() {
 /// Golden Vector 3 parity: full pipeline (adapter -> package) through FFI
 #[test]
 fn golden_ffi_full_pipeline_jksv_package() {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as B64;
-
-    let raw_tree = serde_json::json!({
-        "files": [{
-            "path": "TestGame - 0100AAAA00001000/slot0/data.sav",
-            "data_b64": B64.encode([0xCAu8, 0xFE, 0xBA, 0xBE])
-        }]
-    });
+    let raw = encode_file_tree(&[(
+        "TestGame - 0100AAAA00001000/slot0/data.sav".to_string(),
+        vec![0xCAu8, 0xFE, 0xBA, 0xBE],
+    )]);
     let system = CString::new("switch").unwrap();
-    let tree_cstr = CString::new(serde_json::to_string(&raw_tree).unwrap()).unwrap();
-    let norm_ptr = unsafe { ws_jksv_normalize(system.as_ptr(), tree_cstr.as_ptr()) };
-    assert!(!norm_ptr.is_null());
-    let norm_json = unsafe { CStr::from_ptr(norm_ptr) }.to_str().unwrap();
-    let saves: Vec<serde_json::Value> = serde_json::from_str(norm_json).unwrap();
+    let list_buf = unsafe { ws_jksv_normalize(system.as_ptr(), raw.as_ptr(), raw.len()) };
+    assert!(!list_buf.ptr.is_null());
+    let list_slice = unsafe { std::slice::from_raw_parts(list_buf.ptr, list_buf.len) };
+    let saves = decode_save_list(list_slice).unwrap();
     assert_eq!(saves.len(), 1);
 
-    let save_cstr = CString::new(serde_json::to_string(&saves[0]).unwrap()).unwrap();
+    let (meta_bytes, files) = &saves[0];
+    let meta_cstr = CString::new(meta_bytes.clone()).unwrap();
+    let files_buf = encode_file_tree(files);
     let mut out_zip = WsBuf::null();
-    let entry_ptr = unsafe { ws_package(save_cstr.as_ptr(), &mut out_zip) };
+    let entry_ptr = unsafe {
+        ws_package(
+            meta_cstr.as_ptr(),
+            files_buf.as_ptr(),
+            files_buf.len(),
+            &mut out_zip,
+        )
+    };
     assert!(!entry_ptr.is_null());
 
     let entry_json = unsafe { CStr::from_ptr(entry_ptr) }.to_str().unwrap();
@@ -181,22 +164,18 @@ fn golden_ffi_full_pipeline_jksv_package() {
         waystone_core::packaging::content_hash(zip_slice)
     );
 
-    // Verify round-trip: unzip and check content
-    let unzip_ptr = unsafe { ws_unzip(zip_slice.as_ptr(), zip_slice.len()) };
-    let unzip_json = unsafe { CStr::from_ptr(unzip_ptr) }.to_str().unwrap();
-    let files: Vec<FileEntryDto> = serde_json::from_str(unzip_json).unwrap();
-    assert_eq!(files.len(), 1);
-    assert_eq!(files[0].path, "data.sav");
-    assert_eq!(
-        files[0].decode_data().unwrap(),
-        vec![0xCA, 0xFE, 0xBA, 0xBE]
-    );
+    let ft_buf = unsafe { ws_unzip(zip_slice.as_ptr(), zip_slice.len()) };
+    let ft_slice = unsafe { std::slice::from_raw_parts(ft_buf.ptr, ft_buf.len) };
+    let out_files = decode_file_tree(ft_slice).unwrap();
+    assert_eq!(out_files.len(), 1);
+    assert_eq!(out_files[0].0, "data.sav");
+    assert_eq!(out_files[0].1, vec![0xCA, 0xFE, 0xBA, 0xBE]);
 
     unsafe {
-        ws_string_free(norm_ptr);
+        ws_buf_free(list_buf);
         ws_string_free(entry_ptr);
-        ws_string_free(unzip_ptr);
         ws_buf_free(out_zip);
+        ws_buf_free(ft_buf);
     }
 }
 
@@ -443,18 +422,13 @@ fn vault_export_mdk_null_vault_returns_null() {
 
 #[test]
 fn canonical_zip_golden_vector_through_ffi() {
-    // Matches golden_single_file_zip_and_hash from core/tests/golden_vectors.rs
-    let files_json = r#"[{"path":"save.dat","data_b64":"SGVsbG8="}]"#;
-    let cstr = CString::new(files_json).unwrap();
-    let zip_buf = unsafe { ws_canonical_zip(cstr.as_ptr()) };
+    let tree = encode_file_tree(&[("save.dat".to_string(), b"Hello".to_vec())]);
+    let zip_buf = unsafe { ws_canonical_zip(tree.as_ptr(), tree.len()) };
     assert!(!zip_buf.ptr.is_null());
-
     let zip_slice = unsafe { std::slice::from_raw_parts(zip_buf.ptr, zip_buf.len) };
     assert_eq!(zip_slice.len(), 119, "zip length must match golden vector");
 
-    // Content hash must match golden vector exactly
     let hash_ptr = unsafe { ws_content_hash(zip_slice.as_ptr(), zip_slice.len()) };
-    assert!(!hash_ptr.is_null());
     let hash = unsafe { CStr::from_ptr(hash_ptr) }.to_str().unwrap();
     assert_eq!(
         hash,
@@ -469,24 +443,22 @@ fn canonical_zip_golden_vector_through_ffi() {
 
 #[test]
 fn unzip_round_trips_through_ffi() {
-    let files_json = r#"[{"path":"a.bin","data_b64":"AQID"}]"#;
-    let cstr = CString::new(files_json).unwrap();
-    let zip_buf = unsafe { ws_canonical_zip(cstr.as_ptr()) };
+    let tree = encode_file_tree(&[("a.bin".to_string(), vec![1u8, 2, 3])]);
+    let zip_buf = unsafe { ws_canonical_zip(tree.as_ptr(), tree.len()) };
     assert!(!zip_buf.ptr.is_null());
-
     let zip_slice = unsafe { std::slice::from_raw_parts(zip_buf.ptr, zip_buf.len) };
-    let result_ptr = unsafe { ws_unzip(zip_slice.as_ptr(), zip_slice.len()) };
-    assert!(!result_ptr.is_null());
-    let result_json = unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap();
-    let entries: Vec<FileEntryDto> = serde_json::from_str(result_json).unwrap();
+
+    let ft_buf = unsafe { ws_unzip(zip_slice.as_ptr(), zip_slice.len()) };
+    assert!(!ft_buf.ptr.is_null());
+    let ft_slice = unsafe { std::slice::from_raw_parts(ft_buf.ptr, ft_buf.len) };
+    let entries = decode_file_tree(ft_slice).unwrap();
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].path, "a.bin");
-    let decoded = entries[0].decode_data().unwrap();
-    assert_eq!(decoded, vec![1, 2, 3]);
+    assert_eq!(entries[0].0, "a.bin");
+    assert_eq!(entries[0].1, vec![1, 2, 3]);
 
     unsafe {
         ws_buf_free(zip_buf);
-        ws_string_free(result_ptr);
+        ws_buf_free(ft_buf);
     }
 }
 
@@ -504,35 +476,26 @@ fn file_hash_through_ffi() {
 
 #[test]
 fn package_through_ffi() {
-    let save_json = serde_json::json!({
-        "id": {
-            "source": "jksv",
-            "system": "switch",
-            "game": {
-                "key": "TESTGAME",
-                "display_name": "Test Game",
-                "confidence": "strong"
-            },
-            "slot": "main",
-            "kind": "native"
-        },
-        "group_key": "switch/TESTGAME/main",
-        "portable": true,
-        "mtime": "2026-01-01T00:00:00Z",
-        "files": [{"path": "save.dat", "data_b64": "//8="}]
+    let meta = serde_json::json!({
+        "id": {"source":"jksv","system":"switch",
+               "game":{"key":"TESTGAME","display_name":"Test Game","confidence":"strong"},
+               "slot":"main","kind":"native"},
+        "group_key":"switch/TESTGAME/main",
+        "portable":true,
+        "mtime":"2026-01-01T00:00:00Z"
     });
-    let json_str = CString::new(serde_json::to_string(&save_json).unwrap()).unwrap();
+    let meta_cstr = CString::new(serde_json::to_string(&meta).unwrap()).unwrap();
+    let tree = encode_file_tree(&[("save.dat".to_string(), vec![0xFFu8, 0xFF])]);
     let mut out_zip = WsBuf::null();
 
-    let entry_ptr = unsafe { ws_package(json_str.as_ptr(), &mut out_zip) };
+    let entry_ptr =
+        unsafe { ws_package(meta_cstr.as_ptr(), tree.as_ptr(), tree.len(), &mut out_zip) };
     assert!(!entry_ptr.is_null(), "ws_package should return non-null");
     assert!(out_zip.len > 0, "zip output should be non-empty");
 
     let entry_json = unsafe { CStr::from_ptr(entry_ptr) }.to_str().unwrap();
     let entry: waystone_core::model::SaveEntry = serde_json::from_str(entry_json).unwrap();
     assert_eq!(entry.id.game.key, "TESTGAME");
-
-    // Verify hash matches content_hash of the zip
     let zip_slice = unsafe { std::slice::from_raw_parts(out_zip.ptr, out_zip.len) };
     assert_eq!(
         entry.content.hash,
@@ -548,7 +511,7 @@ fn package_through_ffi() {
 #[test]
 fn canonical_zip_null_input_returns_null() {
     let _guard = ERROR_TEST_LOCK.lock().unwrap();
-    let zip_buf = unsafe { ws_canonical_zip(std::ptr::null()) };
+    let zip_buf = unsafe { ws_canonical_zip(std::ptr::null(), 0) };
     assert!(zip_buf.ptr.is_null());
 }
 
@@ -704,238 +667,203 @@ fn decide_pull_new_device_through_ffi() {
 
 // ── Adapter ABI tests ────────────────────────────────────────────────────────
 
+fn normalize_one(
+    f: unsafe extern "C" fn(*const std::ffi::c_char, *const u8, usize) -> WsBuf,
+    system: &str,
+    path: &str,
+    data: &[u8],
+) -> (WsBuf, SaveList) {
+    let raw = encode_file_tree(&[(path.to_string(), data.to_vec())]);
+    let system = CString::new(system).unwrap();
+    let buf = unsafe { f(system.as_ptr(), raw.as_ptr(), raw.len()) };
+    assert!(!buf.ptr.is_null());
+    let slice = unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) };
+    let saves = decode_save_list(slice).unwrap();
+    (buf, saves)
+}
+
+type ToNativeFn =
+    unsafe extern "C" fn(*const std::ffi::c_char, *const u8, usize, *mut WsBuf) -> i32;
+
+fn to_native_files(
+    f: ToNativeFn,
+    save: &(Vec<u8>, Vec<(String, Vec<u8>)>),
+) -> Vec<(String, Vec<u8>)> {
+    let meta = CString::new(save.0.clone()).unwrap();
+    let files = encode_file_tree(&save.1);
+    let mut out = WsBuf::null();
+    let rc = unsafe { f(meta.as_ptr(), files.as_ptr(), files.len(), &mut out) };
+    assert_eq!(rc, 0);
+    let slice = unsafe { std::slice::from_raw_parts(out.ptr, out.len) };
+    let tree = decode_file_tree(slice).unwrap();
+    unsafe { ws_buf_free(out) };
+    tree
+}
+
+fn assert_to_native_null_rejected(f: ToNativeFn) {
+    let mut out = WsBuf::null();
+    let rc = unsafe { f(std::ptr::null(), std::ptr::null(), 0, &mut out) };
+    assert_eq!(rc, -1);
+}
+
+const CHECKPOINT_PATH: &str =
+    "0x01006A800016E000 Super Smash Bros. Ultimate/20230715-143052/data.bin";
+
 #[test]
 fn jksv_normalize_through_ffi() {
-    let raw_tree = serde_json::json!({
-        "files": [{
-            "path": "TestGame - 0100AAAA00001000/slot0/data.sav",
-            "data_b64": "yv66vg=="
-        }]
-    });
+    let raw = encode_file_tree(&[(
+        "TestGame - 0100AAAA00001000/slot0/data.sav".to_string(),
+        vec![0xCAu8, 0xFE, 0xBA, 0xBE],
+    )]);
     let system = CString::new("switch").unwrap();
-    let json_str = CString::new(serde_json::to_string(&raw_tree).unwrap()).unwrap();
-    let result_ptr = unsafe { ws_jksv_normalize(system.as_ptr(), json_str.as_ptr()) };
-    assert!(!result_ptr.is_null());
-
-    let result_json = unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap();
-    let saves: Vec<NormalizedSaveDto> = serde_json::from_str(result_json).unwrap();
+    let list_buf = unsafe { ws_jksv_normalize(system.as_ptr(), raw.as_ptr(), raw.len()) };
+    assert!(!list_buf.ptr.is_null());
+    let list_slice = unsafe { std::slice::from_raw_parts(list_buf.ptr, list_buf.len) };
+    let saves = decode_save_list(list_slice).unwrap();
     assert_eq!(saves.len(), 1);
-    assert_eq!(saves[0].id.game.key, "testgame0100aaaa00001000");
-    assert_eq!(saves[0].files[0].path, "data.sav");
-
-    unsafe { ws_string_free(result_ptr) };
+    let meta: serde_json::Value = serde_json::from_slice(&saves[0].0).unwrap();
+    assert_eq!(meta["id"]["game"]["key"], "testgame0100aaaa00001000");
+    assert_eq!(saves[0].1[0].0, "data.sav");
+    unsafe { ws_buf_free(list_buf) };
 }
 
 #[test]
 fn jksv_to_native_through_ffi() {
-    // First normalize, then convert back
-    let raw_tree = serde_json::json!({
-        "files": [{
-            "path": "TestGame - 0100AAAA00001000/slot0/data.sav",
-            "data_b64": "yv66vg=="
-        }]
-    });
+    let raw = encode_file_tree(&[(
+        "TestGame - 0100AAAA00001000/slot0/data.sav".to_string(),
+        vec![0xCAu8, 0xFE, 0xBA, 0xBE],
+    )]);
     let system = CString::new("switch").unwrap();
-    let json_str = CString::new(serde_json::to_string(&raw_tree).unwrap()).unwrap();
-    let norm_ptr = unsafe { ws_jksv_normalize(system.as_ptr(), json_str.as_ptr()) };
-    let norm_json = unsafe { CStr::from_ptr(norm_ptr) }.to_str().unwrap();
-    let saves: Vec<serde_json::Value> = serde_json::from_str(norm_json).unwrap();
-    let save_cstr = CString::new(serde_json::to_string(&saves[0]).unwrap()).unwrap();
+    let list_buf = unsafe { ws_jksv_normalize(system.as_ptr(), raw.as_ptr(), raw.len()) };
+    let list_slice = unsafe { std::slice::from_raw_parts(list_buf.ptr, list_buf.len) };
+    let saves = decode_save_list(list_slice).unwrap();
+    let meta_cstr = CString::new(saves[0].0.clone()).unwrap();
+    let files_buf = encode_file_tree(&saves[0].1);
 
-    let native_ptr = unsafe { ws_jksv_to_native(save_cstr.as_ptr()) };
-    assert!(!native_ptr.is_null());
-    let native_json = unsafe { CStr::from_ptr(native_ptr) }.to_str().unwrap();
-    let tree: RawTreeDto = serde_json::from_str(native_json).unwrap();
-    assert_eq!(tree.files.len(), 1);
-    assert!(tree.files[0].path.contains("0100AAAA00001000"));
-    assert!(tree.files[0].path.contains("data.sav"));
+    let mut out_tree = WsBuf::null();
+    let rc = unsafe {
+        ws_jksv_to_native(
+            meta_cstr.as_ptr(),
+            files_buf.as_ptr(),
+            files_buf.len(),
+            &mut out_tree,
+        )
+    };
+    assert_eq!(rc, 0);
+    let out_slice = unsafe { std::slice::from_raw_parts(out_tree.ptr, out_tree.len) };
+    let tree = decode_file_tree(out_slice).unwrap();
+    assert_eq!(tree.len(), 1);
+    assert!(tree[0].0.contains("0100AAAA00001000"));
+    assert!(tree[0].0.contains("data.sav"));
 
     unsafe {
-        ws_string_free(norm_ptr);
-        ws_string_free(native_ptr);
+        ws_buf_free(list_buf);
+        ws_buf_free(out_tree);
     }
 }
 
 #[test]
 fn mgba_normalize_through_ffi() {
-    let raw_tree = serde_json::json!({
-        "files": [{
-            "path": "Emerald.sav",
-            "data_b64": "//8="
-        }]
-    });
-    let system = CString::new("gba").unwrap();
-    let json_str = CString::new(serde_json::to_string(&raw_tree).unwrap()).unwrap();
-    let result_ptr = unsafe { ws_mgba_normalize(system.as_ptr(), json_str.as_ptr()) };
-    assert!(!result_ptr.is_null());
-
-    let result_json = unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap();
-    let saves: Vec<NormalizedSaveDto> = serde_json::from_str(result_json).unwrap();
+    let (buf, saves) = normalize_one(ws_mgba_normalize, "gba", "Emerald.sav", &[0xFF, 0xFF]);
     assert_eq!(saves.len(), 1);
-    assert_eq!(saves[0].id.game.key, "Emerald");
-
-    unsafe { ws_string_free(result_ptr) };
+    let meta: serde_json::Value = serde_json::from_slice(&saves[0].0).unwrap();
+    assert_eq!(meta["id"]["game"]["key"], "Emerald");
+    unsafe { ws_buf_free(buf) };
 }
 
 #[test]
 fn mgba_to_native_through_ffi() {
-    let raw_tree = serde_json::json!({
-        "files": [{
-            "path": "Emerald.sav",
-            "data_b64": "//8="
-        }]
-    });
-    let system = CString::new("gba").unwrap();
-    let json_str = CString::new(serde_json::to_string(&raw_tree).unwrap()).unwrap();
-    let norm_ptr = unsafe { ws_mgba_normalize(system.as_ptr(), json_str.as_ptr()) };
-    let norm_json = unsafe { CStr::from_ptr(norm_ptr) }.to_str().unwrap();
-    let saves: Vec<serde_json::Value> = serde_json::from_str(norm_json).unwrap();
-    let save_cstr = CString::new(serde_json::to_string(&saves[0]).unwrap()).unwrap();
-
-    let native_ptr = unsafe { ws_mgba_to_native(save_cstr.as_ptr()) };
-    assert!(!native_ptr.is_null());
-    let native_json = unsafe { CStr::from_ptr(native_ptr) }.to_str().unwrap();
-    let tree: RawTreeDto = serde_json::from_str(native_json).unwrap();
-    assert_eq!(tree.files.len(), 1);
-    assert_eq!(tree.files[0].path, "Emerald.sav");
-
-    unsafe {
-        ws_string_free(norm_ptr);
-        ws_string_free(native_ptr);
-    }
+    let (buf, saves) = normalize_one(ws_mgba_normalize, "gba", "Emerald.sav", &[0xFF, 0xFF]);
+    let tree = to_native_files(ws_mgba_to_native, &saves[0]);
+    assert_eq!(tree.len(), 1);
+    assert_eq!(tree[0].0, "Emerald.sav");
+    unsafe { ws_buf_free(buf) };
 }
 
 #[test]
 fn adapter_null_input_returns_null() {
     let _guard = ERROR_TEST_LOCK.lock().unwrap();
     let system = CString::new("switch").unwrap();
-    let result = unsafe { ws_jksv_normalize(system.as_ptr(), std::ptr::null()) };
-    assert!(result.is_null());
+    let result = unsafe { ws_jksv_normalize(system.as_ptr(), std::ptr::null(), 0) };
+    assert!(result.ptr.is_null());
+    assert_to_native_null_rejected(ws_jksv_to_native);
 }
 
 #[test]
 fn twilight_normalize_through_ffi() {
-    let raw_tree = serde_json::json!({
-        "files": [{
-            "path": "saves/Metroid.sav",
-            "data_b64": "//8="
-        }]
-    });
-    let json_str = CString::new(serde_json::to_string(&raw_tree).unwrap()).unwrap();
-    let result_ptr = unsafe { ws_twilight_normalize(json_str.as_ptr()) };
-    assert!(!result_ptr.is_null());
-
-    let result_json = unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap();
-    let saves: Vec<NormalizedSaveDto> = serde_json::from_str(result_json).unwrap();
+    let raw = encode_file_tree(&[("saves/Metroid.sav".to_string(), vec![0xFFu8, 0xFF])]);
+    let buf = unsafe { ws_twilight_normalize(raw.as_ptr(), raw.len()) };
+    assert!(!buf.ptr.is_null());
+    let slice = unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) };
+    let saves = decode_save_list(slice).unwrap();
     assert_eq!(saves.len(), 1);
-    assert_eq!(saves[0].id.game.key, "Metroid");
-    assert_eq!(saves[0].id.slot, "battery");
-    assert_eq!(saves[0].files[0].path, "Metroid.sav");
-
-    unsafe { ws_string_free(result_ptr) };
+    let meta: serde_json::Value = serde_json::from_slice(&saves[0].0).unwrap();
+    assert_eq!(meta["id"]["game"]["key"], "Metroid");
+    assert_eq!(meta["id"]["slot"], "battery");
+    assert_eq!(saves[0].1[0].0, "Metroid.sav");
+    unsafe { ws_buf_free(buf) };
 }
 
 #[test]
 fn twilight_to_native_through_ffi() {
-    let raw_tree = serde_json::json!({
-        "files": [{
-            "path": "saves/Metroid.sav",
-            "data_b64": "//8="
-        }]
-    });
-    let json_str = CString::new(serde_json::to_string(&raw_tree).unwrap()).unwrap();
-    let norm_ptr = unsafe { ws_twilight_normalize(json_str.as_ptr()) };
-    let norm_json = unsafe { CStr::from_ptr(norm_ptr) }.to_str().unwrap();
-    let saves: Vec<serde_json::Value> = serde_json::from_str(norm_json).unwrap();
-    let save_cstr = CString::new(serde_json::to_string(&saves[0]).unwrap()).unwrap();
-
-    let native_ptr = unsafe { ws_twilight_to_native(save_cstr.as_ptr()) };
-    assert!(!native_ptr.is_null());
-    let native_json = unsafe { CStr::from_ptr(native_ptr) }.to_str().unwrap();
-    let tree: RawTreeDto = serde_json::from_str(native_json).unwrap();
-    assert_eq!(tree.files.len(), 1);
-    assert_eq!(tree.files[0].path, "saves/Metroid.sav");
-
-    unsafe {
-        ws_string_free(norm_ptr);
-        ws_string_free(native_ptr);
-    }
+    let raw = encode_file_tree(&[("saves/Metroid.sav".to_string(), vec![0xFFu8, 0xFF])]);
+    let buf = unsafe { ws_twilight_normalize(raw.as_ptr(), raw.len()) };
+    let slice = unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) };
+    let saves = decode_save_list(slice).unwrap();
+    let tree = to_native_files(ws_twilight_to_native, &saves[0]);
+    assert_eq!(tree.len(), 1);
+    assert_eq!(tree[0].0, "saves/Metroid.sav");
+    unsafe { ws_buf_free(buf) };
 }
 
 #[test]
 fn twilight_null_input_returns_null() {
     let _guard = ERROR_TEST_LOCK.lock().unwrap();
-    let result = unsafe { ws_twilight_normalize(std::ptr::null()) };
-    assert!(result.is_null());
-    let result = unsafe { ws_twilight_to_native(std::ptr::null()) };
-    assert!(result.is_null());
+    let result = unsafe { ws_twilight_normalize(std::ptr::null(), 0) };
+    assert!(result.ptr.is_null());
+    assert_to_native_null_rejected(ws_twilight_to_native);
 }
 
 #[test]
 fn checkpoint_normalize_through_ffi() {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as B64;
-
-    let raw_tree = serde_json::json!({
-        "files": [{
-            "path": "0x01006A800016E000 Super Smash Bros. Ultimate/20230715-143052/data.bin",
-            "data_b64": B64.encode([0xDEu8, 0xAD])
-        }]
-    });
-    let system = CString::new("switch").unwrap();
-    let json_str = CString::new(serde_json::to_string(&raw_tree).unwrap()).unwrap();
-    let result_ptr = unsafe { ws_checkpoint_normalize(system.as_ptr(), json_str.as_ptr()) };
-    assert!(!result_ptr.is_null());
-
-    let result_json = unsafe { CStr::from_ptr(result_ptr) }.to_str().unwrap();
-    let saves: Vec<NormalizedSaveDto> = serde_json::from_str(result_json).unwrap();
+    let (buf, saves) = normalize_one(
+        ws_checkpoint_normalize,
+        "switch",
+        CHECKPOINT_PATH,
+        &[0xDE, 0xAD],
+    );
     assert_eq!(saves.len(), 1);
-    assert_eq!(saves[0].id.game.key, "supersmashbrosultimate");
-    assert_eq!(saves[0].id.game.display_name, "Super Smash Bros. Ultimate");
-    assert_eq!(saves[0].id.slot, "20230715-143052");
-    assert_eq!(saves[0].files[0].path, "data.bin");
-
-    unsafe { ws_string_free(result_ptr) };
+    let meta: serde_json::Value = serde_json::from_slice(&saves[0].0).unwrap();
+    assert_eq!(meta["id"]["game"]["key"], "supersmashbrosultimate");
+    assert_eq!(
+        meta["id"]["game"]["display_name"],
+        "Super Smash Bros. Ultimate"
+    );
+    assert_eq!(meta["id"]["slot"], "20230715-143052");
+    assert_eq!(saves[0].1[0].0, "data.bin");
+    unsafe { ws_buf_free(buf) };
 }
 
 #[test]
 fn checkpoint_to_native_through_ffi() {
-    use base64::Engine;
-    use base64::engine::general_purpose::STANDARD as B64;
-
-    let raw_tree = serde_json::json!({
-        "files": [{
-            "path": "0x01006A800016E000 Super Smash Bros. Ultimate/20230715-143052/data.bin",
-            "data_b64": B64.encode([0xDEu8, 0xAD])
-        }]
-    });
-    let system = CString::new("switch").unwrap();
-    let json_str = CString::new(serde_json::to_string(&raw_tree).unwrap()).unwrap();
-    let norm_ptr = unsafe { ws_checkpoint_normalize(system.as_ptr(), json_str.as_ptr()) };
-    let norm_json = unsafe { CStr::from_ptr(norm_ptr) }.to_str().unwrap();
-    let saves: Vec<serde_json::Value> = serde_json::from_str(norm_json).unwrap();
-    let save_cstr = CString::new(serde_json::to_string(&saves[0]).unwrap()).unwrap();
-
-    let native_ptr = unsafe { ws_checkpoint_to_native(save_cstr.as_ptr()) };
-    assert!(!native_ptr.is_null());
-    let native_json = unsafe { CStr::from_ptr(native_ptr) }.to_str().unwrap();
-    let tree: RawTreeDto = serde_json::from_str(native_json).unwrap();
-    assert_eq!(tree.files.len(), 1);
-    assert!(tree.files[0].path.contains("01006A800016E000"));
-    assert!(tree.files[0].path.contains("data.bin"));
-
-    unsafe {
-        ws_string_free(norm_ptr);
-        ws_string_free(native_ptr);
-    }
+    let (buf, saves) = normalize_one(
+        ws_checkpoint_normalize,
+        "switch",
+        CHECKPOINT_PATH,
+        &[0xDE, 0xAD],
+    );
+    let tree = to_native_files(ws_checkpoint_to_native, &saves[0]);
+    assert_eq!(tree.len(), 1);
+    assert!(tree[0].0.contains("01006A800016E000"));
+    assert!(tree[0].0.contains("data.bin"));
+    unsafe { ws_buf_free(buf) };
 }
 
 #[test]
 fn checkpoint_null_input_returns_null() {
     let _guard = ERROR_TEST_LOCK.lock().expect("ERROR_TEST_LOCK poisoned");
     let system = CString::new("switch").unwrap();
-    let result = unsafe { ws_checkpoint_normalize(system.as_ptr(), std::ptr::null()) };
-    assert!(result.is_null());
-    let result = unsafe { ws_checkpoint_to_native(std::ptr::null()) };
-    assert!(result.is_null());
+    let result = unsafe { ws_checkpoint_normalize(system.as_ptr(), std::ptr::null(), 0) };
+    assert!(result.ptr.is_null());
+    assert_to_native_null_rejected(ws_checkpoint_to_native);
 }

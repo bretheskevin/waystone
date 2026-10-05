@@ -1,7 +1,6 @@
 #include "snapshot_browse.h"
 #include "snapshot.h"   // snapshot_sanitize_key
-#include "base64.h"     // base64_encode
-#include "json.h"       // json_escape
+#include "file_tree.h"  // file_tree_encode
 
 #include <algorithm>
 #include <cerrno>
@@ -149,7 +148,7 @@ std::vector<SnapshotEntry> list_snapshots(const char* backups_root,
     return entries;
 }
 
-// -- snapshot_to_flat_files_json --
+// -- snapshot_to_file_tree --
 
 // Strip the first two slash-delimited components from a path.
 // Paths stored by write_snapshot are "<title_dir>/<slot>/<save-relative>".
@@ -173,50 +172,42 @@ static std::string extract_slot(const std::string& path) {
     return path.substr(first + 1, second - first - 1);
 }
 
-std::string snapshot_to_flat_files_json(const char* snapshot_dir, const char* slot_filter) {
+int snapshot_to_file_tree(const char* snapshot_dir, const char* slot_filter,
+                          std::vector<uint8_t>* out) {
     std::vector<WalkFile> files;
     walk_dir_recursive(std::string(snapshot_dir), "", files);
 
-    if (files.empty()) return "[]";
-
-    std::string result = "[";
-    bool first = true;
-
+    std::vector<FileTreeEntry> entries;
     for (size_t i = 0; i < files.size(); i++) {
         std::string stripped = strip_two_components(files[i].relative_path);
         if (stripped.empty()) continue;
-        if (slot_filter != nullptr &&
+        if (slot_filter != 0 &&
             extract_slot(files[i].relative_path) != slot_filter) continue;
 
-        std::string full_path = std::string(snapshot_dir) + "/" +
-                                files[i].relative_path;
+        std::string full_path = std::string(snapshot_dir) + "/" + files[i].relative_path;
         FILE* f = fopen(full_path.c_str(), "rb");
-        if (!f) return "";
+        if (!f) {
+            printf("[saves] snapshot_to_file_tree: fopen failed %s\n", full_path.c_str());
+            return -1;
+        }
 
         std::vector<uint8_t> content;
         if (files[i].size > 0) {
             content.resize((size_t)files[i].size);
             size_t nread = fread(content.data(), 1, content.size(), f);
             fclose(f);
-            if (nread != content.size()) return "";
+            if (nread != content.size()) {
+                printf("[saves] snapshot_to_file_tree: short read %s\n", full_path.c_str());
+                return -1;
+            }
         } else {
             fclose(f);
         }
-
-        std::string b64 = content.empty()
-                              ? ""
-                              : base64_encode(content.data(), content.size());
-
-        if (!first) result += ",";
-        first = false;
-
-        result += "{\"path\":\"";
-        result += json_escape(stripped);
-        result += "\",\"data_b64\":\"";
-        result += b64;
-        result += "\"}";
+        entries.push_back(FileTreeEntry(stripped, content));
     }
 
-    result += "]";
-    return result;
+    *out = file_tree_encode(entries);
+    printf("[saves] snapshot_to_file_tree: %zu file(s), %zu byte(s) from %s\n",
+           entries.size(), out->size(), snapshot_dir);
+    return (int)entries.size();
 }

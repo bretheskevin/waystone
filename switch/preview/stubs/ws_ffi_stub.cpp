@@ -74,24 +74,25 @@ char* ws_vault_blob_name(const WsVault*, const char*) { return strdup("preview-b
 char* ws_vault_path_segment(const WsVault*, const char*) { return strdup("preview-seg"); }
 
 // ---------------------------------------------------------------------------
-// Save / normalise stubs
+// Save / normalise stubs (signatures mirror ffi/include/waystone.h — binary
+// file-tree transport: WsBuf trees in/out, lengths as uintptr_t)
 // ---------------------------------------------------------------------------
-WsBuf ws_canonical_zip(const char*)                                            { return {nullptr, 0}; }
-char* ws_unzip(const uint8_t*, uintptr_t)                                      { return strdup("[]"); }
+WsBuf ws_canonical_zip(const uint8_t*, uintptr_t)                              { return {nullptr, 0}; }
+WsBuf ws_unzip(const uint8_t*, uintptr_t)                                      { return {nullptr, 0}; }
 char* ws_content_hash(const uint8_t*, uintptr_t)                               { return strdup("preview-hash"); }
 char* ws_file_hash(const uint8_t*, uintptr_t)                                  { return strdup("preview-hash"); }
-char* ws_package(const char*, WsBuf*)                                          { return strdup("{}"); }
-char* ws_fold_heads(const char*)                                               { return strdup("{}"); }
+char* ws_package(const char*, const uint8_t*, uintptr_t, WsBuf*)              { return strdup("{}"); }
+char* ws_fold_heads(const char*)                                              { return strdup("{}"); }
 char* ws_three_way_sync(const char*, const char*, const char*,
                          const char*, const char*, int)                        { return strdup("{}"); }
 char* ws_decide_pull(const char*, const char*, const char*, const char*, int)  { return strdup("{}"); }
 
 // Format-normalise stubs
-char* ws_checkpoint_normalize(const char*, const char*) { return strdup("{}"); }
-char* ws_checkpoint_to_native(const char*)              { return strdup("[]"); }
-char* ws_jksv_normalize(const char*, const char*)       { return strdup("{}"); }
-char* ws_jksv_to_native(const char*)                    { return strdup("[]"); }
-char* ws_mgba_normalize(const char*, const char*)       { return strdup("{}"); }
-char* ws_mgba_to_native(const char*)                    { return strdup("[]"); }
-char* ws_twilight_normalize(const char*)                { return strdup("{}"); }
-char* ws_twilight_to_native(const char*)                { return strdup("[]"); }
+WsBuf ws_checkpoint_normalize(const char*, const uint8_t*, uintptr_t)           { return {nullptr, 0}; }
+int32_t ws_checkpoint_to_native(const char*, const uint8_t*, uintptr_t, WsBuf*) { return 0; }
+WsBuf ws_jksv_normalize(const char*, const uint8_t*, uintptr_t)                 { return {nullptr, 0}; }
+int32_t ws_jksv_to_native(const char*, const uint8_t*, uintptr_t, WsBuf*)       { return 0; }
+WsBuf ws_mgba_normalize(const char*, const uint8_t*, uintptr_t)                 { return {nullptr, 0}; }
+int32_t ws_mgba_to_native(const char*, const uint8_t*, uintptr_t, WsBuf*)       { return 0; }
+WsBuf ws_twilight_normalize(const uint8_t*, uintptr_t)                          { return {nullptr, 0}; }
+int32_t ws_twilight_to_native(const char*, const uint8_t*, uintptr_t, WsBuf*)   { return 0; }

@@ -1,7 +1,6 @@
 #include "saves.h"
 #include "homebrew_filter.h"
-#include "base64.h"
-#include "json.h"
+#include "file_tree.h"
 #include "net.h"
 #include "snapshot_browse.h"
 #include <set>
@@ -769,7 +768,7 @@ static void walk_archive(FS_Archive archive, const char* rel,
     FSDIR_Close(dir);
 }
 
-std::string extract_save_json(const TitleInfo& title) {
+std::vector<uint8_t> extract_save_json(const TitleInfo& title) {
     // -- Phase 1: user/TWL savedata (routed by title origin) --
     std::vector<std::pair<std::string, std::vector<uint8_t>>> files;
     {
@@ -823,7 +822,7 @@ std::string extract_save_json(const TitleInfo& title) {
                    (unsigned long long)title.title_id, (unsigned long)ext_id);
         }
     }
-    if (files.empty() && extdata_files.empty()) return "";
+    if (files.empty() && extdata_files.empty()) return std::vector<uint8_t>();
 
     char hex_uid[8];
     snprintf(hex_uid, sizeof(hex_uid), "%05X", (unsigned)title.unique_id);
@@ -837,7 +836,10 @@ std::string extract_save_json(const TitleInfo& title) {
     for (auto& f : extdata_files) {
         wrapped.push_back({checkpoint_dir + "/extdata/" + f.first, std::move(f.second)});
     }
-    return build_raw_tree_json(wrapped);
+    std::vector<uint8_t> tree = file_tree_encode(wrapped);
+    printf("[saves] extract: encoded file_tree %zu bytes (%zu files)\n",
+           tree.size(), wrapped.size());
+    return tree;
 }
 
 std::string current_utc_time() {
@@ -897,7 +899,15 @@ uint8_t* read_keys_file(const char* path, long* len_out) {
     return buf;
 }
 
-int write_save_files(const TitleInfo& title, const char* files_json, SaveArchiveKind kind) {
+int write_save_files(const TitleInfo& title, const uint8_t* ft_ptr, size_t ft_len,
+                     SaveArchiveKind kind) {
+    std::vector<FileTreeEntry> entries;
+    if (!file_tree_decode(ft_ptr, ft_len, &entries)) {
+        printf("[saves] write_save_files: file_tree_decode failed (len=%zu)\n", ft_len);
+        return -1;
+    }
+    printf("[saves] write_save_files: decoded %zu files (%zu bytes)\n",
+           entries.size(), ft_len);
     const u64 title_id = title.title_id;
     FS_Archive archive;
     // Path prefix inside the archive for TWL saves ("" for all other kinds).
@@ -964,12 +974,11 @@ int write_save_files(const TitleInfo& title, const char* files_json, SaveArchive
         }
     }
 
-    std::vector<std::string> entries = json_split_array(files_json);
     int ret = 0;
 
-    for (const auto& entry_str : entries) {
-        std::string path     = json_get_string(entry_str.c_str(), "path");
-        std::string data_b64 = json_get_string(entry_str.c_str(), "data_b64");
+    for (size_t e = 0; e < entries.size(); e++) {
+        std::string path = entries[e].first;
+        const std::vector<uint8_t>& bytes = entries[e].second;
 
         if (path.empty()) {
             printf("[saves] write_save_files: missing path in file entry\n");
@@ -981,17 +990,6 @@ int write_save_files(const TitleInfo& title, const char* files_json, SaveArchive
         // all other kinds write at the archive root.
         if (!root_prefix.empty()) {
             path = root_prefix + "/" + path;
-        }
-
-        // Decode file content (empty data_b64 → 0-byte file, which is valid).
-        std::vector<uint8_t> bytes;
-        if (!data_b64.empty()) {
-            bytes = base64_decode(data_b64);
-            if (bytes.empty()) {
-                printf("[saves] write_save_files: base64_decode failed for %s\n", path.c_str());
-                ret = -1;
-                continue;
-            }
         }
 
         // Create parent directories under the archive root.

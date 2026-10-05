@@ -1,5 +1,4 @@
 #include "json.h"
-#include "base64.h"
 #include "jsmn.h"
 
 #include <cstring>
@@ -33,21 +32,6 @@ std::string json_escape(const std::string& s) {
     return out;
 }
 
-std::string build_raw_tree_json(
-    const std::vector<std::pair<std::string, std::vector<uint8_t>>>& files) {
-    std::string out = "{\"files\":[";
-    for (size_t i = 0; i < files.size(); i++) {
-        if (i > 0) out += ',';
-        out += "{\"path\":\"";
-        out += json_escape(files[i].first);
-        out += "\",\"data_b64\":\"";
-        out += base64_encode(files[i].second.data(), files[i].second.size());
-        out += "\"}";
-    }
-    out += "]}";
-    return out;
-}
-
 std::string build_device_head_json(const char* device_id,
                                    const char* hash,
                                    const char* mtime) {
@@ -77,8 +61,8 @@ std::string json_set_mtime(const std::string& json, const char* mtime) {
 
 // ---- JSON parsing ----
 
-// Max tokens for jsmn. NormalizedSaveDto with many files can be large.
-// 2048 tokens handles saves with ~200 files comfortably.
+// Max tokens for jsmn. Large JSON payloads (e.g. decrypted heads arrays) can
+// hold many tokens; 2048 handles them comfortably.
 static const int MAX_TOKENS = 2048;
 
 // Helper: compare a jsmn string token against a key.

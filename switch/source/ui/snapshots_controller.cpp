@@ -1,6 +1,6 @@
 #include "snapshots_controller.h"
 #include "snapshot.h"        // write_snapshot, snapshot_sanitize_key
-#include "snapshot_browse.h" // list_snapshots, snapshot_to_flat_files_json, etc.
+#include "snapshot_browse.h" // list_snapshots, snapshot_to_file_tree, etc.
 #include <cstdio>
 
 SnapshotsController::SnapshotsController(TitleInfo title, AccountUid uid)
@@ -76,12 +76,12 @@ void SnapshotsController::restore_worker(SnapshotEntry entry, size_t index) {
     // 1. Always snapshot the CURRENT save first (unconditional guard)
     printf("[snapshot] guard: extracting current save for %s\n",
            title_.name.c_str());
-    std::string raw_json = extract_save_json(title_, uid_);
-    if (!raw_json.empty()) {
+    std::vector<uint8_t> raw_tree = extract_save_json(title_, uid_);
+    if (!raw_tree.empty()) {
         std::string snap_ts = history_timestamp();
         std::string backup_dir = std::string("sdmc:/waystone/backups/") +
                                  key_dir_ + "/" + snap_ts;
-        if (!write_snapshot(backup_dir.c_str(), raw_json.c_str())) {
+        if (!write_snapshot(backup_dir.c_str(), raw_tree.data(), raw_tree.size())) {
             printf("[snapshot] guard snapshot FAILED, aborting restore\n");
             { std::lock_guard<std::mutex> lk(mu_);
               status_ = "Restore failed: could not back up current save."; }
@@ -96,17 +96,20 @@ void SnapshotsController::restore_worker(SnapshotEntry entry, size_t index) {
         }
     }
 
-    // 2. Read the selected snapshot into a flat files_json
+    // 2. Read the selected snapshot into a binary file tree
     printf("[snapshot] reading snapshot %s\n", entry.path.c_str());
-    std::string flat_json = snapshot_to_flat_files_json(entry.path.c_str());
-    if (flat_json.empty()) {
+    std::vector<uint8_t> file_tree;
+    int fcount = snapshot_to_file_tree(entry.path.c_str(), nullptr, &file_tree);
+    if (fcount < 0) {
+        printf("[snapshot] snapshot_to_file_tree failed\n");
         { std::lock_guard<std::mutex> lk(mu_);
           status_ = "Restore failed: could not read snapshot."; }
         phase_.store(BrowsePhase::Error);
         running_.store(false);
         return;
     }
-    if (flat_json == "[]") {
+    printf("[snapshot] snapshot has %d files (%zu bytes)\n", fcount, file_tree.size());
+    if (fcount == 0) {
         { std::lock_guard<std::mutex> lk(mu_);
           status_ = "Snapshot is empty, nothing to restore."; }
         phase_.store(BrowsePhase::Done);
@@ -116,7 +119,7 @@ void SnapshotsController::restore_worker(SnapshotEntry entry, size_t index) {
 
     // 3. Write the snapshot files to the save mount
     printf("[snapshot] writing save files for title %016lX\n", title_.title_id);
-    int wrc = write_save_files(title_.title_id, uid_, flat_json.c_str());
+    int wrc = write_save_files(title_.title_id, uid_, file_tree.data(), file_tree.size());
     if (wrc != 0) {
         printf("[snapshot] write_save_files FAILED (rc=%d)\n", wrc);
         { std::lock_guard<std::mutex> lk(mu_);

@@ -17,13 +17,11 @@ struct TitleInfo {
 // Returns empty vector on failure (prints error to console).
 std::vector<TitleInfo> list_titles();
 
-// Extract save data for a title+user as a RawTreeDto JSON string.
-// The returned JSON has paths formatted for ws_jksv_normalize:
-//   "<game_name>/<slot>/<relative_file_path>"
-// where slot is "main" (primary save extraction).
-// uid: the user account UID.
-// Returns empty string on failure (e.g. no save exists).
-std::string extract_save_json(const TitleInfo& title, AccountUid uid);
+// Extract save data for a title+user as a WsFileTree buffer (binary file-tree).
+// Paths follow the JKSV convention "<game_name>/main/<relative_file_path>" so
+// ws_jksv_normalize can parse title_dir=<game_name>, slot="main".
+// Returns an empty vector on failure / no save.
+std::vector<uint8_t> extract_save_json(const TitleInfo& title, AccountUid uid);
 
 // Get the current account UID. Initializes/exits account internally.
 // Returns true on success, false on failure.
@@ -37,12 +35,12 @@ std::string current_utc_time();
 // Returns empty string on failure.
 std::string get_device_id();
 
-// Restore save files from a flat FileEntryDto JSON array produced by ws_unzip.
-// files_json: JSON array of {"path":"...","data_b64":"..."} — paths are
-//   save-relative (written directly under save:/).
+// Restore save files from a WsFileTree buffer (from ws_unzip or
+// snapshot_to_file_tree). Paths are save-relative (written under save:/).
 // Mounts save data (read-write), writes each file, commits with
 // fsdevCommitDevice (REQUIRED or writes are lost), then unmounts.
-// Returns 0 on success, -1 if mount fails.
-int write_save_files(u64 title_id, AccountUid uid, const char* files_json);
+// Returns 0 on success, -1 on decode/mount/write failure.
+int write_save_files(u64 title_id, AccountUid uid,
+                     const uint8_t* ft_ptr, size_t ft_len);
 
 #endif

@@ -21,12 +21,13 @@ struct TitleInfo {
 // Enumerate installed titles via AM service (SD + NAND TWL/DSiWare).
 std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav);
 
-// Extract savedata for a title as a RawTreeDto JSON string.
+// Extract savedata for a title as a WsFileTree buffer (binary file-tree).
+// Empty vector = failure / no save.
 // Paths formatted for ws_checkpoint_normalize:
 //   "0x<5-hex uniqueID> <name>/main/<relative_file_path>"   (USER_SAVEDATA)
 //   "0x<5-hex uniqueID> <name>/extdata/<relative_file_path>" (EXTDATA, if present)
 // No uid parameter -- 3DS savedata is per-title, not per-user.
-std::string extract_save_json(const TitleInfo& title);
+std::vector<uint8_t> extract_save_json(const TitleInfo& title);
 
 // Get current UTC time as ISO 8601 string.
 std::string current_utc_time();
@@ -59,13 +60,12 @@ inline const char* save_kind_name(SaveArchiveKind kind) {
 // TWL -> SaveTwl; SD -> SaveUser.
 SaveArchiveKind main_save_kind(const TitleInfo& title);
 
-// Restore a flat FileEntryDto JSON array ([{"path":"...","data_b64":"..."},...])
-// into the title's save archive, then commit (commit/secure-value skipped for
+// Restore a WsFileTree buffer (from ws_unzip or snapshot_to_file_tree) into the title's save archive, then commit (commit/secure-value skipped for
 // SaveTwl and SaveExtdata, mirroring Checkpoint's `kind == Save && !isTwl` guard).
 // kind is mandatory: for the "main" slot callers must route via main_save_kind()
 // so TWL titles never silently take the SaveUser path.
 // Returns 0 on success, -1 on mount/write/commit failure.
-int write_save_files(const TitleInfo& title, const char* files_json,
+int write_save_files(const TitleInfo& title, const uint8_t* ft_ptr, size_t ft_len,
                      SaveArchiveKind kind);
 
 // Return the extdata archive ID for a given title_id.

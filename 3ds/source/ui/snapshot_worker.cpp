@@ -1,7 +1,7 @@
 #include "snapshot_worker.h"
 #include "worker_thread.h"
 #include "snapshot.h"        // write_snapshot, snapshot_sanitize_key
-#include "snapshot_browse.h" // list_snapshots, snapshot_to_flat_files_json, etc.
+#include "snapshot_browse.h" // list_snapshots, snapshot_to_file_tree, etc.
 #include <cstdio>
 #include <cstring>
 
@@ -144,12 +144,12 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
     // 1. Always snapshot the CURRENT save first (unconditional guard)
     printf("[snapshot] guard: extracting current save for %s\n",
            title_.name.c_str());
-    std::string raw_json = extract_save_json(title_);
-    if (!raw_json.empty()) {
+    std::vector<uint8_t> raw_tree = extract_save_json(title_);
+    if (!raw_tree.empty()) {
         std::string snap_ts = history_timestamp();
         std::string backup_dir = std::string("sdmc:/waystone/backups/") +
                                  key_dir_ + "/" + snap_ts;
-        if (!write_snapshot(backup_dir.c_str(), raw_json.c_str())) {
+        if (!write_snapshot(backup_dir.c_str(), raw_tree.data(), raw_tree.size())) {
             printf("[snapshot] guard snapshot FAILED, aborting restore\n");
             LightLock_Lock(&mu_);
             snprintf(status_buf_, sizeof(status_buf_),
@@ -165,7 +165,7 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
             printf("[snapshot] prune failed for %s (non-fatal)\n", key_dir_.c_str());
         }
     }
-    // If raw_json is empty, there is no current save to guard -- proceed.
+    // If raw_tree is empty, there is no current save to guard -- proceed.
 
     // 2. Restore each slot to its correct archive.
     // "main"    -> routed by title origin via main_save_kind (SaveUser/SaveTwl)
@@ -182,9 +182,10 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
 
         printf("[snapshot] reading snapshot %s slot=%s\n",
                entry.path.c_str(), slot);
-        std::string flat = snapshot_to_flat_files_json(entry.path.c_str(), slot);
-        if (flat.empty()) {
-            printf("[snapshot] snapshot_to_flat_files_json FAILED slot=%s\n", slot);
+        std::vector<uint8_t> file_tree;
+        int fcount = snapshot_to_file_tree(entry.path.c_str(), slot, &file_tree);
+        if (fcount < 0) {
+            printf("[snapshot] snapshot_to_file_tree FAILED slot=%s\n", slot);
             LightLock_Lock(&mu_);
             snprintf(status_buf_, sizeof(status_buf_),
                      "Restore failed: could not read snapshot.");
@@ -193,14 +194,14 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
             running_.store(false);
             return;
         }
-        if (flat == "[]") {
+        if (fcount == 0) {
             printf("[snapshot] slot=%s has no files in snapshot, skipping\n", slot);
             continue;
         }
 
-        printf("[snapshot] restoring slot=%s kind=%s files present\n",
-               slot, save_kind_name(kind));
-        int wrc = write_save_files(title_, flat.c_str(), kind);
+        printf("[snapshot] restoring slot=%s kind=%s files=%d (%zu bytes)\n",
+               slot, save_kind_name(kind), fcount, file_tree.size());
+        int wrc = write_save_files(title_, file_tree.data(), file_tree.size(), kind);
         if (wrc != 0) {
             printf("[snapshot] write_save_files FAILED slot=%s (rc=%d)\n", slot, wrc);
             LightLock_Lock(&mu_);

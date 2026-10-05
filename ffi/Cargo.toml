@@ -17,7 +17,6 @@ switch = ["waystone-core/switch"]
 waystone-core = { path = "../core" }
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 serde_json = { version = "1", default-features = false, features = ["alloc"] }
-base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 spin = "0.9"
 
 [dev-dependencies]

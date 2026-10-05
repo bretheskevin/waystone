@@ -1,5 +1,6 @@
 #include "sync.h"
 #include "json.h"
+#include "file_tree.h"
 #include "snapshot.h"
 #include "snapshot_browse.h" // history_timestamp (shared)
 
@@ -41,15 +42,16 @@ static std::string make_base_path(const WsVault* vault,
     return result;
 }
 
-SaveDecision scan_save_decision(const WsVault* vault, const char* save_json,
+SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
                                 const char* mtime, const char* device_id,
                                 int policy, const WebDavCfg& dav,
-                                const std::string& raw_json) {
+                                const std::vector<uint8_t>& raw_tree,
+                                const uint8_t* files_ptr, size_t files_len) {
     SaveDecision d;
-    d.raw_json = raw_json;
+    d.raw_tree = raw_tree;
 
     WsBuf zip = {nullptr, 0};
-    char* entry_json = ws_package(save_json, &zip);
+    char* entry_json = ws_package(save_meta, files_ptr, files_len, &zip);
     if (!entry_json) {
         printf("FAIL ws_package: %s\n", ws_last_error() ? ws_last_error() : "unknown");
         return d;
@@ -128,7 +130,7 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_json,
 
 int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
                         const std::string& base_path, const std::string& group_key,
-                        const std::string& raw_json, const TitleInfo& title,
+                        const std::vector<uint8_t>& raw_tree, const TitleInfo& title,
                         const WebDavCfg& dav) {
     char* blob_name = ws_vault_blob_name(vault, pull_hash.c_str());
     if (!blob_name) {
@@ -151,23 +153,26 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
         return -1;
     }
 
-    char* files_json = ws_unzip(decrypted_blob.ptr, decrypted_blob.len);
+    size_t blob_len = decrypted_blob.len;
+    WsBuf file_tree = ws_unzip(decrypted_blob.ptr, decrypted_blob.len);
     ws_buf_free(decrypted_blob);
-    if (!files_json) {
+    if (!file_tree.ptr) {
         printf("  FAIL: ws_unzip: %s\n",
                ws_last_error() ? ws_last_error() : "unknown");
         return -1;
     }
+    printf("[sync] unzip ok (blob %zu bytes -> file_tree %zu bytes)\n",
+           blob_len, (size_t)file_tree.len);
 
     {
         std::string sanitized = snapshot_sanitize_key(group_key);
         std::string snap_ts = history_timestamp();
         std::string backup_dir = std::string("sdmc:/waystone/backups/") +
                                  sanitized + "/" + snap_ts;
-        if (!write_snapshot(backup_dir.c_str(), raw_json.c_str())) {
+        if (!write_snapshot(backup_dir.c_str(), raw_tree.data(), raw_tree.size())) {
             printf("  WARN: safety snapshot failed for %s, skipping restore\n",
                    group_key.c_str());
-            ws_string_free(files_json);
+            ws_buf_free(file_tree);
             return -1;
         }
         std::string backup_root = std::string("sdmc:/waystone/backups/") + sanitized;
@@ -191,8 +196,8 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
     printf("[saves] restore routing group_key=%s -> kind=%s\n",
            group_key.c_str(), save_kind_name(kind));
 
-    int wrc = write_save_files(title, files_json, kind);
-    ws_string_free(files_json);
+    int wrc = write_save_files(title, file_tree.ptr, file_tree.len, kind);
+    ws_buf_free(file_tree);
     return wrc;
 }
 
@@ -202,28 +207,38 @@ std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& titl
     std::vector<SaveDecision> results;
     if (error) *error = false;
 
-    std::string raw_json = extract_save_json(title);
-    if (raw_json.empty()) return results;
+    std::vector<uint8_t> raw_tree = extract_save_json(title);
+    if (raw_tree.empty()) return results;
 
-    char* norm_json = ws_checkpoint_normalize("3ds", raw_json.c_str());
-    if (!norm_json) {
+    size_t raw_len = raw_tree.size();
+    WsBuf savelist = ws_checkpoint_normalize("3ds", raw_tree.data(), raw_tree.size());
+    if (!savelist.ptr) {
         printf("  ws_checkpoint_normalize failed: %s\n",
                ws_last_error() ? ws_last_error() : "unknown");
         if (error) *error = true;
         return results;
     }
 
-    std::vector<std::string> saves = json_split_array(norm_json);
-    ws_string_free(norm_json);
-    if (saves.empty()) return results;
+    std::vector<SaveListEntry> saves;
+    if (!save_list_decode(savelist.ptr, savelist.len, &saves)) {
+        printf("[sync] save_list_decode failed (%zu bytes)\n", (size_t)savelist.len);
+        ws_buf_free(savelist);
+        if (error) *error = true;
+        return results;
+    }
+    printf("[sync] normalize ok (raw %zu -> %zu bytes, %zu saves)\n",
+           raw_len, (size_t)savelist.len, saves.size());
+    if (saves.empty()) { ws_buf_free(savelist); return results; }
 
     std::string mtime = current_utc_time();
     for (size_t si = 0; si < saves.size(); si++) {
-        std::string save_json = json_set_mtime(saves[si], mtime.c_str());
-        SaveDecision d = scan_save_decision(vault, save_json.c_str(), mtime.c_str(),
-                                            device_id, policy, dav, raw_json);
+        std::string save_meta = json_set_mtime(saves[si].meta_json, mtime.c_str());
+        SaveDecision d = scan_save_decision(vault, save_meta.c_str(), mtime.c_str(),
+                                            device_id, policy, dav, raw_tree,
+                                            saves[si].files_ptr, saves[si].files_len);
         results.push_back(d);
     }
+    ws_buf_free(savelist);
     return results;
 }
 
@@ -235,35 +250,43 @@ std::vector<SaveLocation> resolve_save_locations(const WsVault* vault,
 
     printf("[history] resolve_save_locations: title=%s\n", title.name.c_str());
 
-    std::string raw_json = extract_save_json(title);
-    if (raw_json.empty()) {
+    std::vector<uint8_t> raw_tree = extract_save_json(title);
+    if (raw_tree.empty()) {
         printf("[history] resolve_save_locations: no local save data for %s\n",
                title.name.c_str());
         return results;
     }
 
-    char* norm_json = ws_checkpoint_normalize("3ds", raw_json.c_str());
-    if (!norm_json) {
+    WsBuf savelist = ws_checkpoint_normalize("3ds", raw_tree.data(), raw_tree.size());
+    if (!savelist.ptr) {
         printf("[history] resolve_save_locations: ws_checkpoint_normalize failed: %s\n",
                ws_last_error() ? ws_last_error() : "unknown");
         if (error) *error = true;
         return results;
     }
 
-    std::vector<std::string> saves = json_split_array(norm_json);
-    ws_string_free(norm_json);
+    std::vector<SaveListEntry> saves;
+    if (!save_list_decode(savelist.ptr, savelist.len, &saves)) {
+        printf("[history] resolve_save_locations: save_list_decode failed (%zu bytes)\n",
+               (size_t)savelist.len);
+        ws_buf_free(savelist);
+        if (error) *error = true;
+        return results;
+    }
     if (saves.empty()) {
         printf("[history] resolve_save_locations: no saves after normalize for %s\n",
                title.name.c_str());
+        ws_buf_free(savelist);
         return results;
     }
 
     std::string mtime = current_utc_time();
     for (size_t si = 0; si < saves.size(); si++) {
-        std::string save_json = json_set_mtime(saves[si], mtime.c_str());
+        std::string save_meta = json_set_mtime(saves[si].meta_json, mtime.c_str());
 
         WsBuf zip = {nullptr, 0};
-        char* entry_json = ws_package(save_json.c_str(), &zip);
+        char* entry_json = ws_package(save_meta.c_str(), saves[si].files_ptr,
+                                      saves[si].files_len, &zip);
         if (!entry_json) {
             printf("[history] resolve_save_locations: ws_package failed save %zu: %s\n",
                    si, ws_last_error() ? ws_last_error() : "unknown");
@@ -272,7 +295,7 @@ std::vector<SaveLocation> resolve_save_locations(const WsVault* vault,
         }
 
         SaveLocation loc;
-        loc.raw_json  = raw_json;
+        loc.raw_tree  = raw_tree;
         loc.group_key = json_get_string(entry_json, "group_key");
         ws_string_free(entry_json);
         ws_buf_free(zip);
@@ -290,6 +313,7 @@ std::vector<SaveLocation> resolve_save_locations(const WsVault* vault,
         results.push_back(loc);
     }
 
+    ws_buf_free(savelist);
     printf("[history] resolve_save_locations: resolved %zu location(s) for %s\n",
            results.size(), title.name.c_str());
     return results;
@@ -301,25 +325,34 @@ int push_title(const WsVault* vault,
                const WebDavCfg& dav) {
 
     printf("  Extracting save data...\n");
-    std::string raw_json = extract_save_json(title);
-    if (raw_json.empty()) {
+    std::vector<uint8_t> raw_tree = extract_save_json(title);
+    if (raw_tree.empty()) {
         printf("  No save data found.\n");
         return 0;
     }
 
     printf("  Normalizing...\n");
-    char* norm_json = ws_checkpoint_normalize("3ds", raw_json.c_str());
-    if (!norm_json) {
+    size_t raw_len = raw_tree.size();
+    WsBuf savelist = ws_checkpoint_normalize("3ds", raw_tree.data(), raw_tree.size());
+    std::vector<uint8_t>().swap(raw_tree); // eager-free
+    if (!savelist.ptr) {
         printf("  ws_checkpoint_normalize failed: %s\n",
                ws_last_error() ? ws_last_error() : "unknown");
         return -1;
     }
 
-    std::vector<std::string> saves = json_split_array(norm_json);
-    ws_string_free(norm_json);
+    std::vector<SaveListEntry> saves;
+    if (!save_list_decode(savelist.ptr, savelist.len, &saves)) {
+        printf("[sync] save_list_decode failed (%zu bytes)\n", (size_t)savelist.len);
+        ws_buf_free(savelist);
+        return -1;
+    }
+    printf("[sync] normalize ok (raw %zu -> %zu bytes, %zu saves)\n",
+           raw_len, (size_t)savelist.len, saves.size());
 
     if (saves.empty()) {
         printf("  No normalized saves produced.\n");
+        ws_buf_free(savelist);
         return 0;
     }
 
@@ -329,10 +362,11 @@ int push_title(const WsVault* vault,
     for (size_t si = 0; si < saves.size(); si++) {
         printf("  Save %zu/%zu: ", si + 1, saves.size());
 
-        std::string save_json = json_set_mtime(saves[si], mtime.c_str());
+        std::string save_meta = json_set_mtime(saves[si].meta_json, mtime.c_str());
 
         WsBuf zip = {nullptr, 0};
-        char* entry_json = ws_package(save_json.c_str(), &zip);
+        char* entry_json = ws_package(save_meta.c_str(), saves[si].files_ptr,
+                                      saves[si].files_len, &zip);
         if (!entry_json) {
             printf("FAIL ws_package: %s\n",
                    ws_last_error() ? ws_last_error() : "unknown");
@@ -433,6 +467,7 @@ int push_title(const WsVault* vault,
         printf("  Pushed OK.\n");
     }
 
+    ws_buf_free(savelist);
     return pushed;
 }
 
@@ -473,7 +508,7 @@ int pull_title(const WsVault* vault,
         }
         printf("pulling hash=%.12s...\n", d.pull_hash.c_str());
         int rc = restore_remote_save(vault, d.pull_hash, d.base_path, d.group_key,
-                                     d.raw_json, title, dav);
+                                     d.raw_tree, title, dav);
         if (rc == 0) {
             printf("  Pulled OK.\n"); pulled++;
         } else {

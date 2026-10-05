@@ -1,6 +1,5 @@
 #include "saves.h"
-#include "base64.h"
-#include "json.h"
+#include "file_tree.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -158,13 +157,13 @@ static void walk_dir(const char* base, const char* rel,
     closedir(d);
 }
 
-std::string extract_save_json(const TitleInfo& title, AccountUid uid) {
+std::vector<uint8_t> extract_save_json(const TitleInfo& title, AccountUid uid) {
     // Mount save data
     Result rc = fsdevMountSaveData("save", title.title_id, uid);
     if (R_FAILED(rc)) {
         // FsError_TargetNotFound = 0x7D402 means no save exists for this title+user
-        printf("  fsdevMountSaveData failed: 0x%X\n", rc);
-        return "";
+        printf("[saves] fsdevMountSaveData failed: 0x%X\n", rc);
+        return std::vector<uint8_t>();
     }
 
     // Walk the mounted filesystem
@@ -173,7 +172,7 @@ std::string extract_save_json(const TitleInfo& title, AccountUid uid) {
 
     fsdevUnmountDevice("save");
 
-    if (files.empty()) return "";
+    if (files.empty()) return std::vector<uint8_t>();
 
     // Wrap file paths in JKSV convention: <GameName>/main/<relative_path>
     // This lets ws_jksv_normalize parse title_dir=<GameName>, slot="main".
@@ -184,7 +183,9 @@ std::string extract_save_json(const TitleInfo& title, AccountUid uid) {
         wrapped.push_back({jksv_path, std::move(f.second)});
     }
 
-    return build_raw_tree_json(wrapped);
+    std::vector<uint8_t> tree = file_tree_encode(wrapped);
+    printf("[saves] extracted %zu files -> file tree %zu bytes\n", wrapped.size(), tree.size());
+    return tree;
 }
 
 bool get_active_account(AccountUid* out_uid) {
@@ -247,36 +248,31 @@ std::string get_device_id() {
     return std::string(hex, 32);
 }
 
-int write_save_files(u64 title_id, AccountUid uid, const char* files_json) {
-    Result rc = fsdevMountSaveData("save", title_id, uid);
-    if (R_FAILED(rc)) {
-        printf("  write_save_files: fsdevMountSaveData failed: 0x%X\n", rc);
+int write_save_files(u64 title_id, AccountUid uid,
+                     const uint8_t* ft_ptr, size_t ft_len) {
+    std::vector<FileTreeEntry> entries;
+    if (!file_tree_decode(ft_ptr, ft_len, &entries)) {
+        printf("[saves] write_save_files: file_tree_decode failed (%zu bytes)\n", ft_len);
         return -1;
     }
 
-    std::vector<std::string> entries = json_split_array(files_json);
+    Result rc = fsdevMountSaveData("save", title_id, uid);
+    if (R_FAILED(rc)) {
+        printf("[saves] write_save_files: fsdevMountSaveData failed: 0x%X\n", rc);
+        return -1;
+    }
+    printf("[saves] write_save_files: %zu files\n", entries.size());
+
     int ret = 0;
 
-    for (const auto& entry_str : entries) {
-        std::string path     = json_get_string(entry_str.c_str(), "path");
-        std::string data_b64 = json_get_string(entry_str.c_str(), "data_b64");
+    for (size_t e = 0; e < entries.size(); e++) {
+        const std::string& path = entries[e].first;
+        const std::vector<uint8_t>& bytes = entries[e].second;
 
         if (path.empty()) {
             printf("  write_save_files: missing path in file entry\n");
             ret = -1;
             continue;
-        }
-
-        // Decode file content (empty data_b64 → 0-byte file, which is valid).
-        std::vector<uint8_t> bytes;
-        if (!data_b64.empty()) {
-            bytes = base64_decode(data_b64);
-            if (bytes.empty()) {
-                // base64_decode returned empty for non-empty input → invalid encoding.
-                printf("  write_save_files: base64_decode failed for %s\n", path.c_str());
-                ret = -1;
-                continue;
-            }
         }
 
         // Create parent directories under save:/ (split path on '/').

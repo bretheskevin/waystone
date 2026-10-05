@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <string>
+#include <cstdint>
 #include <vector>
 #include <3ds.h>
 #include "saves.h"
@@ -33,7 +34,7 @@ private:
     // Derived during scan, consumed by restore
     std::string base_path_;
     std::string group_key_;
-    std::string raw_json_;
+    std::vector<uint8_t> raw_tree_;
 
     static void scan_entry(void* arg);
     void scan_worker();

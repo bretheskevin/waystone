@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <3ds.h>
@@ -22,7 +23,7 @@ struct ConflictItem {
     std::string remote_mtime;
     std::string base_path;      // obfuscated remote path
     std::string heads_array;    // raw JSON array of decrypted heads
-    std::string raw_json;       // raw extracted local save (for snapshot/restore)
+    std::vector<uint8_t> raw_tree; // raw extracted local save tree (for snapshot/restore)
 };
 
 enum class ConflictPhase { Idle, Scanning, Ready, Resolving, Done, Error };

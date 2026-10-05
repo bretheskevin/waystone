@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -22,7 +23,7 @@ struct ConflictItem {
     std::string remote_mtime;
     std::string base_path;
     std::string heads_array;
-    std::string raw_json;
+    std::vector<uint8_t> raw_tree;
 };
 
 enum class ConflictPhase { Idle, Scanning, Ready, Resolving, Done, Error };

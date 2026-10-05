@@ -2726,7 +2726,6 @@ dependencies = [
 name = "waystone-ffi"
 version = "0.1.0"
 dependencies = [
- "base64",
  "cbindgen",
  "serde",
  "serde_json",
