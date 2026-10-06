@@ -42,6 +42,11 @@ static std::string make_base_path(const WsVault* vault,
     return result;
 }
 
+static void report_step(SyncProgress* prog, const char* label) {
+    printf("[sync] step: %s\n", label);
+    if (prog && prog->step) prog->step(prog->ctx, label);
+}
+
 SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
                                 const char* mtime, const char* device_id,
                                 int policy, const WebDavCfg& dav,
@@ -131,7 +136,7 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
 int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
                         const std::string& base_path, const std::string& group_key,
                         const std::vector<uint8_t>& raw_tree, const TitleInfo& title,
-                        const WebDavCfg& dav) {
+                        const WebDavCfg& dav, SyncProgress* prog) {
     char* blob_name = ws_vault_blob_name(vault, pull_hash.c_str());
     if (!blob_name) {
         printf("  FAIL: ws_vault_blob_name: %s\n",
@@ -141,10 +146,14 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
     std::string blob_remote = base_path + "/blobs/" + blob_name + ".bin";
     ws_string_free(blob_name);
 
+    report_step(prog, "Downloading");
+    printf("[sync] download blob start\n");
     std::vector<uint8_t> enc_blob;
-    int grc = webdav_get(dav, blob_remote.c_str(), &enc_blob);
+    int grc = webdav_get(dav, blob_remote.c_str(), &enc_blob,
+                         prog ? prog->bytes : nullptr, prog ? prog->ctx : nullptr);
     if (grc == 1) { printf("  FAIL: blob not found (404)\n"); return -1; }
-    else if (grc != 0) { printf("  FAIL: GET blob error\n"); return -1; }
+    else if (grc != 0) { printf("  FAIL: GET blob error (rc=%d)\n", grc); return -1; }
+    printf("[sync] download blob done: %zu bytes\n", enc_blob.size());
 
     WsBuf decrypted_blob = ws_vault_decrypt_blob(vault, enc_blob.data(), enc_blob.size());
     if (!decrypted_blob.ptr) {
@@ -164,6 +173,7 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
     printf("[sync] unzip ok (blob %zu bytes -> file_tree %zu bytes)\n",
            blob_len, (size_t)file_tree.len);
 
+    report_step(prog, "Restoring");
     {
         std::string sanitized = snapshot_sanitize_key(group_key);
         std::string snap_ts = history_timestamp();
@@ -203,7 +213,8 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
 
 std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& title,
                                      const char* device_id, int policy,
-                                     const WebDavCfg& dav, bool* error) {
+                                     const WebDavCfg& dav, bool* error,
+                                     SyncProgress* prog) {
     std::vector<SaveDecision> results;
     if (error) *error = false;
 
@@ -229,6 +240,7 @@ std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& titl
     printf("[sync] normalize ok (raw %zu -> %zu bytes, %zu saves)\n",
            raw_len, (size_t)savelist.len, saves.size());
     if (saves.empty()) { ws_buf_free(savelist); return results; }
+    report_step(prog, "Checking server");
 
     std::string mtime = current_utc_time();
     for (size_t si = 0; si < saves.size(); si++) {
@@ -322,8 +334,14 @@ std::vector<SaveLocation> resolve_save_locations(const WsVault* vault,
 int push_title(const WsVault* vault,
                const TitleInfo& title,
                const char* device_id,
-               const WebDavCfg& dav) {
+               const WebDavCfg& dav,
+               PushStats* stats,
+               SyncProgress* prog) {
+    PushStats local_stats = {0, 0};
+    PushStats* st = stats ? stats : &local_stats;
+    *st = local_stats;
 
+    report_step(prog, "Reading save");
     printf("  Extracting save data...\n");
     std::vector<uint8_t> raw_tree = extract_save_json(title);
     if (raw_tree.empty()) {
@@ -331,6 +349,7 @@ int push_title(const WsVault* vault,
         return 0;
     }
 
+    report_step(prog, "Normalizing");
     printf("  Normalizing...\n");
     size_t raw_len = raw_tree.size();
     WsBuf savelist = ws_checkpoint_normalize("3ds", raw_tree.data(), raw_tree.size());
@@ -360,6 +379,7 @@ int push_title(const WsVault* vault,
     int pushed = 0;
 
     for (size_t si = 0; si < saves.size(); si++) {
+        report_step(prog, "Encrypting");
         printf("  Save %zu/%zu: ", si + 1, saves.size());
 
         std::string save_meta = json_set_mtime(saves[si].meta_json, mtime.c_str());
@@ -370,6 +390,7 @@ int push_title(const WsVault* vault,
         if (!entry_json) {
             printf("FAIL ws_package: %s\n",
                    ws_last_error() ? ws_last_error() : "unknown");
+            st->failed++;
             continue;
         }
 
@@ -380,6 +401,7 @@ int push_title(const WsVault* vault,
         if (content_hash.empty() || group_key.empty()) {
             printf("FAIL: could not parse SaveEntry\n");
             ws_buf_free(zip);
+            st->failed++;
             continue;
         }
 
@@ -389,6 +411,7 @@ int push_title(const WsVault* vault,
         std::string base_path = make_base_path(vault, group_key);
         if (base_path.empty()) {
             ws_buf_free(zip);
+            st->failed++;
             continue;
         }
 
@@ -400,6 +423,7 @@ int push_title(const WsVault* vault,
             webdav_mkdir_p(dav, history_path.c_str()) != 0) {
             printf("FAIL: mkdir_p\n");
             ws_buf_free(zip);
+            st->failed++;
             continue;
         }
 
@@ -408,6 +432,7 @@ int push_title(const WsVault* vault,
         if (!encrypted.ptr) {
             printf("FAIL: ws_vault_encrypt_blob: %s\n",
                    ws_last_error() ? ws_last_error() : "unknown");
+            st->failed++;
             continue;
         }
 
@@ -415,21 +440,32 @@ int push_title(const WsVault* vault,
         if (!blob_name) {
             printf("FAIL: ws_vault_blob_name\n");
             ws_buf_free(encrypted);
+            st->failed++;
             continue;
         }
         std::string blob_remote = blobs_path + "/" + blob_name + ".bin";
         ws_string_free(blob_name);
 
+        report_step(prog, "Uploading");
         int exists = webdav_exists(dav, blob_remote.c_str());
         if (exists <= 0) {
-            if (webdav_put(dav, blob_remote.c_str(), encrypted.ptr, encrypted.len) != 0) {
-                printf("FAIL: PUT blob\n");
+            printf("[sync] upload blob start: %zu bytes\n", (size_t)encrypted.len);
+            int prc = webdav_put(dav, blob_remote.c_str(), encrypted.ptr, encrypted.len,
+                                 prog ? prog->bytes : nullptr, prog ? prog->ctx : nullptr);
+            if (prc != 0) {
+                printf("FAIL: PUT blob (rc=%d)\n", prc);
                 ws_buf_free(encrypted);
+                st->failed++;
                 continue;
             }
+            printf("[sync] upload blob done: %zu bytes\n", (size_t)encrypted.len);
+            st->uploaded++;
+        } else {
+            printf("[sync] blob already on server -- upload skipped\n");
         }
         ws_buf_free(encrypted);
 
+        report_step(prog, "Updating index");
         std::string head_json = build_device_head_json(
             device_id, content_hash.c_str(), mtime.c_str());
         WsBuf encrypted_head = ws_vault_encrypt_heads(
@@ -439,14 +475,17 @@ int push_title(const WsVault* vault,
         if (!encrypted_head.ptr) {
             printf("FAIL: ws_vault_encrypt_heads: %s\n",
                    ws_last_error() ? ws_last_error() : "unknown");
+            st->failed++;
             continue;
         }
 
         std::string head_remote = heads_path + "/" + device_id + ".json";
-        if (webdav_put(dav, head_remote.c_str(),
-                       encrypted_head.ptr, encrypted_head.len) != 0) {
-            printf("FAIL: PUT head\n");
+        int hrc = webdav_put(dav, head_remote.c_str(),
+                             encrypted_head.ptr, encrypted_head.len);
+        if (hrc != 0) {
+            printf("FAIL: PUT head (rc=%d)\n", hrc);
             ws_buf_free(encrypted_head);
+            st->failed++;
             continue;
         }
 
@@ -457,8 +496,10 @@ int push_title(const WsVault* vault,
             reinterpret_cast<const uint8_t*>(head_json.data()),
             head_json.size());
         if (encrypted_hist.ptr) {
-            webdav_put(dav, hist_remote.c_str(),
-                       encrypted_hist.ptr, encrypted_hist.len);
+            if (webdav_put(dav, hist_remote.c_str(),
+                           encrypted_hist.ptr, encrypted_hist.len) != 0) {
+                printf("  WARN: PUT history failed (non-fatal)\n");
+            }
             ws_buf_free(encrypted_hist);
         }
         ws_buf_free(encrypted_head);
@@ -468,19 +509,31 @@ int push_title(const WsVault* vault,
     }
 
     ws_buf_free(savelist);
+    printf("[sync] push_title %s done (pushed=%d uploaded=%d failed=%d)\n",
+           title.name.c_str(), pushed, st->uploaded, st->failed);
     return pushed;
 }
 
 int pull_title(const WsVault* vault,
                const TitleInfo& title,
                const char* device_id,
-               const WebDavCfg& dav) {
+               const WebDavCfg& dav,
+               PullStats* stats,
+               SyncProgress* prog) {
+    PullStats local_stats = {0, 0, 0, 0};
+    PullStats* st = stats ? stats : &local_stats;
+    *st = local_stats;
 
+    report_step(prog, "Reading save");
     printf("  Extracting local save data for pull comparison...\n");
     bool had_error = false;
     std::vector<SaveDecision> decisions = scan_title(vault, title, device_id,
-                                                     0 /* NewestWins */, dav, &had_error);
-    if (had_error) return -1;
+                                                     0 /* NewestWins */, dav, &had_error,
+                                                     prog);
+    if (had_error) {
+        printf("[sync] pull_title %s: scan_title failed\n", title.name.c_str());
+        return -1;
+    }
     if (decisions.empty()) {
         printf("  No local saves or nothing to scan.\n");
         return 0;
@@ -495,25 +548,36 @@ int pull_title(const WsVault* vault,
         } else if (d.decision_type == "push") {
             printf("decision=push, no pull needed\n"); continue;
         } else if (d.decision_type == "conflict_needs_input") {
-            printf("conflict_needs_input -- manual resolution required (skipping)\n"); continue;
+            printf("conflict_needs_input -- manual resolution required (skipping)\n");
+            st->conflicts++;
+            continue;
         } else if (d.decision_type == "conflict_resolved" && d.winner == "local") {
             printf("conflict_resolved winner=local, no pull needed\n"); continue;
         } else if (d.decision_type.empty()) {
+            printf("no decision (server check failed) -- skipping\n");
+            st->scan_failures++;
             continue;
         } else if (d.decision_type != "pull" && d.decision_type != "conflict_resolved") {
             printf("unknown decision type: %s\n", d.decision_type.c_str()); continue;
         }
         if (d.pull_hash.empty()) {
-            printf("FAIL: could not determine pull hash\n"); continue;
+            printf("FAIL: could not determine pull hash\n");
+            st->restore_failures++;
+            continue;
         }
         printf("pulling hash=%.12s...\n", d.pull_hash.c_str());
         int rc = restore_remote_save(vault, d.pull_hash, d.base_path, d.group_key,
-                                     d.raw_tree, title, dav);
+                                     d.raw_tree, title, dav, prog);
         if (rc == 0) {
             printf("  Pulled OK.\n"); pulled++;
         } else {
             printf("  WARN: restore failure (%d)\n", rc);
+            st->restore_failures++;
         }
     }
+    st->pulled = pulled;
+    printf("[sync] pull_title %s done (pulled=%d conflicts=%d restore_failures=%d "
+           "scan_failures=%d)\n", title.name.c_str(), pulled, st->conflicts,
+           st->restore_failures, st->scan_failures);
     return pulled;
 }

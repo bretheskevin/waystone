@@ -16,12 +16,19 @@ struct WebDavCfg {
 std::string webdav_url(const WebDavCfg& cfg, const char* path);
 
 // PUT binary data to path. Returns 0 on success (HTTP 2xx), nonzero on error.
+// progress(got, total, ctx) (optional) reports upload bytes on the calling thread; returning
+// false aborts the transfer (-1).
 int webdav_put(const WebDavCfg& cfg, const char* path,
-               const uint8_t* data, size_t len);
+               const uint8_t* data, size_t len,
+               bool (*progress)(size_t got, size_t total, void* ctx) = nullptr,
+               void* ctx = nullptr);
 
 // GET binary data from path. Returns 0 on success, 1 on 404 (out empty), -1 on error.
+// progress (optional) reports download bytes; total is 0 when the server sends no length.
 int webdav_get(const WebDavCfg& cfg, const char* path,
-               std::vector<uint8_t>* out);
+               std::vector<uint8_t>* out,
+               bool (*progress)(size_t got, size_t total, void* ctx) = nullptr,
+               void* ctx = nullptr);
 
 // HEAD check existence. Returns 1 if exists, 0 if 404, -1 on error.
 int webdav_exists(const WebDavCfg& cfg, const char* path);

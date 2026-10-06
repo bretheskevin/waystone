@@ -25,6 +25,22 @@ static size_t read_cb(char* dest, size_t size, size_t nmemb, void* userdata) {
     return to_copy;
 }
 
+struct XferCtx {
+    bool (*progress)(size_t got, size_t total, void* ctx);
+    void* ctx;
+    bool upload;
+};
+
+static int xfer_cb(void* userdata, curl_off_t dltotal, curl_off_t dlnow,
+                   curl_off_t ultotal, curl_off_t ulnow) {
+    auto* x = static_cast<XferCtx*>(userdata);
+    if (!x->progress) return 0;
+    curl_off_t now   = x->upload ? ulnow : dlnow;
+    curl_off_t total = x->upload ? ultotal : dltotal;
+    return x->progress(static_cast<size_t>(now), static_cast<size_t>(total),
+                       x->ctx) ? 0 : 1;
+}
+
 // ---- Helpers ----
 
 static void curl_apply_tls(CURL* c) {
@@ -48,6 +64,13 @@ static void set_auth(CURL* c, const WebDavCfg& cfg) {
     }
 }
 
+static void apply_progress(CURL* c, XferCtx* x) {
+    if (!x->progress) return;
+    curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, xfer_cb);
+    curl_easy_setopt(c, CURLOPT_XFERINFODATA, x);
+    curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+}
+
 std::string webdav_url(const WebDavCfg& cfg, const char* path) {
     std::string url = cfg.base_url;
     if (!url.empty() && url.back() != '/') url += '/';
@@ -59,12 +82,15 @@ std::string webdav_url(const WebDavCfg& cfg, const char* path) {
 // ---- Verbs ----
 
 int webdav_put(const WebDavCfg& cfg, const char* path,
-               const uint8_t* data, size_t len) {
+               const uint8_t* data, size_t len,
+               bool (*progress)(size_t got, size_t total, void* ctx),
+               void* ctx) {
     CURL* c = curl_easy_init();
     if (!c) return -1;
     std::string url = webdav_url(cfg, path);
     WriteCtx wctx;
     ReadCtx rctx = { data, len, 0 };
+    XferCtx xctx = { progress, ctx, true };
     curl_easy_setopt(c, CURLOPT_URL, url.c_str());
     set_auth(c, cfg);
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb);
@@ -73,31 +99,50 @@ int webdav_put(const WebDavCfg& cfg, const char* path,
     curl_easy_setopt(c, CURLOPT_READFUNCTION, read_cb);
     curl_easy_setopt(c, CURLOPT_READDATA, &rctx);
     curl_easy_setopt(c, CURLOPT_INFILESIZE_LARGE, static_cast<curl_off_t>(len));
+    apply_progress(c, &xctx);
     CURLcode res = curl_easy_perform(c);
     long http_code = 0;
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
     curl_easy_cleanup(c);
-    if (res != CURLE_OK) return -1;
-    return (http_code >= 200 && http_code < 300) ? 0 : static_cast<int>(http_code);
+    if (res != CURLE_OK) {
+        printf("[net] webdav_put %s (%zu bytes) transport error: %s\n",
+               path, len, curl_easy_strerror(res));
+        return -1;
+    }
+    if (http_code < 200 || http_code >= 300) {
+        printf("[net] webdav_put %s (%zu bytes) status=%ld\n", path, len, http_code);
+        return static_cast<int>(http_code);
+    }
+    return 0;
 }
 
 int webdav_get(const WebDavCfg& cfg, const char* path,
-               std::vector<uint8_t>* out) {
+               std::vector<uint8_t>* out,
+               bool (*progress)(size_t got, size_t total, void* ctx),
+               void* ctx) {
     CURL* c = curl_easy_init();
     if (!c) return -1;
     std::string url = webdav_url(cfg, path);
     WriteCtx wctx;
+    XferCtx xctx = { progress, ctx, false };
     curl_easy_setopt(c, CURLOPT_URL, url.c_str());
     set_auth(c, cfg);
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &wctx);
+    apply_progress(c, &xctx);
     CURLcode res = curl_easy_perform(c);
     long http_code = 0;
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
     curl_easy_cleanup(c);
-    if (res != CURLE_OK) return -1;
+    if (res != CURLE_OK) {
+        printf("[net] webdav_get %s transport error: %s\n", path, curl_easy_strerror(res));
+        return -1;
+    }
     if (http_code == 404) { out->clear(); return 1; }
-    if (http_code < 200 || http_code >= 300) return -1;
+    if (http_code < 200 || http_code >= 300) {
+        printf("[net] webdav_get %s status=%ld\n", path, http_code);
+        return -1;
+    }
     out->assign(wctx.buf.begin(), wctx.buf.end());
     return 0;
 }
@@ -246,20 +291,6 @@ static size_t file_write_cb(char* ptr, size_t size, size_t nmemb, void* userdata
     return bytes;
 }
 
-struct XferCtx {
-    bool (*progress)(size_t got, size_t total, void* ctx);
-    void* ctx;
-};
-
-static int xfer_cb(void* userdata, curl_off_t dltotal, curl_off_t dlnow,
-                   curl_off_t ultotal, curl_off_t ulnow) {
-    (void)ultotal; (void)ulnow;
-    auto* x = static_cast<XferCtx*>(userdata);
-    if (!x->progress) return 0;
-    return x->progress(static_cast<size_t>(dlnow), static_cast<size_t>(dltotal),
-                       x->ctx) ? 0 : 1;
-}
-
 int http_download(const char* url, const char* dest_path,
                   bool (*progress)(size_t got, size_t total, void* ctx),
                   void* ctx) {
@@ -276,14 +307,12 @@ int http_download(const char* url, const char* dest_path,
         return -1;
     }
     FileWriteCtx wctx = { fp, false };
-    XferCtx xctx = { progress, ctx };
+    XferCtx xctx = { progress, ctx, false };
     curl_easy_setopt(c, CURLOPT_URL, url);
     curl_easy_setopt(c, CURLOPT_USERAGENT, "waystone-3ds");
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, file_write_cb);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &wctx);
-    curl_easy_setopt(c, CURLOPT_XFERINFOFUNCTION, xfer_cb);
-    curl_easy_setopt(c, CURLOPT_XFERINFODATA, &xctx);
-    curl_easy_setopt(c, CURLOPT_NOPROGRESS, 0L);
+    apply_progress(c, &xctx);
     curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 5L);
     // Total timeout 120s (not the 20s used by the WebDAV verbs): a ~1.5MB .3dsx

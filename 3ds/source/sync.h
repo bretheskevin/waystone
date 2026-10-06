@@ -10,21 +10,46 @@
 struct Vault;
 typedef Vault WsVault;
 
+// Optional progress sink. All callbacks run on the calling (worker) thread.
+struct SyncProgress {
+    void (*step)(void* ctx, const char* label);          // may be null
+    bool (*bytes)(size_t got, size_t total, void* ctx);  // may be null; return true to continue
+    void* ctx;
+};
+
+struct PushStats {
+    int uploaded;   // blobs actually PUT (excludes blobs already on the server)
+    int failed;     // saves that hit a failure path and were skipped
+};
+
+struct PullStats {
+    int pulled;
+    int conflicts;         // conflict_needs_input decisions (not resolved here)
+    int restore_failures;  // restore_remote_save != 0, or no pull hash
+    int scan_failures;     // scan_save_decision produced no decision (server/decrypt error)
+};
+
 // Push all saves for a single title to the WebDAV backend.
 // 3DS savedata is per-title (no AccountUid).
 // Returns number of saves pushed (0 = nothing to push, -1 = error).
+// stats/prog are optional; stats is zeroed on entry when provided.
 int push_title(const WsVault* vault,
                const TitleInfo& title,
                const char* device_id,
-               const WebDavCfg& dav);
+               const WebDavCfg& dav,
+               PushStats* stats = nullptr,
+               SyncProgress* prog = nullptr);
 
 // Pull all saves for a single title from the WebDAV backend (NewestWins, non-interactive).
 // 3DS savedata is per-title (no AccountUid).
 // Returns number of saves pulled (0 = nothing to pull, -1 = error).
+// stats/prog are optional; stats is zeroed on entry when provided.
 int pull_title(const WsVault* vault,
                const TitleInfo& title,
                const char* device_id,
-               const WebDavCfg& dav);
+               const WebDavCfg& dav,
+               PullStats* stats = nullptr,
+               SyncProgress* prog = nullptr);
 
 // Result of scanning one save to determine the sync decision.
 struct SaveDecision {
@@ -55,14 +80,15 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
 int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
                         const std::string& base_path, const std::string& group_key,
                         const std::vector<uint8_t>& raw_tree, const TitleInfo& title,
-                        const WebDavCfg& dav);
+                        const WebDavCfg& dav, SyncProgress* prog = 0);
 
 // Scan all saves for a title: extract -> normalize("3ds") -> save_list_decode -> per-save scan_save_decision.
 // Returns decisions for each normalized save. Empty vector = no local saves or nothing to scan.
 // If error is non-null and a normalize failure occurs, *error is set to true.
 std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& title,
                                      const char* device_id, int policy,
-                                     const WebDavCfg& dav, bool* error = 0);
+                                     const WebDavCfg& dav, bool* error = 0,
+                                     SyncProgress* prog = 0);
 
 // Lightweight result of resolving a save's remote location from local data only.
 // No network I/O — unlike scan_title, skips the per-save heads PROPFIND/GET/decrypt.
