@@ -56,7 +56,7 @@ void SyncWorker::on_step(void* ctx, const char* label) {
 bool SyncWorker::on_bytes(size_t got, size_t total, void* ctx) {
     SyncWorker* self = static_cast<SyncWorker*>(ctx);
     self->xfer_got_.store(got);
-    self->xfer_total_.store(total);
+    self->xfer_total_.store(next_xfer_total(self->xfer_total_.load(), total));
     return true;
 }
 
@@ -126,7 +126,6 @@ std::vector<TitleResult> SyncWorker::results() {
 }
 
 int SyncWorker::current_index() const   { return cur_index_.load(); }
-int SyncWorker::current_pass() const    { return pass_.load(); }
 size_t SyncWorker::bytes_got() const    { return xfer_got_.load(); }
 size_t SyncWorker::bytes_total() const  { return xfer_total_.load(); }
 int SyncWorker::total_count() const     { return (int)titles_.size(); }

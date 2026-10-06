@@ -26,7 +26,6 @@ public:
     std::string step();         // LightLock-guarded current step label ("" between titles)
     std::vector<TitleResult> results();  // LightLock-guarded copy, one entry per title
     int current_index() const;  // active title index, -1 when none
-    int current_pass() const;   // 0 = push, 1 = pull
     size_t bytes_got() const;
     size_t bytes_total() const;
     float progress() const;     // combined 0..1 across both passes

@@ -71,3 +71,7 @@ float combined_progress(int pass, int index, size_t n, size_t got, size_t total)
     if (p > 1.0f) p = 1.0f;
     return p;
 }
+
+size_t next_xfer_total(size_t prev, size_t reported) {
+    return reported > 0 ? reported : prev;
+}

@@ -446,9 +446,12 @@ int push_title(const WsVault* vault,
         std::string blob_remote = blobs_path + "/" + blob_name + ".bin";
         ws_string_free(blob_name);
 
-        report_step(prog, "Uploading");
+        report_step(prog, "Checking server");
         int exists = webdav_exists(dav, blob_remote.c_str());
+        printf("[sync] blob exists check rc=%d\n", exists);
         if (exists <= 0) {
+            report_step(prog, "Uploading");
+            if (prog && prog->bytes) prog->bytes(0, encrypted.len, prog->ctx);
             printf("[sync] upload blob start: %zu bytes\n", (size_t)encrypted.len);
             int prc = webdav_put(dav, blob_remote.c_str(), encrypted.ptr, encrypted.len,
                                  prog ? prog->bytes : nullptr, prog ? prog->ctx : nullptr);
@@ -461,6 +464,7 @@ int push_title(const WsVault* vault,
             printf("[sync] upload blob done: %zu bytes\n", (size_t)encrypted.len);
             st->uploaded++;
         } else {
+            report_step(prog, "Already up to date");
             printf("[sync] blob already on server -- upload skipped\n");
         }
         ws_buf_free(encrypted);

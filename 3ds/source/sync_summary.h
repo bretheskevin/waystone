@@ -39,4 +39,7 @@ std::string format_sync_headline(const std::vector<TitleResult>& results);
 // Combined 0..1 bar across both passes: (pass*n + index + got/total) / (2n). Clamped.
 float combined_progress(int pass, int index, size_t n, size_t got, size_t total);
 
+// curl reports total 0 until it knows the size (e.g. while connecting): keep the previous total then.
+size_t next_xfer_total(size_t prev, size_t reported);
+
 #endif

@@ -68,6 +68,14 @@ static void test_combined_progress() {
     printf("test_combined_progress PASSED\n");
 }
 
+static void test_next_xfer_total() {
+    assert(next_xfer_total(0, 0) == 0);
+    assert(next_xfer_total(0, 1024) == 1024);
+    assert(next_xfer_total(1024, 0) == 1024);      // curl tick with unknown total keeps the seed
+    assert(next_xfer_total(1024, 2048) == 2048);
+    printf("test_next_xfer_total PASSED\n");
+}
+
 static void test_labels() {
     assert(strcmp(title_state_label(TitleState::InSync), "In sync") == 0);
     assert(strcmp(title_state_label(TitleState::Conflict),
@@ -80,6 +88,7 @@ int main() {
     test_final_state_precedence();
     test_headline();
     test_combined_progress();
+    test_next_xfer_total();
     test_labels();
     printf("ALL PASSED\n");
     return 0;

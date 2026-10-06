@@ -103,13 +103,6 @@ void SyncScreen::draw_top(C3D_RenderTarget* /*target*/) {
             draw_text_centered(buf, 0, 104.0f, 0.5f, TEXT_SM, CLR_NEUTRAL_400, bytes_line, W);
         }
 
-        if (idx >= 0 && idx < n) {
-            char pass_line[64];
-            snprintf(pass_line, sizeof(pass_line), "%s pass - %d of %d",
-                     worker_.current_pass() == 0 ? "Upload" : "Download", idx + 1, n);
-            draw_text_centered(buf, 0, 122.0f, 0.5f, TEXT_SM, CLR_TEXT_HINT, pass_line, W);
-        }
-
         float p = worker_.progress();
         draw_progress_bar(50.0f, 150.0f, W - 100.0f, 8.0f, p, CLR_SYNC, CLR_NEUTRAL_200);
         char pct[16];
