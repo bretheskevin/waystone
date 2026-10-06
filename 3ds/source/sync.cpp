@@ -3,7 +3,9 @@
 #include "file_tree.h"
 #include "snapshot.h"
 #include "snapshot_browse.h" // history_timestamp (shared)
+#include "sync_summary.h"
 
+#include <3ds.h>
 #include <cstdio>
 #include <cstring>
 
@@ -45,6 +47,45 @@ static std::string make_base_path(const WsVault* vault,
 static void report_step(SyncProgress* prog, const char* label) {
     printf("[sync] step: %s\n", label);
     if (prog && prog->step) prog->step(prog->ctx, label);
+}
+
+static unsigned long long elapsed_ms(u64 since) {
+    return (unsigned long long)(osGetTime() - since);
+}
+
+// Folders almost always exist, so PUT first and only create the parent on a missing-parent status.
+static int put_creating_parent(const WebDavCfg& dav, const std::string& parent_dir,
+                               const std::string& remote_path,
+                               const uint8_t* data, size_t len,
+                               const char* step_label, bool report_bytes,
+                               SyncProgress* prog) {
+    bool (*progress)(size_t, size_t, void*) = (report_bytes && prog) ? prog->bytes : nullptr;
+    void* ctx = prog ? prog->ctx : nullptr;
+
+    u64 t0 = osGetTime();
+    int rc = webdav_put(dav, remote_path.c_str(), data, len, progress, ctx);
+    printf("[sync] PUT %s (%zu bytes) rc=%d in %llu ms\n",
+           remote_path.c_str(), len, rc, elapsed_ms(t0));
+    if (!put_needs_parent_dir(rc)) return rc;
+
+    report_step(prog, "Preparing server");
+    printf("[sync] parent missing (status=%d) -- creating %s\n", rc, parent_dir.c_str());
+    t0 = osGetTime();
+    int mrc = webdav_mkdir_p(dav, parent_dir.c_str());
+    if (mrc != 0) {
+        printf("[sync] mkdir_p %s failed (err=%d) in %llu ms\n",
+               parent_dir.c_str(), mrc, elapsed_ms(t0));
+        return mrc;
+    }
+    printf("[sync] mkdir_p %s done in %llu ms\n", parent_dir.c_str(), elapsed_ms(t0));
+
+    report_step(prog, step_label);
+    if (progress) progress(0, len, ctx);
+    t0 = osGetTime();
+    rc = webdav_put(dav, remote_path.c_str(), data, len, progress, ctx);
+    printf("[sync] PUT retry %s (%zu bytes) rc=%d in %llu ms\n",
+           remote_path.c_str(), len, rc, elapsed_ms(t0));
+    return rc;
 }
 
 SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
@@ -385,8 +426,10 @@ int push_title(const WsVault* vault,
         std::string save_meta = json_set_mtime(saves[si].meta_json, mtime.c_str());
 
         WsBuf zip = {nullptr, 0};
+        u64 t0 = osGetTime();
         char* entry_json = ws_package(save_meta.c_str(), saves[si].files_ptr,
                                       saves[si].files_len, &zip);
+        unsigned long long package_ms = elapsed_ms(t0);
         if (!entry_json) {
             printf("FAIL ws_package: %s\n",
                    ws_last_error() ? ws_last_error() : "unknown");
@@ -407,6 +450,7 @@ int push_title(const WsVault* vault,
 
         printf("group=%s hash=%s\n", group_key.c_str(),
                content_hash.substr(0, 12).c_str());
+        printf("[sync] package done: zip %zu bytes in %llu ms\n", (size_t)zip.len, package_ms);
 
         std::string base_path = make_base_path(vault, group_key);
         if (base_path.empty()) {
@@ -418,15 +462,9 @@ int push_title(const WsVault* vault,
         std::string blobs_path   = base_path + "/blobs";
         std::string heads_path   = base_path + "/heads";
         std::string history_path = base_path + "/history";
-        if (webdav_mkdir_p(dav, blobs_path.c_str()) != 0 ||
-            webdav_mkdir_p(dav, heads_path.c_str()) != 0 ||
-            webdav_mkdir_p(dav, history_path.c_str()) != 0) {
-            printf("FAIL: mkdir_p\n");
-            ws_buf_free(zip);
-            st->failed++;
-            continue;
-        }
 
+        size_t zip_len = zip.len;
+        t0 = osGetTime();
         WsBuf encrypted = ws_vault_encrypt_blob(vault, zip.ptr, zip.len);
         ws_buf_free(zip);
         if (!encrypted.ptr) {
@@ -435,6 +473,8 @@ int push_title(const WsVault* vault,
             st->failed++;
             continue;
         }
+        printf("[sync] encrypt done: %zu -> %zu bytes in %llu ms\n",
+               zip_len, (size_t)encrypted.len, elapsed_ms(t0));
 
         char* blob_name = ws_vault_blob_name(vault, content_hash.c_str());
         if (!blob_name) {
@@ -447,14 +487,16 @@ int push_title(const WsVault* vault,
         ws_string_free(blob_name);
 
         report_step(prog, "Checking server");
+        t0 = osGetTime();
         int exists = webdav_exists(dav, blob_remote.c_str());
-        printf("[sync] blob exists check rc=%d\n", exists);
+        printf("[sync] blob exists check rc=%d in %llu ms\n", exists, elapsed_ms(t0));
         if (exists <= 0) {
             report_step(prog, "Uploading");
             if (prog && prog->bytes) prog->bytes(0, encrypted.len, prog->ctx);
             printf("[sync] upload blob start: %zu bytes\n", (size_t)encrypted.len);
-            int prc = webdav_put(dav, blob_remote.c_str(), encrypted.ptr, encrypted.len,
-                                 prog ? prog->bytes : nullptr, prog ? prog->ctx : nullptr);
+            int prc = put_creating_parent(dav, blobs_path, blob_remote,
+                                          encrypted.ptr, encrypted.len,
+                                          "Uploading", true, prog);
             if (prc != 0) {
                 printf("FAIL: PUT blob (rc=%d)\n", prc);
                 ws_buf_free(encrypted);
@@ -484,8 +526,9 @@ int push_title(const WsVault* vault,
         }
 
         std::string head_remote = heads_path + "/" + device_id + ".json";
-        int hrc = webdav_put(dav, head_remote.c_str(),
-                             encrypted_head.ptr, encrypted_head.len);
+        int hrc = put_creating_parent(dav, heads_path, head_remote,
+                                      encrypted_head.ptr, encrypted_head.len,
+                                      "Updating index", false, prog);
         if (hrc != 0) {
             printf("FAIL: PUT head (rc=%d)\n", hrc);
             ws_buf_free(encrypted_head);
@@ -500,8 +543,9 @@ int push_title(const WsVault* vault,
             reinterpret_cast<const uint8_t*>(head_json.data()),
             head_json.size());
         if (encrypted_hist.ptr) {
-            if (webdav_put(dav, hist_remote.c_str(),
-                           encrypted_hist.ptr, encrypted_hist.len) != 0) {
+            if (put_creating_parent(dav, history_path, hist_remote,
+                                    encrypted_hist.ptr, encrypted_hist.len,
+                                    "Updating index", false, prog) != 0) {
                 printf("  WARN: PUT history failed (non-fatal)\n");
             }
             ws_buf_free(encrypted_hist);

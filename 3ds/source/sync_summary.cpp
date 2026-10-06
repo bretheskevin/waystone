@@ -75,3 +75,7 @@ float combined_progress(int pass, int index, size_t n, size_t got, size_t total)
 size_t next_xfer_total(size_t prev, size_t reported) {
     return reported > 0 ? reported : prev;
 }
+
+bool put_needs_parent_dir(int put_rc) {
+    return put_rc == 409 || put_rc == 404;
+}

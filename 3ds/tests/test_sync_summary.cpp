@@ -76,6 +76,18 @@ static void test_next_xfer_total() {
     printf("test_next_xfer_total PASSED\n");
 }
 
+static void test_put_needs_parent_dir() {
+    assert(put_needs_parent_dir(409));
+    assert(put_needs_parent_dir(404));
+    assert(!put_needs_parent_dir(0));
+    assert(!put_needs_parent_dir(-1));
+    assert(!put_needs_parent_dir(401));
+    assert(!put_needs_parent_dir(403));
+    assert(!put_needs_parent_dir(500));
+    assert(!put_needs_parent_dir(507));
+    printf("test_put_needs_parent_dir PASSED\n");
+}
+
 static void test_labels() {
     assert(strcmp(title_state_label(TitleState::InSync), "In sync") == 0);
     assert(strcmp(title_state_label(TitleState::Conflict),
@@ -89,6 +101,7 @@ int main() {
     test_headline();
     test_combined_progress();
     test_next_xfer_total();
+    test_put_needs_parent_dir();
     test_labels();
     printf("ALL PASSED\n");
     return 0;
