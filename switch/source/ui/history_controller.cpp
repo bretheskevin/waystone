@@ -44,12 +44,21 @@ void HistoryController::scan_worker() {
     printf("[history] scanning for %s\n", title_.name.c_str());
 
     WebDavCfg dav = session_->dav.as_cfg();
+    WebDavSession* sess = webdav_session_begin(dav);
+    if (!sess) {
+        printf("[history] webdav_session_begin failed\n");
+        { std::lock_guard<std::mutex> lk(mu_); status_ = "Network init failed."; }
+        phase_.store(BrowsePhase::Error);
+        running_.store(false);
+        return;
+    }
     bool had_error = false;
     std::vector<SaveDecision> decisions = scan_title(session_->vault, title_,
                                                      session_->uid,
                                                      session_->device_id.c_str(),
-                                                     0 /* NewestWins */, dav,
+                                                     0 /* NewestWins */, sess,
                                                      &had_error);
+    webdav_session_end(sess);
     if (had_error) {
         { std::lock_guard<std::mutex> lk(mu_); status_ = "Normalize failed."; }
         phase_.store(BrowsePhase::Error);
@@ -126,9 +135,18 @@ void HistoryController::restore_worker(HistoryEntry entry, size_t index) {
 
     printf("[history] restoring hash=%.12s for %s\n", hash.c_str(), title_.name.c_str());
 
+    WebDavSession* sess = webdav_session_begin(dav);
+    if (!sess) {
+        printf("[history] webdav_session_begin failed\n");
+        { std::lock_guard<std::mutex> lk(mu_); status_ = "Network init failed."; }
+        phase_.store(BrowsePhase::Error);
+        running_.store(false);
+        return;
+    }
     int rc = restore_remote_save(session_->vault, hash,
                                  base_path_, group_key_, raw_tree_,
-                                 title_.title_id, session_->uid, dav);
+                                 title_.title_id, session_->uid, sess);
+    webdav_session_end(sess);
     if (rc != 0) {
         printf("[history] restore FAILED (rc=%d)\n", rc);
         { std::lock_guard<std::mutex> lk(mu_); status_ = "Restore failed."; }

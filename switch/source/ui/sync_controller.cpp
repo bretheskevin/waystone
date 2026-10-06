@@ -72,6 +72,18 @@ void SyncController::worker() {
     char buf[256];
     const size_t n = titles_.size();
 
+    WebDavSession* sess = webdav_session_begin(dav_);
+    if (!sess) {
+        printf("[sync] webdav_session_begin failed\n");
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            status_ = "Network init failed";
+        }
+        phase_.store(SyncPhase::Error);
+        running_.store(false);
+        return;
+    }
+
     // Push phase
     printf("[sync] push phase start (%zu titles)\n", n);
     for (size_t i = 0; i < n; i++) {
@@ -83,7 +95,7 @@ void SyncController::worker() {
         }
         printf("[sync] push %zu/%zu: %s\n", i + 1, n, titles_[i].name.c_str());
         int rc = push_title(vault_, titles_[i], uid_,
-                            device_id_.c_str(), dav_);
+                            device_id_.c_str(), sess);
         if (rc < 0) {
             snprintf(buf, sizeof(buf), "Error pushing %s",
                      titles_[i].name.c_str());
@@ -92,6 +104,7 @@ void SyncController::worker() {
                 status_ = buf;
             }
             printf("[sync] push FAILED rc=%d: %s\n", rc, titles_[i].name.c_str());
+            webdav_session_end(sess);
             phase_.store(SyncPhase::Error);
             running_.store(false);
             return;
@@ -113,7 +126,7 @@ void SyncController::worker() {
         }
         printf("[sync] pull %zu/%zu: %s\n", i + 1, n, titles_[i].name.c_str());
         int rc = pull_title(vault_, titles_[i], uid_,
-                            device_id_.c_str(), dav_);
+                            device_id_.c_str(), sess);
         if (rc < 0) {
             snprintf(buf, sizeof(buf), "Error pulling %s",
                      titles_[i].name.c_str());
@@ -122,6 +135,7 @@ void SyncController::worker() {
                 status_ = buf;
             }
             printf("[sync] pull FAILED rc=%d: %s\n", rc, titles_[i].name.c_str());
+            webdav_session_end(sess);
             phase_.store(SyncPhase::Error);
             running_.store(false);
             return;
@@ -131,6 +145,8 @@ void SyncController::worker() {
         }
         printf("[sync] pull done rc=%d: %s\n", rc, titles_[i].name.c_str());
     }
+
+    webdav_session_end(sess);
 
     snprintf(buf, sizeof(buf), "Done: pushed %d / restored %d",
              pushed_.load(), restored_.load());

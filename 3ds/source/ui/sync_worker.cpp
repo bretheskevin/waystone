@@ -170,11 +170,22 @@ void SyncWorker::worker() {
     int total_restored = 0;
     printf("[sync] worker running: %zu title(s), push pass then pull pass\n", n);
 
+    WebDavSession* sess = webdav_session_begin(dav_);
+    if (!sess) {
+        printf("[sync] webdav_session_begin failed\n");
+        LightLock_Lock(&mu_);
+        snprintf(status_buf_, sizeof(status_buf_), "Network init failed");
+        LightLock_Unlock(&mu_);
+        phase_.store((int)SyncPhase::Error);
+        running_.store(false);
+        return;
+    }
+
     pass_.store(0);
     for (size_t i = 0; i < n; i++) {
         begin_title(i, "Push");
         PushStats ps = {0, 0};
-        int rc = push_title(vault_, titles_[i], device_id_.c_str(), dav_, &ps, &prog);
+        int rc = push_title(vault_, titles_[i], device_id_.c_str(), sess, &ps, &prog);
         TitleTally& t = tally[i];
         t.uploaded = ps.uploaded > 0;
         if (rc < 0 || ps.failed > 0) {
@@ -196,7 +207,7 @@ void SyncWorker::worker() {
     for (size_t i = 0; i < n; i++) {
         begin_title(i, "Pull");
         PullStats st = {0, 0, 0, 0};
-        int rc = pull_title(vault_, titles_[i], device_id_.c_str(), dav_, &st, &prog);
+        int rc = pull_title(vault_, titles_[i], device_id_.c_str(), sess, &st, &prog);
         TitleTally& t = tally[i];
         const char* why = nullptr;
         if (rc < 0)                       why = "Download failed";
@@ -219,6 +230,7 @@ void SyncWorker::worker() {
                fs == TitleState::Failed ? t.reason.c_str() : "");
     }
 
+    webdav_session_end(sess);
     cur_index_.store(-1);
     xfer_got_.store(0);
     xfer_total_.store(0);

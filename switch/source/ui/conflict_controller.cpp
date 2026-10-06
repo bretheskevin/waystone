@@ -49,14 +49,24 @@ void ConflictController::resolve_impl(bool keep_local, size_t index) {
 }
 
 void ConflictController::resolve_worker(bool keep_local, ConflictItem item, size_t index) {
+    WebDavSession* sess = webdav_session_begin(dav_);
+    if (!sess) {
+        printf("[conflict] webdav_session_begin failed\n");
+        { std::lock_guard<std::mutex> lk(mu_);
+          status_ = "Network init failed";
+          phase_.store(conflicts_.empty() ? ConflictPhase::Done : ConflictPhase::Ready); }
+        running_.store(false);
+        return;
+    }
     int rc;
     if (keep_local) {
         TitleInfo ti; ti.title_id = item.title_id; ti.name = item.title_name;
-        rc = push_title(vault_, ti, uid_, device_id_.c_str(), dav_);
+        rc = push_title(vault_, ti, uid_, device_id_.c_str(), sess);
     } else {
         rc = restore_remote_save(vault_, item.remote_hash, item.base_path,
-                                 item.group_key, item.raw_tree, item.title_id, uid_, dav_);
+                                 item.group_key, item.raw_tree, item.title_id, uid_, sess);
     }
+    webdav_session_end(sess);
     { std::lock_guard<std::mutex> lk(mu_);
       bool ok = keep_local ? (rc >= 0) : (rc == 0);
       if (ok) {
@@ -74,12 +84,20 @@ void ConflictController::resolve_worker(bool keep_local, ConflictItem item, size
 void ConflictController::scan_worker() {
     char buf[256];
     const size_t n = titles_.size();
+    WebDavSession* sess = webdav_session_begin(dav_);
+    if (!sess) {
+        printf("[conflict] webdav_session_begin failed\n");
+        { std::lock_guard<std::mutex> lk(mu_); status_ = "Network init failed"; }
+        phase_.store(ConflictPhase::Error);
+        running_.store(false);
+        return;
+    }
     for (size_t i = 0; i < n; i++) {
         snprintf(buf, sizeof(buf), "Scanning %zu/%zu: %s", i + 1, n, titles_[i].name.c_str());
         { std::lock_guard<std::mutex> lk(mu_); status_ = buf; }
         std::vector<SaveDecision> decisions = scan_title(vault_, titles_[i], uid_,
                                                          device_id_.c_str(),
-                                                         1 /* Prompt */, dav_);
+                                                         1 /* Prompt */, sess);
         for (const auto& d : decisions) {
             if (d.decision_type != "conflict_needs_input") continue;
             std::string remote_hash, remote_device_id, remote_mtime;
@@ -98,6 +116,7 @@ void ConflictController::scan_worker() {
             { std::lock_guard<std::mutex> lk(mu_); conflicts_.push_back(std::move(ci)); }
         }
     }
+    webdav_session_end(sess);
     size_t found;
     { std::lock_guard<std::mutex> lk(mu_); found = conflicts_.size();
       snprintf(buf, sizeof(buf), "Scan complete: %zu conflict(s) found", found); status_ = buf; }

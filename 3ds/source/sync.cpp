@@ -54,7 +54,7 @@ static unsigned long long elapsed_ms(u64 since) {
 }
 
 // Folders almost always exist, so PUT first and only create the parent on a missing-parent status.
-static int put_creating_parent(const WebDavCfg& dav, const std::string& parent_dir,
+static int put_creating_parent(WebDavSession* dav, const std::string& parent_dir,
                                const std::string& remote_path,
                                const uint8_t* data, size_t len,
                                const char* step_label, bool report_bytes,
@@ -63,7 +63,7 @@ static int put_creating_parent(const WebDavCfg& dav, const std::string& parent_d
     void* ctx = prog ? prog->ctx : nullptr;
 
     u64 t0 = osGetTime();
-    int rc = webdav_put(dav, remote_path.c_str(), data, len, progress, ctx);
+    int rc = webdav_put_s(dav, remote_path.c_str(), data, len, progress, ctx);
     printf("[sync] PUT %s (%zu bytes) rc=%d in %llu ms\n",
            remote_path.c_str(), len, rc, elapsed_ms(t0));
     if (!put_needs_parent_dir(rc)) return rc;
@@ -71,7 +71,7 @@ static int put_creating_parent(const WebDavCfg& dav, const std::string& parent_d
     report_step(prog, "Preparing server");
     printf("[sync] parent missing (status=%d) -- creating %s\n", rc, parent_dir.c_str());
     t0 = osGetTime();
-    int mrc = webdav_mkdir_p(dav, parent_dir.c_str());
+    int mrc = webdav_mkdir_p_s(dav, parent_dir.c_str());
     if (mrc != 0) {
         printf("[sync] mkdir_p %s failed (err=%d) in %llu ms\n",
                parent_dir.c_str(), mrc, elapsed_ms(t0));
@@ -82,7 +82,7 @@ static int put_creating_parent(const WebDavCfg& dav, const std::string& parent_d
     report_step(prog, step_label);
     if (progress) progress(0, len, ctx);
     t0 = osGetTime();
-    rc = webdav_put(dav, remote_path.c_str(), data, len, progress, ctx);
+    rc = webdav_put_s(dav, remote_path.c_str(), data, len, progress, ctx);
     printf("[sync] PUT retry %s (%zu bytes) rc=%d in %llu ms\n",
            remote_path.c_str(), len, rc, elapsed_ms(t0));
     return rc;
@@ -90,7 +90,7 @@ static int put_creating_parent(const WebDavCfg& dav, const std::string& parent_d
 
 SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
                                 const char* mtime, const char* device_id,
-                                int policy, const WebDavCfg& dav,
+                                int policy, WebDavSession* dav,
                                 const std::vector<uint8_t>& raw_tree,
                                 const uint8_t* files_ptr, size_t files_len) {
     SaveDecision d;
@@ -115,7 +115,7 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
 
     std::string heads_path = d.base_path + "/heads";
     std::vector<std::string> hrefs;
-    if (webdav_propfind(dav, heads_path.c_str(), &hrefs) != 0) {
+    if (webdav_propfind_s(dav, heads_path.c_str(), &hrefs) != 0) {
         printf("FAIL: PROPFIND %s\n", heads_path.c_str());
         return d;
     }
@@ -131,7 +131,7 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
         const std::string& href = hrefs[hi];
         if (href.size() < 5 || href.compare(href.size() - 5, 5, ".json") != 0) continue;
         std::vector<uint8_t> enc_data;
-        if (webdav_get(dav, href.c_str(), &enc_data) != 0) continue;
+        if (webdav_get_s(dav, href.c_str(), &enc_data) != 0) continue;
         WsBuf decrypted = ws_vault_decrypt_heads(vault, enc_data.data(), enc_data.size());
         if (!decrypted.ptr) {
             printf("\n  WARN: ws_vault_decrypt_heads failed for %s: %s\n", href.c_str(),
@@ -177,7 +177,7 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
 int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
                         const std::string& base_path, const std::string& group_key,
                         const std::vector<uint8_t>& raw_tree, const TitleInfo& title,
-                        const WebDavCfg& dav, SyncProgress* prog) {
+                        WebDavSession* dav, SyncProgress* prog) {
     char* blob_name = ws_vault_blob_name(vault, pull_hash.c_str());
     if (!blob_name) {
         printf("  FAIL: ws_vault_blob_name: %s\n",
@@ -190,7 +190,7 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
     report_step(prog, "Downloading");
     printf("[sync] download blob start\n");
     std::vector<uint8_t> enc_blob;
-    int grc = webdav_get(dav, blob_remote.c_str(), &enc_blob,
+    int grc = webdav_get_s(dav, blob_remote.c_str(), &enc_blob,
                          prog ? prog->bytes : nullptr, prog ? prog->ctx : nullptr);
     if (grc == 1) { printf("  FAIL: blob not found (404)\n"); return -1; }
     else if (grc != 0) { printf("  FAIL: GET blob error (rc=%d)\n", grc); return -1; }
@@ -254,7 +254,7 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
 
 std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& title,
                                      const char* device_id, int policy,
-                                     const WebDavCfg& dav, bool* error,
+                                     WebDavSession* dav, bool* error,
                                      SyncProgress* prog) {
     std::vector<SaveDecision> results;
     if (error) *error = false;
@@ -375,7 +375,7 @@ std::vector<SaveLocation> resolve_save_locations(const WsVault* vault,
 int push_title(const WsVault* vault,
                const TitleInfo& title,
                const char* device_id,
-               const WebDavCfg& dav,
+               WebDavSession* dav,
                PushStats* stats,
                SyncProgress* prog) {
     PushStats local_stats = {0, 0};
@@ -488,7 +488,7 @@ int push_title(const WsVault* vault,
 
         report_step(prog, "Checking server");
         t0 = osGetTime();
-        int exists = webdav_exists(dav, blob_remote.c_str());
+        int exists = webdav_exists_s(dav, blob_remote.c_str());
         printf("[sync] blob exists check rc=%d in %llu ms\n", exists, elapsed_ms(t0));
         if (exists <= 0) {
             report_step(prog, "Uploading");
@@ -565,7 +565,7 @@ int push_title(const WsVault* vault,
 int pull_title(const WsVault* vault,
                const TitleInfo& title,
                const char* device_id,
-               const WebDavCfg& dav,
+               WebDavSession* dav,
                PullStats* stats,
                SyncProgress* prog) {
     PullStats local_stats = {0, 0, 0, 0};

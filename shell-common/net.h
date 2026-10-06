@@ -44,6 +44,43 @@ int webdav_mkdir_p(const WebDavCfg& cfg, const char* path);
 int webdav_propfind(const WebDavCfg& cfg, const char* path,
                     std::vector<std::string>* out_hrefs);
 
+// ---- WebDAV session (connection reuse) ----
+
+// Opaque handle owning one reused CURL easy handle (+ copies of the cfg strings).
+// THREADING CONTRACT: a session is used from exactly one thread -- the sync
+// worker. No locking. One session per sync run: begin at the worker entry
+// point, end when the run finishes.
+struct WebDavSession;
+
+// Create a session. Returns nullptr on allocation/curl-init failure.
+// Copies base_url/user/pass -- the caller's WebDavCfg may be stack-scoped.
+WebDavSession* webdav_session_begin(const WebDavCfg& cfg);
+
+// End the session: cleanup the easy handle, free. nullptr-safe.
+void webdav_session_end(WebDavSession* s);
+
+// Total TCP connections actually opened by this session so far
+// (accumulated CURLINFO_NUM_CONNECTS). For logging/verification.
+long webdav_session_num_connects(const WebDavSession* s);
+
+// Session verb variants -- identical parameters and return-value contract to
+// the cfg-based verbs above. Each calls curl_easy_reset on entry (preserves
+// the connection/DNS/TLS-session caches, clears per-request options), then
+// applies every setopt exactly like the one-shot verbs.
+int webdav_put_s(WebDavSession* s, const char* path,
+                 const uint8_t* data, size_t len,
+                 bool (*progress)(size_t got, size_t total, void* ctx) = nullptr,
+                 void* ctx = nullptr);
+int webdav_get_s(WebDavSession* s, const char* path,
+                 std::vector<uint8_t>* out,
+                 bool (*progress)(size_t got, size_t total, void* ctx) = nullptr,
+                 void* ctx = nullptr);
+int webdav_exists_s(WebDavSession* s, const char* path);
+int webdav_mkcol_s(WebDavSession* s, const char* path);
+int webdav_mkdir_p_s(WebDavSession* s, const char* path);
+int webdav_propfind_s(WebDavSession* s, const char* path,
+                      std::vector<std::string>* out_hrefs);
+
 // Unauthenticated HTTPS GET. On HTTP 200, writes body into *out and returns 200.
 // Returns the HTTP status code on successful transport (non-200 = fetch failed).
 // Returns -1 on curl/transport error. Follows redirects; TLS via romfs:/cacert.pem.

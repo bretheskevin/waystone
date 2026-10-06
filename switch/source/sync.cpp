@@ -46,7 +46,7 @@ static std::string make_base_path(const WsVault* vault,
 
 SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
                                 const char* mtime, const char* device_id,
-                                int policy, const WebDavCfg& dav,
+                                int policy, WebDavSession* dav,
                                 const std::vector<uint8_t>& raw_tree,
                                 const uint8_t* files_ptr, size_t files_len) {
     SaveDecision d;
@@ -72,7 +72,7 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
 
     std::string heads_path = d.base_path + "/heads";
     std::vector<std::string> hrefs;
-    if (webdav_propfind(dav, heads_path.c_str(), &hrefs) != 0) {
+    if (webdav_propfind_s(dav, heads_path.c_str(), &hrefs) != 0) {
         printf("FAIL: PROPFIND %s\n", heads_path.c_str());
         return d;
     }
@@ -83,7 +83,7 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
     for (const auto& href : hrefs) {
         if (href.size() < 5 || href.compare(href.size() - 5, 5, ".json") != 0) continue;
         std::vector<uint8_t> enc_data;
-        if (webdav_get(dav, href.c_str(), &enc_data) != 0) continue;
+        if (webdav_get_s(dav, href.c_str(), &enc_data) != 0) continue;
         WsBuf decrypted = ws_vault_decrypt_heads(vault, enc_data.data(), enc_data.size());
         if (!decrypted.ptr) {
             printf("\n  WARN: ws_vault_decrypt_heads failed for %s: %s\n", href.c_str(),
@@ -122,14 +122,14 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
 int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
                         const std::string& base_path, const std::string& group_key,
                         const std::vector<uint8_t>& raw_tree, u64 title_id,
-                        AccountUid uid, const WebDavCfg& dav) {
+                        AccountUid uid, WebDavSession* dav) {
     char* blob_name = ws_vault_blob_name(vault, pull_hash.c_str());
     if (!blob_name) { printf("  FAIL: ws_vault_blob_name: %s\n", ws_last_error() ? ws_last_error() : "unknown"); return -1; }
     std::string blob_remote = base_path + "/blobs/" + blob_name + ".bin";
     ws_string_free(blob_name);
 
     std::vector<uint8_t> enc_blob;
-    int grc = webdav_get(dav, blob_remote.c_str(), &enc_blob);
+    int grc = webdav_get_s(dav, blob_remote.c_str(), &enc_blob);
     if (grc == 1) { printf("  FAIL: blob not found (404)\n"); return -1; }
     else if (grc != 0) { printf("  FAIL: GET blob error\n"); return -1; }
 
@@ -166,7 +166,7 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
 std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& title,
                                      AccountUid uid,
                                      const char* device_id, int policy,
-                                     const WebDavCfg& dav, bool* error) {
+                                     WebDavSession* dav, bool* error) {
     std::vector<SaveDecision> results;
     if (error) *error = false;
 
@@ -210,7 +210,7 @@ int push_title(const WsVault* vault,
                const TitleInfo& title,
                AccountUid uid,
                const char* device_id,
-               const WebDavCfg& dav) {
+               WebDavSession* dav) {
 
     printf("  Extracting save data...\n");
     std::vector<uint8_t> raw_tree = extract_save_json(title, uid);
@@ -284,9 +284,9 @@ int push_title(const WsVault* vault,
         std::string blobs_path = base_path + "/blobs";
         std::string heads_path = base_path + "/heads";
         std::string history_path = base_path + "/history";
-        if (webdav_mkdir_p(dav, blobs_path.c_str()) != 0 ||
-            webdav_mkdir_p(dav, heads_path.c_str()) != 0 ||
-            webdav_mkdir_p(dav, history_path.c_str()) != 0) {
+        if (webdav_mkdir_p_s(dav, blobs_path.c_str()) != 0 ||
+            webdav_mkdir_p_s(dav, heads_path.c_str()) != 0 ||
+            webdav_mkdir_p_s(dav, history_path.c_str()) != 0) {
             printf("FAIL: mkdir_p\n");
             ws_buf_free(zip);
             continue;
@@ -311,10 +311,10 @@ int push_title(const WsVault* vault,
         std::string blob_remote = blobs_path + "/" + blob_name + ".bin";
         ws_string_free(blob_name);
 
-        int exists = webdav_exists(dav, blob_remote.c_str());
+        int exists = webdav_exists_s(dav, blob_remote.c_str());
         if (exists <= 0) {
             // Does not exist (or error checking) -- upload
-            if (webdav_put(dav, blob_remote.c_str(), encrypted.ptr, encrypted.len) != 0) {
+            if (webdav_put_s(dav, blob_remote.c_str(), encrypted.ptr, encrypted.len) != 0) {
                 printf("FAIL: PUT blob\n");
                 ws_buf_free(encrypted);
                 continue;
@@ -337,7 +337,7 @@ int push_title(const WsVault* vault,
 
         // Upload head
         std::string head_remote = heads_path + "/" + device_id + ".json";
-        if (webdav_put(dav, head_remote.c_str(),
+        if (webdav_put_s(dav, head_remote.c_str(),
                        encrypted_head.ptr, encrypted_head.len) != 0) {
             printf("FAIL: PUT head\n");
             ws_buf_free(encrypted_head);
@@ -352,7 +352,7 @@ int push_title(const WsVault* vault,
             reinterpret_cast<const uint8_t*>(head_json.data()),
             head_json.size());
         if (encrypted_hist.ptr) {
-            webdav_put(dav, hist_remote.c_str(),
+            webdav_put_s(dav, hist_remote.c_str(),
                        encrypted_hist.ptr, encrypted_hist.len);
             ws_buf_free(encrypted_hist);
         }
@@ -371,7 +371,7 @@ int pull_title(const WsVault* vault,
                const TitleInfo& title,
                AccountUid uid,
                const char* device_id,
-               const WebDavCfg& dav) {
+               WebDavSession* dav) {
 
     printf("  Extracting local save data for pull comparison...\n");
     bool had_error = false;

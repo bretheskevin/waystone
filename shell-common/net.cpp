@@ -79,14 +79,69 @@ std::string webdav_url(const WebDavCfg& cfg, const char* path) {
     return url;
 }
 
+// ---- Session ----
+
+struct WebDavSession {
+    CURL* curl;
+    std::string base_url, user, pass;
+    bool has_auth; // WebDavCfg allows null user/pass; empty string != null
+    long num_connects;
+};
+
+static WebDavCfg session_cfg(const WebDavSession* s) {
+    WebDavCfg cfg;
+    cfg.base_url = s->base_url.c_str();
+    cfg.user = s->has_auth ? s->user.c_str() : nullptr;
+    cfg.pass = s->has_auth ? s->pass.c_str() : nullptr;
+    return cfg;
+}
+
+WebDavSession* webdav_session_begin(const WebDavCfg& cfg) {
+    WebDavSession* s = new WebDavSession();
+    s->curl = curl_easy_init();
+    if (!s->curl) {
+        printf("[net] webdav session begin FAILED (curl_easy_init)\n");
+        delete s;
+        return nullptr;
+    }
+    s->base_url = cfg.base_url ? cfg.base_url : "";
+    s->user = cfg.user ? cfg.user : "";
+    s->pass = cfg.pass ? cfg.pass : "";
+    s->has_auth = cfg.user && cfg.pass;
+    s->num_connects = 0;
+    printf("[net] webdav session begin: %s\n", s->base_url.c_str());
+    return s;
+}
+
+void webdav_session_end(WebDavSession* s) {
+    if (!s) return;
+    printf("[net] webdav session end: %s num_connects=%ld\n",
+           s->base_url.c_str(), s->num_connects);
+    curl_easy_cleanup(s->curl);
+    delete s;
+}
+
+long webdav_session_num_connects(const WebDavSession* s) {
+    return s ? s->num_connects : 0;
+}
+
+// curl_easy_reset preserves the connection cache, DNS cache, and TLS
+// session-ID cache (documented libcurl behavior) while clearing per-request
+// options -- this is what makes reuse safe against option leakage
+// (CUSTOMREQUEST/NOBODY/UPLOAD/POSTFIELDS from the previous request must not
+// bleed into the next one). After each perform, accumulate how many NEW
+// connections that transfer opened.
+static void session_note_connects(WebDavSession* s) {
+    long nc = 0;
+    curl_easy_getinfo(s->curl, CURLINFO_NUM_CONNECTS, &nc);
+    s->num_connects += nc;
+}
+
 // ---- Verbs ----
 
-int webdav_put(const WebDavCfg& cfg, const char* path,
-               const uint8_t* data, size_t len,
-               bool (*progress)(size_t got, size_t total, void* ctx),
-               void* ctx) {
-    CURL* c = curl_easy_init();
-    if (!c) return -1;
+static int put_impl(CURL* c, const WebDavCfg& cfg, const char* path,
+                    const uint8_t* data, size_t len,
+                    bool (*progress)(size_t, size_t, void*), void* ctx) {
     std::string url = webdav_url(cfg, path);
     WriteCtx wctx;
     ReadCtx rctx = { data, len, 0 };
@@ -103,7 +158,6 @@ int webdav_put(const WebDavCfg& cfg, const char* path,
     CURLcode res = curl_easy_perform(c);
     long http_code = 0;
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
-    curl_easy_cleanup(c);
     if (res != CURLE_OK) {
         printf("[net] webdav_put %s (%zu bytes) transport error: %s\n",
                path, len, curl_easy_strerror(res));
@@ -116,12 +170,31 @@ int webdav_put(const WebDavCfg& cfg, const char* path,
     return 0;
 }
 
-int webdav_get(const WebDavCfg& cfg, const char* path,
-               std::vector<uint8_t>* out,
+int webdav_put(const WebDavCfg& cfg, const char* path,
+               const uint8_t* data, size_t len,
                bool (*progress)(size_t got, size_t total, void* ctx),
                void* ctx) {
     CURL* c = curl_easy_init();
     if (!c) return -1;
+    int rc = put_impl(c, cfg, path, data, len, progress, ctx);
+    curl_easy_cleanup(c);
+    return rc;
+}
+
+int webdav_put_s(WebDavSession* s, const char* path,
+                 const uint8_t* data, size_t len,
+                 bool (*progress)(size_t got, size_t total, void* ctx),
+                 void* ctx) {
+    if (!s) return -1;
+    curl_easy_reset(s->curl);
+    int rc = put_impl(s->curl, session_cfg(s), path, data, len, progress, ctx);
+    session_note_connects(s);
+    return rc;
+}
+
+static int get_impl(CURL* c, const WebDavCfg& cfg, const char* path,
+                    std::vector<uint8_t>* out,
+                    bool (*progress)(size_t, size_t, void*), void* ctx) {
     std::string url = webdav_url(cfg, path);
     WriteCtx wctx;
     XferCtx xctx = { progress, ctx, false };
@@ -133,7 +206,6 @@ int webdav_get(const WebDavCfg& cfg, const char* path,
     CURLcode res = curl_easy_perform(c);
     long http_code = 0;
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
-    curl_easy_cleanup(c);
     if (res != CURLE_OK) {
         printf("[net] webdav_get %s transport error: %s\n", path, curl_easy_strerror(res));
         return -1;
@@ -147,9 +219,29 @@ int webdav_get(const WebDavCfg& cfg, const char* path,
     return 0;
 }
 
-int webdav_exists(const WebDavCfg& cfg, const char* path) {
+int webdav_get(const WebDavCfg& cfg, const char* path,
+               std::vector<uint8_t>* out,
+               bool (*progress)(size_t got, size_t total, void* ctx),
+               void* ctx) {
     CURL* c = curl_easy_init();
     if (!c) return -1;
+    int rc = get_impl(c, cfg, path, out, progress, ctx);
+    curl_easy_cleanup(c);
+    return rc;
+}
+
+int webdav_get_s(WebDavSession* s, const char* path,
+                 std::vector<uint8_t>* out,
+                 bool (*progress)(size_t got, size_t total, void* ctx),
+                 void* ctx) {
+    if (!s) return -1;
+    curl_easy_reset(s->curl);
+    int rc = get_impl(s->curl, session_cfg(s), path, out, progress, ctx);
+    session_note_connects(s);
+    return rc;
+}
+
+static int exists_impl(CURL* c, const WebDavCfg& cfg, const char* path) {
     std::string url = webdav_url(cfg, path);
     curl_easy_setopt(c, CURLOPT_URL, url.c_str());
     set_auth(c, cfg);
@@ -157,15 +249,28 @@ int webdav_exists(const WebDavCfg& cfg, const char* path) {
     CURLcode res = curl_easy_perform(c);
     long http_code = 0;
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
-    curl_easy_cleanup(c);
     if (res != CURLE_OK) return -1;
     if (http_code == 404) return 0;
     return (http_code >= 200 && http_code < 300) ? 1 : -1;
 }
 
-int webdav_mkcol(const WebDavCfg& cfg, const char* path) {
+int webdav_exists(const WebDavCfg& cfg, const char* path) {
     CURL* c = curl_easy_init();
     if (!c) return -1;
+    int rc = exists_impl(c, cfg, path);
+    curl_easy_cleanup(c);
+    return rc;
+}
+
+int webdav_exists_s(WebDavSession* s, const char* path) {
+    if (!s) return -1;
+    curl_easy_reset(s->curl);
+    int rc = exists_impl(s->curl, session_cfg(s), path);
+    session_note_connects(s);
+    return rc;
+}
+
+static int mkcol_impl(CURL* c, const WebDavCfg& cfg, const char* path) {
     std::string url = webdav_url(cfg, path);
     curl_easy_setopt(c, CURLOPT_URL, url.c_str());
     set_auth(c, cfg);
@@ -173,13 +278,37 @@ int webdav_mkcol(const WebDavCfg& cfg, const char* path) {
     CURLcode res = curl_easy_perform(c);
     long http_code = 0;
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
-    curl_easy_cleanup(c);
     if (res != CURLE_OK) return -1;
     if (http_code == 201 || http_code == 405) return 0; // created or already exists
     return (http_code >= 200 && http_code < 300) ? 0 : static_cast<int>(http_code);
 }
 
+int webdav_mkcol(const WebDavCfg& cfg, const char* path) {
+    CURL* c = curl_easy_init();
+    if (!c) return -1;
+    int rc = mkcol_impl(c, cfg, path);
+    curl_easy_cleanup(c);
+    return rc;
+}
+
+int webdav_mkcol_s(WebDavSession* s, const char* path) {
+    if (!s) return -1;
+    curl_easy_reset(s->curl);
+    int rc = mkcol_impl(s->curl, session_cfg(s), path);
+    session_note_connects(s);
+    return rc;
+}
+
 int webdav_mkdir_p(const WebDavCfg& cfg, const char* path) {
+    WebDavSession* s = webdav_session_begin(cfg);
+    if (!s) return -1;
+    int rc = webdav_mkdir_p_s(s, path);
+    webdav_session_end(s);
+    return rc;
+}
+
+int webdav_mkdir_p_s(WebDavSession* s, const char* path) {
+    if (!s) return -1;
     std::string p = path;
     std::string current;
     size_t start = 0;
@@ -193,17 +322,15 @@ int webdav_mkdir_p(const WebDavCfg& cfg, const char* path) {
             current = seg;
         else
             current += "/" + seg;
-        int rc = webdav_mkcol(cfg, current.c_str());
+        int rc = webdav_mkcol_s(s, current.c_str());
         if (rc != 0) return rc;
     }
     return 0;
 }
 
-int webdav_propfind(const WebDavCfg& cfg, const char* path,
-                    std::vector<std::string>* out_hrefs) {
+static int propfind_impl(CURL* c, const WebDavCfg& cfg, const char* path,
+                         std::vector<std::string>* out_hrefs) {
     out_hrefs->clear();
-    CURL* c = curl_easy_init();
-    if (!c) return -1;
     std::string url = webdav_url(cfg, path);
     WriteCtx wctx;
     curl_easy_setopt(c, CURLOPT_URL, url.c_str());
@@ -224,7 +351,6 @@ int webdav_propfind(const WebDavCfg& cfg, const char* path,
     long http_code = 0;
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
     curl_slist_free_all(hdrs);
-    curl_easy_cleanup(c);
     if (res != CURLE_OK) return -1;
     if (http_code == 404) return 0;
     if (http_code < 200 || http_code >= 400) return -1;
@@ -245,6 +371,24 @@ int webdav_propfind(const WebDavCfg& cfg, const char* path,
         pos = end;
     }
     return 0;
+}
+
+int webdav_propfind(const WebDavCfg& cfg, const char* path,
+                    std::vector<std::string>* out_hrefs) {
+    CURL* c = curl_easy_init();
+    if (!c) return -1;
+    int rc = propfind_impl(c, cfg, path, out_hrefs);
+    curl_easy_cleanup(c);
+    return rc;
+}
+
+int webdav_propfind_s(WebDavSession* s, const char* path,
+                      std::vector<std::string>* out_hrefs) {
+    if (!s) return -1;
+    curl_easy_reset(s->curl);
+    int rc = propfind_impl(s->curl, session_cfg(s), path, out_hrefs);
+    session_note_connects(s);
+    return rc;
 }
 
 int http_get(const char* url, std::string* out) {

@@ -36,7 +36,7 @@ struct PullStats {
 int push_title(const WsVault* vault,
                const TitleInfo& title,
                const char* device_id,
-               const WebDavCfg& dav,
+               WebDavSession* dav,
                PushStats* stats = nullptr,
                SyncProgress* prog = nullptr);
 
@@ -47,7 +47,7 @@ int push_title(const WsVault* vault,
 int pull_title(const WsVault* vault,
                const TitleInfo& title,
                const char* device_id,
-               const WebDavCfg& dav,
+               WebDavSession* dav,
                PullStats* stats = nullptr,
                SyncProgress* prog = nullptr);
 
@@ -69,7 +69,7 @@ struct SaveDecision {
 // policy: 0 = NewestWins, 1 = Prompt. On failure, decision_type is empty.
 SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
                                 const char* mtime, const char* device_id,
-                                int policy, const WebDavCfg& dav,
+                                int policy, WebDavSession* dav,
                                 const std::vector<uint8_t>& raw_tree,
                                 const uint8_t* files_ptr, size_t files_len);
 
@@ -80,14 +80,14 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
 int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
                         const std::string& base_path, const std::string& group_key,
                         const std::vector<uint8_t>& raw_tree, const TitleInfo& title,
-                        const WebDavCfg& dav, SyncProgress* prog = 0);
+                        WebDavSession* dav, SyncProgress* prog = 0);
 
 // Scan all saves for a title: extract -> normalize("3ds") -> save_list_decode -> per-save scan_save_decision.
 // Returns decisions for each normalized save. Empty vector = no local saves or nothing to scan.
 // If error is non-null and a normalize failure occurs, *error is set to true.
 std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& title,
                                      const char* device_id, int policy,
-                                     const WebDavCfg& dav, bool* error = 0,
+                                     WebDavSession* dav, bool* error = 0,
                                      SyncProgress* prog = 0);
 
 // Lightweight result of resolving a save's remote location from local data only.

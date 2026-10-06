@@ -18,13 +18,13 @@ typedef Vault WsVault;
 //   3. ws_vault_encrypt_blob -> encrypted blob
 //   4. ws_vault_blob_name -> obfuscated blob name
 //   5. ws_vault_path_segment -> obfuscated path segments
-//   6. webdav_mkdir_p + webdav_put (blob, head, history)
+//   6. webdav_mkdir_p_s + webdav_put_s (session) (blob, head, history)
 // Returns number of saves pushed (0 means nothing to push, -1 means error).
 int push_title(const WsVault* vault,
                const TitleInfo& title,
                AccountUid uid,
                const char* device_id,
-               const WebDavCfg& dav);
+               WebDavSession* dav);
 
 // Pull/restore saves for a single title from the WebDAV backend.
 // Returns number of saves restored (0 = nothing to do, -1 = error).
@@ -32,7 +32,7 @@ int pull_title(const WsVault* vault,
                const TitleInfo& title,
                AccountUid uid,
                const char* device_id,
-               const WebDavCfg& dav);
+               WebDavSession* dav);
 
 // Result of scanning one save to determine the sync decision.
 struct SaveDecision {
@@ -53,7 +53,7 @@ struct SaveDecision {
 // policy: 0 = NewestWins, 1 = Prompt. On failure, decision_type is empty.
 SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
                                 const char* mtime, const char* device_id,
-                                int policy, const WebDavCfg& dav,
+                                int policy, WebDavSession* dav,
                                 const std::vector<uint8_t>& raw_tree,
                                 const uint8_t* files_ptr, size_t files_len);
 
@@ -62,7 +62,7 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
 int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
                         const std::string& base_path, const std::string& group_key,
                         const std::vector<uint8_t>& raw_tree, u64 title_id,
-                        AccountUid uid, const WebDavCfg& dav);
+                        AccountUid uid, WebDavSession* dav);
 
 // Scan all saves for a title: extract -> ws_jksv_normalize("switch") -> save_list_decode
 // -> per-save scan_save_decision. Returns decisions for each normalized save.
@@ -71,6 +71,6 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
 std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& title,
                                      AccountUid uid,
                                      const char* device_id, int policy,
-                                     const WebDavCfg& dav, bool* error = nullptr);
+                                     WebDavSession* dav, bool* error = nullptr);
 
 #endif

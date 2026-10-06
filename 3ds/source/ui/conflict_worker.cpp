@@ -92,6 +92,16 @@ void ConflictWorker::start_scan() {
 
 void ConflictWorker::scan_worker() {
     const size_t n = titles_.size();
+    WebDavSession* sess = webdav_session_begin(dav_);
+    if (!sess) {
+        printf("[conflict] webdav_session_begin failed\n");
+        LightLock_Lock(&mu_);
+        snprintf(status_buf_, sizeof(status_buf_), "Network init failed");
+        LightLock_Unlock(&mu_);
+        phase_.store((int)ConflictPhase::Error);
+        running_.store(false);
+        return;
+    }
     for (size_t i = 0; i < n; i++) {
         if (cancel_.load()) { printf("[conflict] scan cancelled at %zu/%zu\n", i, n); break; }
         {
@@ -102,7 +112,7 @@ void ConflictWorker::scan_worker() {
         }
 
         std::vector<SaveDecision> decisions =
-            scan_title(vault_, titles_[i], device_id_.c_str(), 1 /* Prompt */, dav_);
+            scan_title(vault_, titles_[i], device_id_.c_str(), 1 /* Prompt */, sess);
 
         for (size_t si = 0; si < decisions.size(); si++) {
             const SaveDecision& d = decisions[si];
@@ -139,6 +149,7 @@ void ConflictWorker::scan_worker() {
             }
         }
     }
+    webdav_session_end(sess);
 
     size_t found;
     {
@@ -200,6 +211,16 @@ void ConflictWorker::resolve_entry(void* arg) {
 }
 
 void ConflictWorker::resolve_worker(bool keep_local, ConflictItem item, size_t index) {
+    WebDavSession* sess = webdav_session_begin(dav_);
+    if (!sess) {
+        printf("[conflict] webdav_session_begin failed\n");
+        LightLock_Lock(&mu_);
+        snprintf(status_buf_, sizeof(status_buf_), "Network init failed");
+        phase_.store(conflicts_.empty() ? (int)ConflictPhase::Done : (int)ConflictPhase::Ready);
+        LightLock_Unlock(&mu_);
+        running_.store(false);
+        return;
+    }
     int rc;
     TitleInfo ti;
     ti.title_id = item.title_id;
@@ -207,11 +228,12 @@ void ConflictWorker::resolve_worker(bool keep_local, ConflictItem item, size_t i
     ti.is_twl = item.is_twl;
     ti.name = item.title_name;
     if (keep_local) {
-        rc = push_title(vault_, ti, device_id_.c_str(), dav_);
+        rc = push_title(vault_, ti, device_id_.c_str(), sess);
     } else {
         rc = restore_remote_save(vault_, item.remote_hash, item.base_path,
-                                 item.group_key, item.raw_tree, ti, dav_);
+                                 item.group_key, item.raw_tree, ti, sess);
     }
+    webdav_session_end(sess);
 
     {
         LightLock_Lock(&mu_);

@@ -123,35 +123,42 @@ int main(int argc, char* argv[]) {
             std::vector<TitleInfo> titles = list_titles();
             printf("Found %zu titles\n\n", titles.size());
 
-            // -- Push each title --
-            printf("--- Push phase ---\n");
-            int total_pushed = 0;
-            for (size_t i = 0; i < titles.size(); i++) {
-                printf("[%zu/%zu] %s (TID %016lX)\n",
-                       i + 1, titles.size(),
-                       titles[i].name.c_str(), titles[i].title_id);
-                int rc = push_title(vault, titles[i], uid,
-                                    device_id.c_str(), dav);
-                if (rc > 0) total_pushed += rc;
-            }
-            printf("\n=== Push done: %d saves pushed ===\n", total_pushed);
-
-            // -- Pull first title (restore demo) --
-            // Pulls the first title only to keep this a thin console driver.
-            // A future UI pass will iterate all titles like push does.
-            printf("\n--- Pull phase (first title) ---\n");
-            if (!titles.empty()) {
-                printf("[1/%zu] %s (TID %016lX)\n",
-                       titles.size(),
-                       titles[0].name.c_str(), titles[0].title_id);
-                int prc = pull_title(vault, titles[0], uid,
-                                     device_id.c_str(), dav);
-                if (prc >= 0)
-                    printf("Pull result: %d save(s) restored.\n", prc);
-                else
-                    printf("Pull failed (see messages above).\n");
+            // -- Sync run: one WebDAV session wraps push + pull phases --
+            WebDavSession* sess = webdav_session_begin(dav);
+            if (!sess) {
+                printf("FATAL: webdav_session_begin failed\n");
             } else {
-                printf("No titles found — nothing to pull.\n");
+                // -- Push each title --
+                printf("--- Push phase ---\n");
+                int total_pushed = 0;
+                for (size_t i = 0; i < titles.size(); i++) {
+                    printf("[%zu/%zu] %s (TID %016lX)\n",
+                           i + 1, titles.size(),
+                           titles[i].name.c_str(), titles[i].title_id);
+                    int rc = push_title(vault, titles[i], uid,
+                                        device_id.c_str(), sess);
+                    if (rc > 0) total_pushed += rc;
+                }
+                printf("\n=== Push done: %d saves pushed ===\n", total_pushed);
+
+                // -- Pull first title (restore demo) --
+                // Pulls the first title only to keep this a thin console driver.
+                // A future UI pass will iterate all titles like push does.
+                printf("\n--- Pull phase (first title) ---\n");
+                if (!titles.empty()) {
+                    printf("[1/%zu] %s (TID %016lX)\n",
+                           titles.size(),
+                           titles[0].name.c_str(), titles[0].title_id);
+                    int prc = pull_title(vault, titles[0], uid,
+                                         device_id.c_str(), sess);
+                    if (prc >= 0)
+                        printf("Pull result: %d save(s) restored.\n", prc);
+                    else
+                        printf("Pull failed (see messages above).\n");
+                } else {
+                    printf("No titles found — nothing to pull.\n");
+                }
+                webdav_session_end(sess);
             }
 
             curl_global_cleanup();

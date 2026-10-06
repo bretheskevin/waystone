@@ -190,9 +190,20 @@ void HistoryWorker::restore_worker(const HistoryEntry& entry, size_t index) {
 
     printf("[history] restoring hash=%.12s for %s\n", hash.c_str(), title_.name.c_str());
 
+    WebDavSession* sess = webdav_session_begin(dav);
+    if (!sess) {
+        printf("[history] webdav_session_begin failed\n");
+        LightLock_Lock(&mu_);
+        snprintf(status_buf_, sizeof(status_buf_), "Network init failed.");
+        LightLock_Unlock(&mu_);
+        phase_.store((int)BrowsePhase::Error);
+        running_.store(false);
+        return;
+    }
     int rc = restore_remote_save(session_->vault, hash,
                                  base_path_, group_key_, raw_tree_,
-                                 title_, dav);
+                                 title_, sess);
+    webdav_session_end(sess);
     if (rc != 0) {
         printf("[history] restore FAILED (rc=%d)\n", rc);
         LightLock_Lock(&mu_);

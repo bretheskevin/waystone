@@ -131,29 +131,35 @@ int main(int argc, char* argv[]) {
         std::vector<TitleInfo> titles = list_titles(vault, dav);
         printf("Found %zu titles\n\n", titles.size());
 
-        printf("--- Push phase ---\n");
-        int total_pushed = 0;
-        for (size_t i = 0; i < titles.size(); i++) {
-            printf("[%zu/%zu] %s (TID %016llX)\n",
-                   i + 1, titles.size(),
-                   titles[i].name.c_str(),
-                   static_cast<unsigned long long>(titles[i].title_id));
-            int rc = push_title(vault, titles[i], device_id.c_str(), dav);
-            if (rc > 0) total_pushed += rc;
-        }
-        printf("\n=== Push done: %d saves pushed ===\n\n", total_pushed);
+        WebDavSession* sess = webdav_session_begin(dav);
+        if (!sess) {
+            printf("FATAL: webdav_session_begin failed\n");
+        } else {
+            printf("--- Push phase ---\n");
+            int total_pushed = 0;
+            for (size_t i = 0; i < titles.size(); i++) {
+                printf("[%zu/%zu] %s (TID %016llX)\n",
+                       i + 1, titles.size(),
+                       titles[i].name.c_str(),
+                       static_cast<unsigned long long>(titles[i].title_id));
+                int rc = push_title(vault, titles[i], device_id.c_str(), sess);
+                if (rc > 0) total_pushed += rc;
+            }
+            printf("\n=== Push done: %d saves pushed ===\n\n", total_pushed);
 
-        printf("--- Pull phase ---\n");
-        int total_pulled = 0;
-        for (size_t i = 0; i < titles.size(); i++) {
-            printf("[%zu/%zu] %s (TID %016llX)\n",
-                   i + 1, titles.size(),
-                   titles[i].name.c_str(),
-                   static_cast<unsigned long long>(titles[i].title_id));
-            int rc = pull_title(vault, titles[i], device_id.c_str(), dav);
-            if (rc > 0) total_pulled += rc;
+            printf("--- Pull phase ---\n");
+            int total_pulled = 0;
+            for (size_t i = 0; i < titles.size(); i++) {
+                printf("[%zu/%zu] %s (TID %016llX)\n",
+                       i + 1, titles.size(),
+                       titles[i].name.c_str(),
+                       static_cast<unsigned long long>(titles[i].title_id));
+                int rc = pull_title(vault, titles[i], device_id.c_str(), sess);
+                if (rc > 0) total_pulled += rc;
+            }
+            printf("\n=== Pull done: %d saves pulled ===\n", total_pulled);
+            webdav_session_end(sess);
         }
-        printf("\n=== Pull done: %d saves pulled ===\n", total_pulled);
     }
 
 cleanup:
