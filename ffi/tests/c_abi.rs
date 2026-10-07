@@ -7,6 +7,7 @@ use waystone_ffi::conflict_abi::*;
 use waystone_ffi::crypto_abi::*;
 use waystone_ffi::error::{catch_and_set_error, set_last_error, ws_last_error};
 use waystone_ffi::packaging_abi::*;
+use waystone_ffi::rom_abi::*;
 use waystone_ffi::wire::{SaveList, decode_file_tree, decode_save_list, encode_file_tree};
 
 // ── Buffer tests ─────────────────────────────────────────────────────────────
@@ -789,39 +790,212 @@ fn adapter_null_input_returns_null() {
     assert_to_native_null_rejected(ws_jksv_to_native);
 }
 
+fn nds_header(code: &[u8; 4], crc16: u16) -> Vec<u8> {
+    let mut h = vec![0u8; 0x200];
+    h[0x0C..0x10].copy_from_slice(code);
+    h[0x15E..0x160].copy_from_slice(&crc16.to_le_bytes());
+    h
+}
+
+fn take_c_string(p: *mut std::ffi::c_char) -> String {
+    assert!(!p.is_null());
+    let s = unsafe { CStr::from_ptr(p) }.to_str().unwrap().to_string();
+    unsafe { ws_string_free(p) };
+    s
+}
+
 #[test]
-fn twilight_normalize_through_ffi() {
-    let raw = encode_file_tree(&[("saves/Metroid.sav".to_string(), vec![0xFFu8, 0xFF])]);
-    let buf = unsafe { ws_twilight_normalize(raw.as_ptr(), raw.len()) };
+fn crc32_update_chains_to_standard_check_value() {
+    let a = unsafe { ws_crc32_update(0, b"1234".as_ptr(), 4) };
+    let b = unsafe { ws_crc32_update(a, b"56789".as_ptr(), 5) };
+    assert_eq!(b, 0xCBF4_3926);
+    assert_eq!(unsafe { ws_crc32_update(0, std::ptr::null(), 0) }, 0);
+}
+
+#[test]
+fn rom_identity_through_ffi() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
+    let nds = CString::new("nds").unwrap();
+    let h = nds_header(b"AMCE", 0x1A2B);
+    assert_eq!(
+        unsafe { ws_rom_needs_full_hash(nds.as_ptr(), h.as_ptr(), h.len()) },
+        0
+    );
+    let id = unsafe { ws_rom_identity(nds.as_ptr(), h.as_ptr(), h.len(), 0, false) };
+    assert_eq!(take_c_string(id), "AMCE-1A2B");
+
+    let bad = nds_header(b"####", 0);
+    assert_eq!(
+        unsafe { ws_rom_needs_full_hash(nds.as_ptr(), bad.as_ptr(), bad.len()) },
+        1
+    );
+    assert!(unsafe { ws_rom_identity(nds.as_ptr(), bad.as_ptr(), bad.len(), 0, false) }.is_null());
+    let id = unsafe { ws_rom_identity(nds.as_ptr(), bad.as_ptr(), bad.len(), 0xDEADBEEF, true) };
+    assert_eq!(take_c_string(id), "DEADBEEF");
+
+    let switch = CString::new("switch").unwrap();
+    assert_eq!(
+        unsafe { ws_rom_needs_full_hash(switch.as_ptr(), h.as_ptr(), h.len()) },
+        -1
+    );
+}
+
+#[test]
+fn rom_display_name_through_ffi() {
+    let nes = CString::new("nes").unwrap();
+    let name = CString::new("Zelda (U).nes").unwrap();
+    let dn = unsafe { ws_rom_display_name(nes.as_ptr(), std::ptr::null(), 0, name.as_ptr()) };
+    assert_eq!(take_c_string(dn), "Zelda (U)");
+}
+
+#[test]
+fn rom_pair_emits_tsv() {
+    let input = b"roms/nds/Mario.nds\nroms/nds/saves/Mario.sav\n";
+    let buf = unsafe { ws_rom_pair(input.as_ptr(), input.len()) };
     assert!(!buf.ptr.is_null());
-    let slice = unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) };
-    let saves = decode_save_list(slice).unwrap();
+    let out = std::str::from_utf8(unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) })
+        .unwrap()
+        .to_string();
+    unsafe { ws_buf_free(buf) };
+    assert_eq!(
+        out,
+        "nds\troms/nds/Mario.nds\troms/nds/saves\troms/nds/saves/Mario.sav\n"
+    );
+
+    let empty = unsafe { ws_rom_pair(b"readme.txt".as_ptr(), 10) };
+    assert!(!empty.ptr.is_null());
+    assert_eq!(empty.len, 0);
+    unsafe { ws_buf_free(empty) };
+}
+
+#[test]
+fn rom_pair_null_input_returns_null() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
+    let buf = unsafe { ws_rom_pair(std::ptr::null(), 0) };
+    assert!(buf.ptr.is_null());
+}
+
+#[test]
+fn rom_keyed_slots_through_ffi() {
+    let nds = CString::new("nds").unwrap();
+    let slots = take_c_string(unsafe { ws_rom_keyed_slots(nds.as_ptr()) });
+    assert_eq!(slots.lines().count(), 20);
+    assert_eq!(slots.lines().next(), Some("battery"));
+}
+
+fn rom_keyed_normalize_one(path: &str) -> (WsBuf, SaveList) {
+    let raw = encode_file_tree(&[(path.to_string(), vec![0xFFu8, 0xEE])]);
+    let sys = CString::new("nds").unwrap();
+    let id = CString::new("AMCE-1A2B").unwrap();
+    let dn = CString::new("Mario Kart DS").unwrap();
+    let rom = CString::new("Mario.nds").unwrap();
+    let buf = unsafe {
+        ws_rom_keyed_normalize(
+            sys.as_ptr(),
+            id.as_ptr(),
+            dn.as_ptr(),
+            rom.as_ptr(),
+            raw.as_ptr(),
+            raw.len(),
+        )
+    };
+    assert!(!buf.ptr.is_null());
+    let saves = decode_save_list(unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) }).unwrap();
+    (buf, saves)
+}
+
+#[test]
+fn rom_keyed_normalize_through_ffi() {
+    let (buf, saves) = rom_keyed_normalize_one("nds/rom/Mario.sav");
     assert_eq!(saves.len(), 1);
     let meta: serde_json::Value = serde_json::from_slice(&saves[0].0).unwrap();
-    assert_eq!(meta["id"]["game"]["key"], "Metroid");
-    assert_eq!(meta["id"]["slot"], "battery");
-    assert_eq!(saves[0].1[0].0, "Metroid.sav");
+    assert_eq!(meta["group_key"], "nds/AMCE-1A2B/battery");
+    assert_eq!(meta["id"]["game"]["key"], "AMCE-1A2B");
+    assert_eq!(saves[0].1[0].0, "battery");
     unsafe { ws_buf_free(buf) };
 }
 
 #[test]
-fn twilight_to_native_through_ffi() {
-    let raw = encode_file_tree(&[("saves/Metroid.sav".to_string(), vec![0xFFu8, 0xFF])]);
-    let buf = unsafe { ws_twilight_normalize(raw.as_ptr(), raw.len()) };
-    let slice = unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) };
-    let saves = decode_save_list(slice).unwrap();
-    let tree = to_native_files(ws_twilight_to_native, &saves[0]);
-    assert_eq!(tree.len(), 1);
-    assert_eq!(tree[0].0, "saves/Metroid.sav");
-    unsafe { ws_buf_free(buf) };
-}
+fn rom_keyed_to_native_through_ffi() {
+    let (buf, saves) = rom_keyed_normalize_one("Mario.sav");
+    let files = encode_file_tree(&saves[0].1);
+    let sys = CString::new("nds").unwrap();
+    let slot = CString::new("battery").unwrap();
+    let rom = CString::new("mkds (E).nds").unwrap();
+    let mut out = WsBuf::null();
+    let rc = unsafe {
+        ws_rom_keyed_to_native(
+            sys.as_ptr(),
+            slot.as_ptr(),
+            rom.as_ptr(),
+            files.as_ptr(),
+            files.len(),
+            &mut out,
+        )
+    };
+    assert_eq!(rc, 0);
+    let tree = decode_file_tree(unsafe { std::slice::from_raw_parts(out.ptr, out.len) }).unwrap();
+    assert_eq!(tree, vec![("mkds (E).sav".to_string(), vec![0xFFu8, 0xEE])]);
+    unsafe { ws_buf_free(out) };
 
-#[test]
-fn twilight_null_input_returns_null() {
     let _guard = ERROR_TEST_LOCK.lock().unwrap();
-    let result = unsafe { ws_twilight_normalize(std::ptr::null(), 0) };
-    assert!(result.ptr.is_null());
-    assert_to_native_null_rejected(ws_twilight_to_native);
+    let wrong = CString::new("slot-1").unwrap();
+    let mut out2 = WsBuf::null();
+    let rc2 = unsafe {
+        ws_rom_keyed_to_native(
+            sys.as_ptr(),
+            wrong.as_ptr(),
+            rom.as_ptr(),
+            files.as_ptr(),
+            files.len(),
+            &mut out2,
+        )
+    };
+    assert_eq!(rc2, -1);
+    unsafe { ws_buf_free(buf) };
+}
+
+#[test]
+fn rom_keyed_null_input_returns_null() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
+    let sys = CString::new("nds").unwrap();
+    let s = CString::new("x").unwrap();
+    let buf = unsafe {
+        ws_rom_keyed_normalize(
+            sys.as_ptr(),
+            s.as_ptr(),
+            s.as_ptr(),
+            s.as_ptr(),
+            std::ptr::null(),
+            0,
+        )
+    };
+    assert!(buf.ptr.is_null());
+    let buf2 = unsafe {
+        ws_rom_keyed_normalize(
+            sys.as_ptr(),
+            std::ptr::null(),
+            s.as_ptr(),
+            s.as_ptr(),
+            [0u8; 4].as_ptr(),
+            4,
+        )
+    };
+    assert!(buf2.ptr.is_null());
+    let mut out = WsBuf::null();
+    assert_eq!(
+        unsafe {
+            ws_rom_keyed_to_native(
+                sys.as_ptr(),
+                s.as_ptr(),
+                s.as_ptr(),
+                std::ptr::null(),
+                0,
+                &mut out,
+            )
+        },
+        -1
+    );
 }
 
 #[test]

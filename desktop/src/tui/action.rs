@@ -662,10 +662,12 @@ pub async fn restore_snapshot(
         .await;
 
     let dest = target.path.clone();
+    let adapter = target.adapter.clone();
     let save_key_owned = save_key.clone();
     let timestamp_owned = timestamp.clone();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-        helpers::restore_from_snapshot(&save_key_owned, &timestamp_owned, &dest, safety_backup)?;
+        let rt = helpers::restore_target(&adapter, &dest, &save_key_owned)?;
+        helpers::restore_from_snapshot(&save_key_owned, &timestamp_owned, &rt, safety_backup)?;
         Ok(())
     })
     .await??;

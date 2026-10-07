@@ -82,7 +82,7 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
                         const std::vector<uint8_t>& raw_tree, const TitleInfo& title,
                         WebDavSession* dav, SyncProgress* prog = 0);
 
-// Scan all saves for a title: extract -> normalize("3ds") -> save_list_decode -> per-save scan_save_decision.
+// Scan all saves for a title: extract -> normalize (checkpoint for archives, rom_keyed for ROMs) -> save_list_decode -> per-save scan_save_decision.
 // Returns decisions for each normalized save. Empty vector = no local saves or nothing to scan.
 // If error is non-null and a normalize failure occurs, *error is set to true.
 std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& title,
@@ -100,7 +100,7 @@ struct SaveLocation {
 };
 
 // Resolve the remote base_path/group_key for a title's saves using LOCAL data only:
-// extract_save_json -> ws_checkpoint_normalize -> save_list_decode -> per save:
+// extract_save_json -> normalize (checkpoint for archives, rom_keyed for ROMs) -> save_list_decode -> per save:
 // ws_package -> group_key -> make_base_path. NO network.
 // Empty vector = no local saves. If a normalize failure occurs and error is non-null,
 // *error is set to true.

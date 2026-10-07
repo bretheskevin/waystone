@@ -48,13 +48,21 @@ int32_t ws_mgba_to_native(const char *meta_json,
                           uintptr_t files_len,
                           struct WsBuf *out_tree);
 
- struct WsBuf ws_twilight_normalize(const uint8_t *raw_files, uintptr_t raw_files_len);
+
+struct WsBuf ws_rom_keyed_normalize(const char *system,
+                                    const char *rom_id,
+                                    const char *display_name,
+                                    const char *rom_file_name,
+                                    const uint8_t *raw_files,
+                                    uintptr_t raw_files_len);
 
 
-int32_t ws_twilight_to_native(const char *meta_json,
-                              const uint8_t *files,
-                              uintptr_t files_len,
-                              struct WsBuf *out_tree);
+int32_t ws_rom_keyed_to_native(const char *system,
+                               const char *slot,
+                               const char *rom_file_name,
+                               const uint8_t *files,
+                               uintptr_t files_len,
+                               struct WsBuf *out_tree);
 
 /**
  * # Safety
@@ -133,5 +141,26 @@ char *ws_package(const char *meta_json,
                  const uint8_t *files,
                  uintptr_t files_len,
                  struct WsBuf *out_zip);
+
+ uint32_t ws_crc32_update(uint32_t crc, const uint8_t *data, uintptr_t len);
+
+ int32_t ws_rom_needs_full_hash(const char *system, const uint8_t *header, uintptr_t header_len);
+
+
+char *ws_rom_identity(const char *system,
+                      const uint8_t *header,
+                      uintptr_t header_len,
+                      uint32_t full_crc32,
+                      bool has_full_crc32);
+
+
+char *ws_rom_display_name(const char *system,
+                          const uint8_t *header,
+                          uintptr_t header_len,
+                          const char *rom_file_name);
+
+ struct WsBuf ws_rom_pair(const uint8_t *paths, uintptr_t paths_len);
+
+ char *ws_rom_keyed_slots(const char *system);
 
 #endif  /* WAYSTONE_H */

@@ -74,3 +74,11 @@ impl From<waystone_sync::HistoryEntry> for HistoryEntry {
         }
     }
 }
+
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct RomPairing {
+    pub system: String,
+    pub rom_path: String,
+    pub save_dir: String,
+    pub save_paths: Vec<String>,
+}

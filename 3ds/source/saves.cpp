@@ -3,6 +3,11 @@
 #include "file_tree.h"
 #include "net.h"
 #include "snapshot_browse.h"
+#include "rom_saves.h"
+#include "rom_parse.h"
+#include "sync_summary.h"
+#include <algorithm>
+#include <map>
 #include <set>
 
 struct Vault;
@@ -189,6 +194,7 @@ u32 extdata_id_for(u64 title_id) {
 }
 
 SaveArchiveKind main_save_kind(const TitleInfo& title) {
+    if (title.source == SourceRom) return SaveRomFile;
     if (title.is_twl) return SaveTwl;
     return SaveUser;
 }
@@ -292,13 +298,14 @@ static bool has_local_save(const TitleInfo& title) {
 // Returns true if the PROPFIND completed (even if empty — 404 is legitimate).
 // Returns false on transport/server error: caller must fail-open (show all titles).
 static bool fetch_remote_game_set(const WsVault* vault, const WebDavCfg& dav,
+                                   const char* system_name,
                                    std::set<std::string>& out_game_set) {
     out_game_set.clear();
     if (!vault) return false;
 
-    char* sys_raw = ws_vault_path_segment(vault, "3ds");
+    char* sys_raw = ws_vault_path_segment(vault, system_name);
     if (!sys_raw) {
-        printf("[net] fetch_remote_game_set: ws_vault_path_segment('3ds') failed\n");
+        printf("[net] fetch_remote_game_set: ws_vault_path_segment('%s') failed\n", system_name);
         return false;
     }
     std::string sys_str(sys_raw);
@@ -308,45 +315,38 @@ static bool fetch_remote_game_set(const WsVault* vault, const WebDavCfg& dav,
     int rc = webdav_propfind(dav, sys_str.c_str(), &hrefs);
     if (rc != 0) {
         // Transport or server error; 404 returns rc=0 per net.cpp.
-        printf("[net] PROPFIND %s failed rc=%d — remote filter disabled (fail-open)\n",
-               sys_str.c_str(), rc);
+        printf("[net] PROPFIND %s (%s) failed rc=%d — remote filter disabled (fail-open)\n",
+               sys_str.c_str(), system_name, rc);
         return false;
     }
 
-    // hrefs includes the parent collection itself; extract child (game) segments.
-    // Each href: /prefix/<sys_seg>/<game_seg>/ — take the last non-empty component.
+    // hrefs includes the parent collection itself; keep only child (game) segments.
     int game_count = 0;
     for (size_t i = 0; i < hrefs.size(); i++) {
-        std::string h = hrefs[i];
-        while (!h.empty() && h[h.size() - 1] == '/') h.erase(h.size() - 1);
-        if (h.empty()) continue;
-        size_t slash = h.rfind('/');
-        std::string seg = (slash == std::string::npos) ? h : h.substr(slash + 1);
-        if (seg.empty() || seg == sys_str) continue; // skip parent
+        std::string seg = href_last_segment(hrefs[i]);
+        if (seg.empty() || seg == sys_str) continue;
         out_game_set.insert(seg);
         game_count++;
     }
-
-    if (hrefs.empty()) {
-        printf("[net] PROPFIND %s -> 404 or empty (no remote backups yet)\n",
-               sys_str.c_str());
-    } else {
-        printf("[net] PROPFIND %s -> %d remote game dir(s) found\n",
-               sys_str.c_str(), game_count);
-    }
+    printf("[net] PROPFIND %s (%s) -> %d remote game dir(s)%s\n", sys_str.c_str(), system_name,
+           game_count, hrefs.empty() ? " (404/empty)" : "");
     return true;
 }
 
 // Check whether a title's obfuscated game segment is present in the remote set.
 // Derives the key the same way the Rust normalizer does: normalize the display
 // name, obfuscate via the vault, then look up in the PROPFIND-collected set.
-static bool is_in_remote_set(const WsVault* vault, const std::string& display_name,
-                              const std::set<std::string>& remote_games) {
-    std::string gkey = normalize_game_name(display_name);
-    char* gseg = ws_vault_path_segment(vault, gkey.c_str());
+static bool is_key_in_remote_set(const WsVault* vault, const std::string& game_key,
+                                 const std::set<std::string>& remote_games) {
+    char* gseg = ws_vault_path_segment(vault, game_key.c_str());
     bool found = gseg && remote_games.count(std::string(gseg)) > 0;
     if (gseg) ws_string_free(gseg);
     return found;
+}
+
+static bool is_in_remote_set(const WsVault* vault, const std::string& display_name,
+                             const std::set<std::string>& remote_games) {
+    return is_key_in_remote_set(vault, normalize_game_name(display_name), remote_games);
 }
 
 // Collapse per-game duplicates. The SD title list holds the base app
@@ -364,10 +364,12 @@ static std::vector<TitleInfo> collapse_by_unique_id(const std::vector<TitleInfo>
         if (used[i]) continue;
         u32 uid = raw[i].unique_id;
         int base_idx = -1, icon_idx = -1, group_n = 0;
+        bool any_remote = false;
         for (size_t j = i; j < raw.size(); j++) {
             if (raw[j].unique_id != uid) continue;
             used[j] = true;
             group_n++;
+            if (raw[j].has_remote) any_remote = true;
             if ((u32)(raw[j].title_id >> 32) == 0x00040000 && base_idx < 0) base_idx = (int)j;
             if (!raw[j].icon.empty() && icon_idx < 0) icon_idx = (int)j;
         }
@@ -380,6 +382,10 @@ static std::vector<TitleInfo> collapse_by_unique_id(const std::vector<TitleInfo>
             t.name = raw[icon_idx].name;
             t.icon = raw[icon_idx].icon;
         }
+        if (any_remote && !t.has_remote)
+            printf("[titles] uid=%05lX has_remote inherited from a sibling entry\n",
+                   (unsigned long)uid);
+        t.has_remote = any_remote;
         if (group_n > 1)
             printf("[titles] uid=%05lX collapsed %d entries -> tid=%016llX '%s'\n",
                    (unsigned long)uid, group_n, (unsigned long long)t.title_id, t.name.c_str());
@@ -398,7 +404,7 @@ std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav) {
     // -- Remote backup set (single PROPFIND on the 3ds/ collection) --
     // filter_active=true even when remote set is empty (404); false only on transport error.
     std::set<std::string> remote_games;
-    bool filter_active = vault && fetch_remote_game_set(vault, dav, remote_games);
+    bool filter_active = vault && fetch_remote_game_set(vault, dav, "3ds", remote_games);
 
     std::vector<TitleInfo> sd_raw;
     std::vector<TitleInfo> nand_raw;
@@ -454,6 +460,7 @@ std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav) {
                     // Fail-open: if remote PROPFIND failed (filter_active==false), skip filter.
                     if (filter_active) {
                         bool in_remote = is_in_remote_set(vault, info.name, remote_games);
+                        info.has_remote = in_remote;
 
                         if (!in_remote && !has_local_save(info)) {
                             printf("[titles] hiding %s (tid=0x%016llX) — no local save, no remote backup\n",
@@ -510,9 +517,10 @@ std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav) {
                         if (!is_twl_title(tid)) continue;
 
                         bool has_twl_local = twl_save_accessible(twl_archive, tid);
+                        bool in_remote = true; // fail-open when the remote set is unavailable
                         if (filter_active) {
                             std::string gname = default_title_name(tid);
-                            bool in_remote = is_in_remote_set(vault, gname, remote_games);
+                            in_remote = is_in_remote_set(vault, gname, remote_games);
 
                             if (!has_twl_local && !in_remote) {
                                 printf("[titles] hiding %s (tid=0x%016llX) — no TWL save, no remote backup\n",
@@ -531,6 +539,7 @@ std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav) {
                         info.unique_id = (tid >> 8) & 0xFFFFF;
                         info.is_twl = true;
                         info.name = default_title_name(tid);
+                        info.has_remote = in_remote;
                         nand_raw.push_back(info);
                     }
                     FSUSER_CloseArchive(twl_archive);
@@ -555,7 +564,46 @@ std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav) {
     // siblings — so they are appended without collapsing.
     std::vector<TitleInfo> out = collapse_by_unique_id(sd_raw);
     out.insert(out.end(), nand_raw.begin(), nand_raw.end());
-    printf("[titles] %zu title(s) after save-presence filter (sd + nand twl)\n", out.size());
+
+    // -- Source 3: TWiLight Menu++ ROM saves (ROM-driven; one PROPFIND per system with ROMs) --
+    {
+        std::vector<TitleInfo> roms = scan_rom_titles();
+        std::map<std::string, std::set<std::string> > rom_remote;
+        std::map<std::string, bool> rom_remote_ok;
+        int rom_hidden = 0, rom_kept = 0;
+        for (size_t i = 0; i < roms.size(); i++) {
+            TitleInfo& r = roms[i];
+            bool active = false;
+            if (vault) {
+                if (!rom_remote_ok.count(r.system))
+                    rom_remote_ok[r.system] =
+                        fetch_remote_game_set(vault, dav, r.system.c_str(), rom_remote[r.system]);
+                active = rom_remote_ok[r.system];
+            }
+            if (active) {
+                r.has_remote = is_key_in_remote_set(vault, r.rom_id, rom_remote[r.system]);
+                if (!r.has_remote && r.save_paths.empty()) {
+                    printf("[titles] hiding ROM %s — no local save, no remote backup\n",
+                           r.rom_file_name.c_str());
+                    rom_hidden++;
+                    continue;
+                }
+            }
+            out.push_back(r);
+            rom_kept++;
+        }
+        printf("[titles] ROM source: %d kept, %d hidden (of %zu scanned)\n",
+               rom_kept, rom_hidden, roms.size());
+    }
+
+    std::stable_sort(out.begin(), out.end(),
+                     [](const TitleInfo& a, const TitleInfo& b) { return title_name_less(a.name, b.name); });
+    size_t no_remote = 0;
+    for (size_t i = 0; i < out.size(); i++)
+        if (!out[i].has_remote) no_remote++;
+    printf("[titles] %zu title(s) after save-presence filter (sd + nand twl), %zu without remote backup%s\n",
+           out.size(), no_remote,
+           filter_active ? "" : " (remote set unavailable: all marked has_remote, fail-open)");
     return out;
 }
 
@@ -769,6 +817,7 @@ static void walk_archive(FS_Archive archive, const char* rel,
 }
 
 std::vector<uint8_t> extract_save_json(const TitleInfo& title) {
+    if (title.source == SourceRom) return extract_rom_saves(title);
     // -- Phase 1: user/TWL savedata (routed by title origin) --
     std::vector<std::pair<std::string, std::vector<uint8_t>>> files;
     {
@@ -908,6 +957,12 @@ int write_save_files(const TitleInfo& title, const uint8_t* ft_ptr, size_t ft_le
     }
     printf("[saves] write_save_files: decoded %zu files (%zu bytes)\n",
            entries.size(), ft_len);
+    if ((title.source == SourceRom) != (kind == SaveRomFile)) {
+        printf("[saves] write_save_files: source/kind mismatch (source=%d kind=%s) — refusing\n",
+               (int)title.source, save_kind_name(kind));
+        return -1;
+    }
+    if (kind == SaveRomFile) return write_rom_saves(title, entries);
     const u64 title_id = title.title_id;
     FS_Archive archive;
     // Path prefix inside the archive for TWL saves ("" for all other kinds).

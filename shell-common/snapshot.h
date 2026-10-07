@@ -9,6 +9,9 @@
 // Replaces '/', '\\', and ".." sequences with '_'.
 std::string snapshot_sanitize_key(const std::string& key);
 
+// mkdir -p for "sdmc:/a/b" style paths; the device prefix component is skipped. EEXIST is success.
+bool fs_mkdir_p(const std::string& path);
+
 // Write a safety snapshot from a WsFileTree buffer (the binary file-tree emitted
 // by extract_save_json) to backup_dir, creating all parent directories.
 // Returns true on success, or if the tree is empty (nothing to back up).

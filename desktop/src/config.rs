@@ -11,8 +11,10 @@ pub struct SyncTarget {
     pub system: String,
 }
 
-const KNOWN_ADAPTERS: &[&str] = &["jksv", "mgba", "twilight", "checkpoint"];
-const KNOWN_SYSTEMS: &[&str] = &["switch", "3ds", "nds", "gba", "gbc", "gb"];
+const KNOWN_ADAPTERS: &[&str] = &["jksv", "mgba", "rom_keyed", "twilight", "checkpoint"];
+const KNOWN_SYSTEMS: &[&str] = &[
+    "switch", "3ds", "nds", "gba", "gbc", "gb", "nes", "snes", "md", "sms", "gg", "ngp",
+];
 
 pub fn validate_sync_target(t: &SyncTarget) -> Result<()> {
     if t.name.trim().is_empty() {
@@ -25,7 +27,7 @@ pub fn validate_sync_target(t: &SyncTarget) -> Result<()> {
             KNOWN_ADAPTERS.join(", ")
         );
     }
-    if !KNOWN_SYSTEMS.contains(&t.system.as_str()) {
+    if !crate::helpers::is_rom_keyed(&t.adapter) && !KNOWN_SYSTEMS.contains(&t.system.as_str()) {
         anyhow::bail!(
             "unknown system '{}'; expected one of: {}",
             t.system,
@@ -102,6 +104,26 @@ impl WaystoneConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rom_keyed_targets_ignore_system() {
+        for adapter in ["rom_keyed", "twilight"] {
+            let t = SyncTarget {
+                name: "Roms".into(),
+                path: "/roms".into(),
+                adapter: adapter.into(),
+                system: String::new(),
+            };
+            validate_sync_target(&t).unwrap();
+        }
+        let bad = SyncTarget {
+            name: "x".into(),
+            path: "/x".into(),
+            adapter: "jksv".into(),
+            system: String::new(),
+        };
+        assert!(validate_sync_target(&bad).is_err());
+    }
 
     #[test]
     fn sync_target_round_trips_to_json() {

@@ -2,6 +2,7 @@
 #include "worker_thread.h"
 #include "snapshot.h"        // write_snapshot, snapshot_sanitize_key
 #include "snapshot_browse.h" // list_snapshots, snapshot_to_file_tree, etc.
+#include "rom_parse.h"       // rom_group_key
 #include <cstdio>
 #include <cstring>
 
@@ -12,7 +13,11 @@ SnapshotWorker::SnapshotWorker(TitleInfo title)
       thread_(0),
       pending_restore_(0)
 {
-    key_dir_ = snapshot_key_dir("3ds", title_.name);
+    key_dir_ = (title_.source == SourceRom)
+                   ? snapshot_sanitize_key(rom_group_key(title_.system, title_.rom_id, "battery"))
+                   : snapshot_key_dir("3ds", title_.name);
+    printf("[snapshot] key_dir=%s (source=%s)\n", key_dir_.c_str(),
+           title_.source == SourceRom ? "rom" : "archive");
     LightLock_Init(&mu_);
     memset(status_buf_, 0, sizeof(status_buf_));
 }
@@ -172,13 +177,17 @@ void SnapshotWorker::restore_worker(const SnapshotEntry& entry, size_t index) {
     // "extdata" -> ARCHIVE_EXTDATA       (SaveExtdata)
     // A slot absent from the snapshot ("[]") is skipped; only a genuine I/O
     // failure ("") aborts the restore.
-    static const char* SLOTS[] = { "main", "extdata" };
+    static const char* ARCHIVE_SLOTS[] = { "main", "extdata" };
+    static const char* ROM_SLOTS[] = { "rom" };
+    const bool is_rom = (title_.source == SourceRom);
+    const char* const* slots = is_rom ? ROM_SLOTS : ARCHIVE_SLOTS;
+    const size_t slot_count = is_rom ? 1 : 2;
     bool any_written = false;
-    for (size_t si = 0; si < sizeof(SLOTS)/sizeof(SLOTS[0]); si++) {
-        const char* slot = SLOTS[si];
-        SaveArchiveKind kind = (strcmp(slot, "extdata") == 0)
-                                   ? SaveExtdata
-                                   : main_save_kind(title_);
+    for (size_t si = 0; si < slot_count; si++) {
+        const char* slot = slots[si];
+        SaveArchiveKind kind = is_rom ? SaveRomFile
+                             : (strcmp(slot, "extdata") == 0) ? SaveExtdata
+                             : main_save_kind(title_);
 
         printf("[snapshot] reading snapshot %s slot=%s\n",
                entry.path.c_str(), slot);

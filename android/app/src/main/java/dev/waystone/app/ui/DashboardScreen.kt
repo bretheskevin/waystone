@@ -138,7 +138,7 @@ fun DashboardScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AdapterSystemDialog(onConfirm: (adapter: String, system: String) -> Unit, onDismiss: () -> Unit) {
-    val adapters = listOf("jksv", "mgba", "checkpoint", "twilight")
+    val adapters = listOf("jksv", "mgba", "checkpoint", "rom_keyed")
     val systems = listOf("switch", "3ds", "nds", "gba", "gbc", "gb")
     var adapter by remember { mutableStateOf(adapters.first()) }
     var system by remember { mutableStateOf(systems.first()) }
@@ -149,13 +149,13 @@ private fun AdapterSystemDialog(onConfirm: (adapter: String, system: String) -> 
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(LocalWaystoneSpacing.current.Md)) {
                 PickerDropdown("Adapter", adapters, adapter) { adapter = it }
-                if (adapter != "twilight") {
+                if (adapter != "rom_keyed") {
                     PickerDropdown("System", systems, system) { system = it }
                 }
             }
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(adapter, if (adapter == "twilight") "" else system) }) { Text("Add") }
+            TextButton(onClick = { onConfirm(adapter, if (adapter == "rom_keyed") "" else system) }) { Text("Add") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )

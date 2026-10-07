@@ -96,6 +96,15 @@ static void test_labels() {
     printf("test_labels PASSED\n");
 }
 
+static void test_href_last_segment() {
+    assert(href_last_segment("/dav/abc/def/") == "def");
+    assert(href_last_segment("/dav/abc/def") == "def");
+    assert(href_last_segment("def") == "def");
+    assert(href_last_segment("///") == "");
+    assert(href_last_segment("") == "");
+    printf("test_href_last_segment PASSED\n");
+}
+
 int main() {
     test_final_state_precedence();
     test_headline();
@@ -103,6 +112,7 @@ int main() {
     test_next_xfer_total();
     test_put_needs_parent_dir();
     test_labels();
+    test_href_last_segment();
     printf("ALL PASSED\n");
     return 0;
 }

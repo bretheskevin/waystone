@@ -6,7 +6,10 @@ import android.util.Log
 import dev.waystone.data.config.Settings
 import dev.waystone.data.config.SettingsStore
 import dev.waystone.data.dav.OkHttpWebDav
+import dev.waystone.data.fs.SafRomFileSource
 import dev.waystone.data.fs.SafTree
+import dev.waystone.data.roms.LocalRom
+import dev.waystone.data.roms.RomScanner
 import dev.waystone.data.session.KeystoreVaultStore
 import dev.waystone.data.session.SessionStore
 import dev.waystone.data.snapshot.SnapshotStore
@@ -20,6 +23,7 @@ import dev.waystone.app.vm.SettingsProvider
 import dev.waystone.app.vm.SourceScan
 import dev.waystone.data.config.SourceFolder
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.waystone_mobile.FileEntry
@@ -29,7 +33,7 @@ import uniffi.waystone_mobile.WebDav
 import uniffi.waystone_mobile.checkpointNormalize
 import uniffi.waystone_mobile.jksvNormalize
 import uniffi.waystone_mobile.mgbaNormalize
-import uniffi.waystone_mobile.twilightNormalize
+import uniffi.waystone_mobile.romKeyedToNative
 
 object ServiceLocator {
 
@@ -98,7 +102,11 @@ private class SaveSourceProviderBinding(private val context: Context) : SaveSour
     override suspend fun scanSources(settings: Settings): List<SourceScan> = withContext(Dispatchers.IO) {
         settings.sources.map { folder ->
             runCatching {
-                val saves = normalize(folder.adapter, folder.system, SafTree(context, Uri.parse(folder.uri)).toRawTree())
+                val saves = if (isRomKeyed(folder.adapter)) {
+                    scanRoms(folder)
+                } else {
+                    normalize(folder.adapter, folder.system, SafTree(context, Uri.parse(folder.uri)).toRawTree())
+                }
                 SourceScan(folder, saves)
             }.getOrElse { e ->
                 // Empty/missing folder is a zero-save source, not an error; only real failures land here.
@@ -114,14 +122,53 @@ private class SaveSourceProviderBinding(private val context: Context) : SaveSour
     ): Pair<SourceFolder, NormalizedSave>? = scanSources(settings)
         .firstNotNullOfOrNull { scan -> scan.saves.firstOrNull { it.groupKey == groupKey }?.let { scan.folder to it } }
 
-    override fun writeFiles(folder: SourceFolder, files: List<FileEntry>): Int =
-        SafTree(context, Uri.parse(folder.uri)).writeFiles(files)
+    override fun writeFiles(folder: SourceFolder, save: NormalizedSave, files: List<FileEntry>): Int {
+        if (!isRomKeyed(folder.adapter)) return SafTree(context, Uri.parse(folder.uri)).writeFiles(files)
+        val rom = localRom(folder, save)
+        val native = romKeyedToNative(save.copy(files = files), rom.romFileName).files
+        if (native.isEmpty() && files.isNotEmpty()) {
+            error("[roms] blob for ${save.groupKey} has no file for slot ${save.slot}")
+        }
+        val placed = native.map { f ->
+            FileEntry(if (rom.saveDir.isEmpty()) f.path else "${rom.saveDir}/${f.path}", f.content)
+        }
+        Log.i(TAG, "[roms] restoring ${save.groupKey} -> ${rom.saveDir} (${placed.size} file(s))")
+        return try {
+            SafTree(context, Uri.parse(folder.uri)).writeFiles(placed).also {
+                Log.i(TAG, "[roms] restore done: ${save.groupKey} wrote $it file(s)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "[roms] restore failed: ${save.groupKey}", e)
+            throw e
+        }
+    }
+
+    private val romIndex = ConcurrentHashMap<String, LocalRom>()
+
+    private fun isRomKeyed(adapter: String) = adapter == "rom_keyed" || adapter == "twilight"
+
+    private fun romKey(folder: SourceFolder, system: String, romId: String) = "${folder.uri}|$system/$romId"
+
+    private fun scanRoms(folder: SourceFolder): List<NormalizedSave> {
+        Log.i(TAG, "[roms] scanning ${folder.uri}")
+        val scanner = RomScanner(SafRomFileSource(context, Uri.parse(folder.uri)))
+        val roms = scanner.scan()
+        roms.forEach { romIndex[romKey(folder, it.system, it.romId)] = it }
+        return scanner.loadSaves(roms).also { Log.i(TAG, "[roms] ${folder.uri}: ${roms.size} ROM(s), ${it.size} save(s)") }
+    }
+
+    private fun localRom(folder: SourceFolder, save: NormalizedSave): LocalRom {
+        val key = romKey(folder, save.system, save.gameKey)
+        romIndex[key]?.let { return it }
+        Log.i(TAG, "[roms] index miss for $key, rescanning ${folder.uri}")
+        scanRoms(folder)
+        return romIndex[key] ?: error("[roms] no local ROM for ${save.groupKey} in ${folder.uri}")
+    }
 
     private fun normalize(adapter: String, system: String, raw: RawTree): List<NormalizedSave> = when (adapter) {
         "jksv" -> jksvNormalize(system, raw)
         "mgba" -> mgbaNormalize(system, raw)
         "checkpoint" -> checkpointNormalize(system, raw)
-        "twilight" -> twilightNormalize(raw)
         else -> throw IllegalArgumentException("unknown adapter: $adapter")
     }
 

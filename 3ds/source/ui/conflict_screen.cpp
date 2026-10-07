@@ -8,7 +8,9 @@ ConflictScreen::ConflictScreen(Session* session, std::vector<TitleInfo> titles)
     : session_(session),
       worker_(0),
       confirm_remote_(false),
-      phase_(ConflictPhase::Idle)
+      confirm_id_(0),
+      phase_(ConflictPhase::Idle),
+      seen_version_(0)
 {
     worker_ = new ConflictWorker(session_->vault, session_->device_id,
                                  session_->dav.as_cfg(), titles);
@@ -25,16 +27,24 @@ void ConflictScreen::poll() {
     if (!worker_) return;
     phase_ = worker_->phase();
     status_text_ = worker_->status();
-    if (phase_ == ConflictPhase::Ready || phase_ == ConflictPhase::Done) {
-        items_ = worker_->conflicts();
-        // Clamp cursor after items update
-        if (items_.empty()) {
-            cursor_ = 0;
-            scroll_offset_ = 0;
-        } else {
-            if (cursor_ >= items_.size()) cursor_ = items_.size() - 1;
-        }
+    // Read the version BEFORE copying: a change racing the copy just triggers one more copy next frame.
+    u32 v = worker_->version();
+    if (v == seen_version_) return;
+
+    u32 focused_id = (cursor_ < items_.size()) ? items_[cursor_].id : 0;
+    items_ = worker_->views();
+    seen_version_ = v;
+    printf("[conflict] list v=%lu: %zu item(s)\n", (unsigned long)v, items_.size());
+
+    if (items_.empty()) {
+        cursor_ = 0;
+        scroll_offset_ = 0;
+        return;
     }
+    for (size_t i = 0; i < items_.size(); i++) {
+        if (items_[i].id == focused_id) { cursor_ = i; break; }
+    }
+    if (cursor_ >= items_.size()) cursor_ = items_.size() - 1;
 }
 
 // ---- ListScreen hooks ----
@@ -65,10 +75,15 @@ void ConflictScreen::draw_top_status(C2D_TextBuf buf, float sy) {
 void ConflictScreen::draw_row(C2D_TextBuf buf, size_t i,
                                float x, float y, float w, float h, bool focused) {
     (void)focused; (void)h;
-    // Title name on the left
     draw_text(buf, x + (float)SP_MD, y + (float)SP_SM, 0.51f,
               TEXT_BASE, CLR_TEXT, items_[i].title_name.c_str());
-    // Hash comparison on the right
+    if (items_[i].queued) {
+        const char* q = "Queued";
+        float qw = text_width(buf, TEXT_SM, q);
+        draw_text(buf, x + w - qw - (float)SP_MD, y + (float)SP_SM + 2.0f,
+                  0.51f, TEXT_SM, CLR_SYNC, q);
+        return;
+    }
     char hash_cmp[32];
     snprintf(hash_cmp, sizeof(hash_cmp), "%.6s/%.6s",
              items_[i].local_hash.c_str(),
@@ -81,7 +96,6 @@ void ConflictScreen::draw_row(C2D_TextBuf buf, size_t i,
 
 void ConflictScreen::draw_detail(C2D_TextBuf buf,
                                   float area_y, float area_h) {
-    // -- Confirm banner (replaces detail when in confirm mode) --
     if (confirm_remote_) {
         draw_confirm_banner(buf, area_y, area_h,
                             "Overwrite local with remote?",
@@ -91,7 +105,6 @@ void ConflictScreen::draw_detail(C2D_TextBuf buf,
         return;
     }
 
-    // -- Selected conflict detail --
     if (items_.empty() || cursor_ >= items_.size()) {
         const char* msg = "No conflicts";
         if (phase_ == ConflictPhase::Scanning) msg = "Scanning...";
@@ -100,7 +113,7 @@ void ConflictScreen::draw_detail(C2D_TextBuf buf,
         return;
     }
 
-    const ConflictItem& ci = items_[cursor_];
+    const ConflictView& ci = items_[cursor_];
     float y = area_y + (float)SP_SM;
     float x = (float)SP_MD;
 
@@ -127,7 +140,10 @@ void ConflictScreen::draw_detail(C2D_TextBuf buf,
     draw_text(buf, x, y, 0.5f, TEXT_SM, CLR_SYNC, remote_line);
     y += 14.0f;
 
-    if (!ci.remote_mtime.empty()) {
+    if (ci.queued) {
+        draw_text(buf, x, y, 0.5f, TEXT_SM, CLR_SYNC,
+                  "Queued: runs after the current title");
+    } else if (!ci.remote_mtime.empty()) {
         char mtime_line[128];
         snprintf(mtime_line, sizeof(mtime_line), "Remote mtime: %s",
                  ci.remote_mtime.c_str());
@@ -138,12 +154,12 @@ void ConflictScreen::draw_detail(C2D_TextBuf buf,
 std::vector<Action> ConflictScreen::actions() {
     std::vector<Action> a;
     if (confirm_remote_) {
-        // Confirm mode: only A=Confirm (B handled by on_back via modal_active)
         a.push_back({KEY_A, "A", "Confirm",
                      ACT_CONFIRM, true, ButtonStyle::PRIMARY});
     } else {
-        bool can_act = (phase_ == ConflictPhase::Ready &&
-                        !items_.empty());
+        bool focus_ok = cursor_ < items_.size() && !items_[cursor_].queued;
+        bool can_act = (phase_ == ConflictPhase::Ready ||
+                        phase_ == ConflictPhase::Scanning) && focus_ok;
         a.push_back({KEY_A, "A", "Keep Local",
                      ACT_KEEP_LOCAL, can_act, ButtonStyle::PRIMARY});
         a.push_back({KEY_X, "X", "Keep Remote",
@@ -155,32 +171,37 @@ std::vector<Action> ConflictScreen::actions() {
 void ConflictScreen::on_action(int id) {
     switch (id) {
     case ACT_KEEP_LOCAL:
-        printf("[conflict] keep local idx=%zu\n", cursor_);
-        worker_->resolve_keep_local(cursor_);
+        if (cursor_ >= items_.size()) break;
+        printf("[conflict] keep local id=%lu idx=%zu\n",
+               (unsigned long)items_[cursor_].id, cursor_);
+        worker_->resolve_keep_local(items_[cursor_].id);
         break;
     case ACT_KEEP_REMOTE:
-        printf("[conflict] entering confirm for idx=%zu\n", cursor_);
+        if (cursor_ >= items_.size()) break;
+        confirm_id_ = items_[cursor_].id;
+        printf("[conflict] entering confirm for id=%lu idx=%zu\n",
+               (unsigned long)confirm_id_, cursor_);
         confirm_remote_ = true;
         break;
     case ACT_CONFIRM:
-        printf("[conflict] confirmed keep remote idx=%zu\n", cursor_);
-        worker_->resolve_keep_remote(cursor_);
+        printf("[conflict] confirmed keep remote id=%lu\n", (unsigned long)confirm_id_);
+        worker_->resolve_keep_remote(confirm_id_);
         confirm_remote_ = false;
+        confirm_id_ = 0;
         break;
     }
 }
 
 void ConflictScreen::on_back() {
-    // ---- Confirm cancel ----
     if (confirm_remote_) {
-        printf("[conflict] confirm cancelled\n");
+        printf("[conflict] confirm cancelled id=%lu\n", (unsigned long)confirm_id_);
         confirm_remote_ = false;
+        confirm_id_ = 0;
         return;
     }
 
-    // ---- Deferred-cancel: detach worker so B pops instantly ----
-    // ~ConflictScreen() would otherwise join() on the render thread,
-    // freezing the UI until the in-flight title's network scan returns.
+    // Detach the worker so B pops instantly: ~ConflictScreen() would otherwise
+    // join() on the render thread. request_cancel() also stops queue draining.
     reap_worker(worker_);
     printf("[conflict] popping screen\n");
     App::instance().pop_screen();

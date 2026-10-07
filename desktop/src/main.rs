@@ -93,7 +93,7 @@ enum HistoryCommands {
         /// Path to the save source directory
         #[arg(long)]
         source: PathBuf,
-        /// Adapter: jksv | mgba | twilight | checkpoint
+        /// Adapter: jksv | mgba | rom_keyed (alias: twilight; path = ROM root, system ignored) | checkpoint
         #[arg(long)]
         adapter: String,
         /// System: switch | 3ds | nds | gba | gbc | gb
@@ -108,7 +108,7 @@ enum HistoryCommands {
         /// Path to write restored saves
         #[arg(long)]
         dest: PathBuf,
-        /// Adapter: jksv | mgba | twilight | checkpoint
+        /// Adapter: jksv | mgba | rom_keyed (alias: twilight; path = ROM root, system ignored) | checkpoint
         #[arg(long)]
         adapter: String,
         /// System: switch | 3ds | nds | gba | gbc | gb
@@ -132,7 +132,7 @@ enum SnapshotCommands {
         /// Path to the save source directory
         #[arg(long)]
         source: PathBuf,
-        /// Adapter: jksv | mgba | twilight | checkpoint
+        /// Adapter: jksv | mgba | rom_keyed (alias: twilight; path = ROM root, system ignored) | checkpoint
         #[arg(long)]
         adapter: String,
         /// System: switch | 3ds | nds | gba | gbc | gb
@@ -144,7 +144,7 @@ enum SnapshotCommands {
         /// Path to write restored saves
         #[arg(long)]
         dest: PathBuf,
-        /// Adapter: jksv | mgba | twilight | checkpoint
+        /// Adapter: jksv | mgba | rom_keyed (alias: twilight; path = ROM root, system ignored) | checkpoint
         #[arg(long)]
         adapter: String,
         /// System: switch | 3ds | nds | gba | gbc | gb
@@ -652,10 +652,11 @@ async fn main() -> Result<()> {
                             "Restoring: {} / {} <- snapshot {}",
                             save.id.game.display_name, save.id.slot, entry.timestamp
                         );
+                        let target = helpers::restore_target(&adapter, &dest, &save.group_key)?;
                         if let Some(p) = helpers::restore_from_snapshot(
                             &save.group_key,
                             &entry.timestamp,
-                            &dest,
+                            &target,
                             safety_backup,
                         )? {
                             println!("  safety backup -> {}", p.display());

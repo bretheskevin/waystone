@@ -2,6 +2,7 @@ use crate::decision::{ConflictPolicy, PullOutcome, PushOutcome, SyncDecision};
 use crate::error::WaystoneError;
 use crate::types::{
     Confidence, DeviceHead, FileEntry, HistoryEntry, NormalizedSave, RawFileEntry, RawTree,
+    RomPairing,
 };
 use crate::vault::Vault;
 use crate::webdav::{WebDav, WebDavBridge};
@@ -10,8 +11,16 @@ use waystone_core::adapters::Adapter;
 use waystone_core::adapters::checkpoint::CheckpointAdapter;
 use waystone_core::adapters::jksv::JksvAdapter;
 use waystone_core::adapters::mgba::MgbaAdapter;
-use waystone_core::adapters::twilight::TwilightAdapter;
+use waystone_core::adapters::rom_keyed::{
+    RomKeyedAdapter, rom_keyed_to_native as core_rom_keyed_to_native,
+};
+use waystone_core::crc32::crc32_update as core_crc32_update;
 use waystone_core::model as core_model;
+use waystone_core::rom_id::{
+    display_name as core_display_name, needs_full_hash, rom_identity as core_rom_identity,
+};
+use waystone_core::rom_pair::pair_roms;
+use waystone_core::rom_systems::rom_system;
 
 fn to_core_save(save: &NormalizedSave) -> Result<core_model::NormalizedSave, WaystoneError> {
     Ok(core_model::NormalizedSave {
@@ -77,17 +86,9 @@ fn from_core_save(save: &core_model::NormalizedSave) -> NormalizedSave {
 }
 
 fn parse_system(s: &str) -> Result<core_model::SystemId, WaystoneError> {
-    match s {
-        "switch" => Ok(core_model::SystemId::Switch),
-        "3ds" => Ok(core_model::SystemId::ThreeDS),
-        "nds" => Ok(core_model::SystemId::Nds),
-        "gba" => Ok(core_model::SystemId::Gba),
-        "gbc" => Ok(core_model::SystemId::Gbc),
-        "gb" => Ok(core_model::SystemId::Gb),
-        other => Err(WaystoneError::InvalidSystem {
-            system: other.to_string(),
-        }),
-    }
+    core_model::SystemId::parse(s).ok_or_else(|| WaystoneError::InvalidSystem {
+        system: s.to_string(),
+    })
 }
 
 fn parse_kind(s: &str) -> core_model::SaveKind {
@@ -199,21 +200,6 @@ pub fn mgba_normalize(system: String, raw: RawTree) -> Result<Vec<NormalizedSave
 #[uniffi::export]
 pub fn mgba_to_native(save: NormalizedSave) -> Result<RawTree, WaystoneError> {
     to_native_via(save, |s| MgbaAdapter::new(s.id.system).to_native(s))
-}
-
-#[uniffi::export]
-pub fn twilight_normalize(raw: RawTree) -> Vec<NormalizedSave> {
-    let core_raw = to_core_raw(raw);
-    TwilightAdapter::new()
-        .normalize(&core_raw)
-        .iter()
-        .map(from_core_save)
-        .collect()
-}
-
-#[uniffi::export]
-pub fn twilight_to_native(save: NormalizedSave) -> Result<RawTree, WaystoneError> {
-    to_native_via(save, |s| TwilightAdapter::new().to_native(s))
 }
 
 #[uniffi::export]
@@ -366,4 +352,97 @@ pub fn local_hash(save: NormalizedSave) -> Result<String, WaystoneError> {
     let core_save = to_core_save(&save)?;
     let (_, zip) = waystone_core::packaging::package(&core_save);
     Ok(waystone_core::packaging::content_hash(&zip))
+}
+
+fn parse_rom_system(s: &str) -> Result<core_model::SystemId, WaystoneError> {
+    let sys = parse_system(s)?;
+    if rom_system(sys).is_none() {
+        return Err(WaystoneError::InvalidSystem {
+            system: s.to_string(),
+        });
+    }
+    Ok(sys)
+}
+
+#[uniffi::export]
+pub fn crc32_update(crc: u32, data: Vec<u8>) -> u32 {
+    core_crc32_update(crc, &data)
+}
+
+#[uniffi::export]
+pub fn rom_needs_full_hash(system: String, header: Vec<u8>) -> Result<bool, WaystoneError> {
+    Ok(needs_full_hash(parse_rom_system(&system)?, &header))
+}
+
+#[uniffi::export]
+pub fn rom_identity(
+    system: String,
+    header: Vec<u8>,
+    full_crc32: Option<u32>,
+) -> Result<Option<String>, WaystoneError> {
+    Ok(core_rom_identity(
+        parse_rom_system(&system)?,
+        &header,
+        full_crc32,
+    ))
+}
+
+#[uniffi::export]
+pub fn rom_display_name(
+    system: String,
+    header: Vec<u8>,
+    rom_file_name: String,
+) -> Result<String, WaystoneError> {
+    Ok(core_display_name(
+        parse_rom_system(&system)?,
+        &header,
+        &rom_file_name,
+    ))
+}
+
+#[uniffi::export]
+pub fn rom_pair(paths: Vec<String>) -> Vec<RomPairing> {
+    pair_roms(&paths)
+        .into_iter()
+        .map(|p| RomPairing {
+            system: p.system.as_str().to_string(),
+            rom_path: p.rom_path,
+            save_dir: p.save_dir,
+            save_paths: p.save_paths,
+        })
+        .collect()
+}
+
+#[uniffi::export]
+pub fn rom_keyed_normalize(
+    system: String,
+    rom_id: String,
+    display_name: String,
+    rom_file_name: String,
+    raw: RawTree,
+) -> Result<Vec<NormalizedSave>, WaystoneError> {
+    let adapter = RomKeyedAdapter::new(
+        parse_rom_system(&system)?,
+        rom_id,
+        display_name,
+        rom_file_name,
+    );
+    Ok(adapter
+        .normalize(&to_core_raw(raw))
+        .iter()
+        .map(from_core_save)
+        .collect())
+}
+
+#[uniffi::export]
+pub fn rom_keyed_to_native(
+    save: NormalizedSave,
+    rom_file_name: String,
+) -> Result<RawTree, WaystoneError> {
+    to_native_via(save, |s| core_model::RawTree {
+        files: core_rom_keyed_to_native(s.id.system, &s.id.slot, &rom_file_name, &s.files)
+            .into_iter()
+            .map(|(path, content)| core_model::RawFile { path, content })
+            .collect(),
+    })
 }

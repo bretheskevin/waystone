@@ -33,10 +33,12 @@ private:
 
     Session* session_;
     ConflictWorker* worker_;
-    std::vector<ConflictItem> items_;
+    std::vector<ConflictView> items_;
     bool confirm_remote_;
+    u32 confirm_id_;           // conflict id the keep-remote confirm applies to
     std::string status_text_;
     ConflictPhase phase_;
+    u32 seen_version_;         // worker version last copied into items_
 
     ConflictScreen(const ConflictScreen&);
     ConflictScreen& operator=(const ConflictScreen&);

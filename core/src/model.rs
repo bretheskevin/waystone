@@ -12,9 +12,34 @@ pub enum SystemId {
     Gba,
     Gbc,
     Gb,
+    Nes,
+    Snes,
+    Md,
+    Sms,
+    Gg,
+    Ngp,
 }
 
 impl SystemId {
+    pub const ALL: [SystemId; 12] = [
+        Self::Switch,
+        Self::ThreeDS,
+        Self::Nds,
+        Self::Gba,
+        Self::Gbc,
+        Self::Gb,
+        Self::Nes,
+        Self::Snes,
+        Self::Md,
+        Self::Sms,
+        Self::Gg,
+        Self::Ngp,
+    ];
+
+    pub fn parse(s: &str) -> Option<SystemId> {
+        Self::ALL.into_iter().find(|sys| sys.as_str() == s)
+    }
+
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Switch => "switch",
@@ -23,6 +48,12 @@ impl SystemId {
             Self::Gba => "gba",
             Self::Gbc => "gbc",
             Self::Gb => "gb",
+            Self::Nes => "nes",
+            Self::Snes => "snes",
+            Self::Md => "md",
+            Self::Sms => "sms",
+            Self::Gg => "gg",
+            Self::Ngp => "ngp",
         }
     }
 }
@@ -222,5 +253,16 @@ mod tests {
             normalize_game_name("Super Smash Bros. Ultimate\u{2122}"),
             "supersmashbrosultimate"
         );
+    }
+
+    #[test]
+    fn new_rom_systems_round_trip_through_parse_and_serde() {
+        for s in SystemId::ALL {
+            assert_eq!(SystemId::parse(s.as_str()), Some(s));
+            let json = serde_json::to_string(&s).unwrap();
+            assert_eq!(json, format!("\"{}\"", s.as_str()));
+        }
+        assert_eq!(SystemId::parse("md"), Some(SystemId::Md));
+        assert_eq!(SystemId::parse("megadrive"), None);
     }
 }

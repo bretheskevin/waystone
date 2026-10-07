@@ -10,7 +10,7 @@ use waystone_core::adapters::Adapter;
 use waystone_core::adapters::checkpoint::CheckpointAdapter;
 use waystone_core::adapters::jksv::JksvAdapter;
 use waystone_core::adapters::mgba::MgbaAdapter;
-use waystone_core::adapters::twilight::TwilightAdapter;
+use waystone_core::adapters::rom_keyed::{RomKeyedAdapter, rom_keyed_to_native};
 use waystone_core::model::{NormalizedSave, RawFile, RawTree, SystemId};
 
 fn parse_system_id(s: &str) -> Result<SystemId, Box<dyn core::error::Error>> {
@@ -18,7 +18,7 @@ fn parse_system_id(s: &str) -> Result<SystemId, Box<dyn core::error::Error>> {
         .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)
 }
 
-fn parse_system_ptr(ptr: *const c_char) -> Option<SystemId> {
+pub(crate) fn parse_system_ptr(ptr: *const c_char) -> Option<SystemId> {
     if ptr.is_null() {
         set_last_error("null pointer argument");
         return None;
@@ -190,26 +190,78 @@ pub unsafe extern "C" fn ws_mgba_to_native(
     })
 }
 
-// ── twilight (no system param) ───────────────────────────────────────────────
+pub(crate) unsafe fn cstr_arg<'a>(
+    ptr: *const c_char,
+) -> Result<&'a str, Box<dyn core::error::Error>> {
+    if ptr.is_null() {
+        return Err("null pointer argument".into());
+    }
+    // SAFETY: non-null (checked); valid NUL-terminated C string per FFI contract.
+    unsafe { CStr::from_ptr(ptr) }
+        .to_str()
+        .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)
+}
+
+// ── rom_keyed ─────────────────────────────────────────────────────────────────
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ws_twilight_normalize(
+pub unsafe extern "C" fn ws_rom_keyed_normalize(
+    system: *const c_char,
+    rom_id: *const c_char,
+    display_name: *const c_char,
+    rom_file_name: *const c_char,
     raw_files: *const u8,
     raw_files_len: usize,
 ) -> WsBuf {
+    let Some(sys) = parse_system_ptr(system) else {
+        return WsBuf::null();
+    };
+    let Some((id, name, rom)) = catch_and_set_error(|| unsafe {
+        Ok((
+            cstr_arg(rom_id)?,
+            cstr_arg(display_name)?,
+            cstr_arg(rom_file_name)?,
+        ))
+    }) else {
+        return WsBuf::null();
+    };
     normalize_via(raw_files, raw_files_len, |t| {
-        TwilightAdapter::new().normalize(t)
+        RomKeyedAdapter::new(sys, id, name, rom).normalize(t)
     })
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ws_twilight_to_native(
-    meta_json: *const c_char,
+pub unsafe extern "C" fn ws_rom_keyed_to_native(
+    system: *const c_char,
+    slot: *const c_char,
+    rom_file_name: *const c_char,
     files: *const u8,
     files_len: usize,
     out_tree: *mut WsBuf,
 ) -> i32 {
-    to_native_via(meta_json, files, files_len, out_tree, |s| {
-        TwilightAdapter::new().to_native(s)
-    })
+    if out_tree.is_null() {
+        set_last_error("null pointer argument");
+        return -1;
+    }
+    let Some(sys) = parse_system_ptr(system) else {
+        return -1;
+    };
+    let result = catch_and_set_error(|| {
+        let slot = unsafe { cstr_arg(slot)? };
+        let rom = unsafe { cstr_arg(rom_file_name)? };
+        let decoded = decode_tree_arg(files, files_len)?;
+        let native = rom_keyed_to_native(sys, slot, rom, &decoded);
+        if native.is_empty() && !decoded.is_empty() {
+            return Err("no blob file maps to the requested slot".into());
+        }
+        Ok(WsBuf::from_vec(encode_file_tree(&native)))
+    });
+    match result {
+        Some(buf) => {
+            // SAFETY: out_tree non-null (checked above).
+            unsafe { *out_tree = buf };
+            0
+        }
+        None => -1,
+    }
 }

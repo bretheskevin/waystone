@@ -9,6 +9,7 @@
 #include "app.h"
 #include "widgets.h"
 #include "theme.h"
+#include "rom_parse.h"
 #include <cstdio>
 
 static const float ICON_SZ = 40.0f;
@@ -43,6 +44,27 @@ TitleListScreen::~TitleListScreen() {
     icon_cache_.clear();
 }
 
+static u32 system_tile_color(const std::string& system) {
+    if (system == "nds")  return CLR_NEUTRAL_500;
+    if (system == "gba")  return CLR_PRIMARY_700;
+    if (system == "gb")   return CLR_SUCCESS;
+    if (system == "nes")  return CLR_ERROR;
+    if (system == "snes") return CLR_PRIMARY_500;
+    if (system == "md")   return CLR_NEUTRAL_900;
+    if (system == "sms")  return CLR_SYNC;
+    if (system == "gg")   return CLR_WARNING;
+    if (system == "ngp")  return CLR_NEUTRAL_800;
+    return CLR_NEUTRAL_400;
+}
+
+static void draw_system_tile(C2D_TextBuf buf, const std::string& system, float x, float y) {
+    draw_rounded_rect(x, y, 0.51f, ICON_SZ, ICON_SZ, RAD_MD, system_tile_color(system));
+    const char* label = rom_system_badge(system);
+    float th = text_height(buf, TEXT_BASE, label);
+    draw_text_centered_fit(buf, x + (float)SP_XS, y + (ICON_SZ - th) / 2.0f, 0.52f, TEXT_BASE,
+                           CLR_WHITE, label, ICON_SZ - 2.0f * (float)SP_XS, TEXT_SM);
+}
+
 // ---- ListScreen hooks ----
 
 void TitleListScreen::draw_row(C2D_TextBuf buf, size_t i,
@@ -52,21 +74,36 @@ void TitleListScreen::draw_row(C2D_TextBuf buf, size_t i,
     float icon_y = y + (h - ICON_SZ) / 2.0f;
 
     // Icon
-    if (i < icon_cache_.size() && !titles_[i].icon.empty()) {
+    const TitleInfo& t = titles_[i];
+    const bool is_rom = (t.source == SourceRom);
+    const unsigned rom_side = is_rom ? rom_icon_side(t.icon.size()) : 0;
+    const bool icon_ok = is_rom ? rom_side != 0 : !t.icon.empty();
+    IconImage* icon = nullptr;
+    if (i < icon_cache_.size() && icon_ok) {
         if (!icon_cache_[i]) {
-            icon_cache_[i] = smdh_icon_to_image(titles_[i].icon.data());
+            icon_cache_[i] = is_rom
+                ? rgba5551_icon_to_image(t.icon.data(), rom_side, rom_side == BOXART_ICON_SIDE)
+                : smdh_icon_to_image(t.icon.data());
             printf(icon_cache_[i]
                    ? "[ui] built icon tex row=%zu\n"
                    : "[ui] icon tex build failed row=%zu\n", i);
         }
-        if (icon_cache_[i])
-            draw_image(icon_cache_[i]->img, icon_x, icon_y, ICON_SZ, ICON_SZ);
-        else
-            draw_rounded_rect(icon_x, icon_y, 0.51f, ICON_SZ, ICON_SZ,
-                              RAD_SM, CLR_NEUTRAL_200);
-    } else {
-        draw_rounded_rect(icon_x, icon_y, 0.51f, ICON_SZ, ICON_SZ,
-                          RAD_SM, CLR_NEUTRAL_200);
+        icon = icon_cache_[i];
+    }
+    if (icon)
+        draw_image(icon->img, icon_x, icon_y, ICON_SZ, ICON_SZ);
+    else if (is_rom)
+        draw_system_tile(buf, t.system, icon_x, icon_y);
+    else
+        draw_rounded_rect(icon_x, icon_y, 0.51f, ICON_SZ, ICON_SZ, RAD_SM, CLR_NEUTRAL_200);
+    if (is_rom && icon) {
+        const char* badge = rom_system_badge(t.system);
+        float bw = text_width(buf, TEXT_SM, badge) + 2.0f * (float)SP_XS;
+        float bh = text_height(buf, TEXT_SM, badge) + 2.0f;
+        float bx = icon_x + ICON_SZ - bw;
+        float by = icon_y + ICON_SZ - bh;
+        draw_rounded_rect(bx, by, 0.52f, bw, bh, RAD_SM, CLR_PRIMARY_600);
+        draw_text(buf, bx + (float)SP_XS, by + 1.0f, 0.53f, TEXT_SM, CLR_WHITE, badge);
     }
 
     // Name with UTF-8-safe truncation
@@ -74,7 +111,7 @@ void TitleListScreen::draw_row(C2D_TextBuf buf, size_t i,
     float max_text_w = x + w - text_x - (float)SP_MD;
     float text_y     = y + (h - text_height(buf, TEXT_BASE, "A")) / 2.0f;
 
-    std::string display = truncate_text_fit(buf, TEXT_BASE, titles_[i].name.c_str(), max_text_w);
+    std::string display = truncate_text_fit(buf, TEXT_BASE, t.name.c_str(), max_text_w);
     draw_text(buf, text_x, text_y, 0.51f, TEXT_BASE, CLR_TEXT, display.c_str());
 }
 

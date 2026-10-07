@@ -45,4 +45,7 @@ size_t next_xfer_total(size_t prev, size_t reported);
 // webdav_put rc meaning "parent collection missing": 409 Conflict (RFC 4918), or 404 on some servers.
 bool put_needs_parent_dir(int put_rc);
 
+// Last non-empty path component of a WebDAV href ("/a/b/c/" -> "c"); "" when none.
+std::string href_last_segment(const std::string& href);
+
 #endif

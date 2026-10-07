@@ -10,12 +10,22 @@
 struct Vault;
 typedef Vault WsVault;
 
+enum TitleSource { SourceArchive = 0, SourceRom = 1 };
+
 struct TitleInfo {
     u64 title_id;
     u32 unique_id; // (title_id >> 8) & 0xFFFFF
     bool is_twl;   // DSiWare on NAND (TWL). Predicate per Checkpoint: (title_id >> 44) & 0xF == 8
     std::string name;
-    std::vector<uint8_t> icon; // 4608 B RGB565 tiled 48x48 SMDH large icon, or empty
+    std::vector<uint8_t> icon; // SMDH 4608 B RGB565 tiled 48x48 (archives) | ROMs: RGBA5551 linear, 2048 B 32x32 NDS banner or 4608 B 48x48 TWiLight box art (rom_icon_side) | empty
+    bool has_remote = true; // remote game dir seen by list_titles' PROPFIND; true when unknown (fail-open)
+    TitleSource source = SourceArchive;
+    std::string system;                  // ROM system seg ("nds","gba",...); empty for archives
+    std::string rom_id;                  // core ROM identity (group_key game segment)
+    std::string rom_path;                // absolute "sdmc:/roms/..." ROM path
+    std::string rom_file_name;           // ROM file name, drives native save names on restore
+    std::string save_dir;                // absolute save dir; restore target when no save exists yet
+    std::vector<std::string> save_paths; // absolute paths of the ROM's existing saves
 };
 
 // Enumerate installed titles via AM service (SD + NAND TWL/DSiWare).
@@ -43,7 +53,8 @@ uint8_t* read_keys_file(const char* path, long* len_out);
 enum SaveArchiveKind {
     SaveUser,    // ARCHIVE_USER_SAVEDATA (SD media)
     SaveExtdata, // ARCHIVE_EXTDATA (always on SD)
-    SaveTwl      // ARCHIVE_NAND_TWL_FS, per-title /title/.../data root (DSiWare)
+    SaveTwl,     // ARCHIVE_NAND_TWL_FS, per-title /title/.../data root (DSiWare)
+    SaveRomFile  // TWiLight ROM save files via stdio in TitleInfo.save_dir
 };
 
 // Human-readable kind name for log lines ("user" / "extdata" / "twl").
@@ -52,6 +63,7 @@ inline const char* save_kind_name(SaveArchiveKind kind) {
         case SaveUser:    return "user";
         case SaveExtdata: return "extdata";
         case SaveTwl:     return "twl";
+        case SaveRomFile: return "rom";
     }
     return "unknown";
 }

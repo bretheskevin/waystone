@@ -11,10 +11,10 @@ struct Vault;
 typedef Vault WsVault;
 
 struct ConflictItem {
+    u32 id;                     // stable, monotonically increasing; 0 = none
+    bool queued;                // resolve request waiting on the scan thread
     std::string title_name;
-    u64 title_id;
-    u32 unique_id;              // needed by push_title -> extract_save_json
-    bool is_twl;                // TitleInfo.is_twl — TWL write guards
+    TitleInfo title;            // full title (icon cleared): ROM sources need rom/save paths for push/restore
     std::string group_key;      // "system/game/slot"
     std::string local_hash;
     std::string local_mtime;
@@ -26,6 +26,18 @@ struct ConflictItem {
     std::vector<uint8_t> raw_tree; // raw extracted local save tree (for snapshot/restore)
 };
 
+// Display-only copy handed to the screen: no raw_tree / heads_array.
+struct ConflictView {
+    u32 id;
+    bool queued;
+    std::string title_name;
+    std::string group_key;
+    std::string local_hash;
+    std::string remote_hash;
+    std::string remote_device_id;
+    std::string remote_mtime;
+};
+
 enum class ConflictPhase { Idle, Scanning, Ready, Resolving, Done, Error };
 
 class ConflictWorker {
@@ -35,11 +47,13 @@ public:
     ~ConflictWorker();
 
     void start_scan();
-    void resolve_keep_local(size_t index) { start_resolve(index, true); }
-    void resolve_keep_remote(size_t index) { start_resolve(index, false); }
+    // Queued on the scan thread while a scan runs, otherwise run on a resolve thread.
+    // Unknown (already resolved) or already-queued ids are ignored.
+    void resolve_keep_local(u32 id)  { request_resolve(id, true); }
+    void resolve_keep_remote(u32 id) { request_resolve(id, false); }
     void join();
-    // Ask the scan loop to stop before the next title so a screen pop's join()
-    // doesn't block the render thread for the whole title list.
+    // Ask the scan loop to stop before the next title (and stop draining queued
+    // resolves) so a screen pop's join() doesn't block the render thread.
     void request_cancel() { cancel_.store(true); }
     // True while the worker thread body is still executing. Lets a detached
     // worker be reaped (deleted) only once its thread has finished, so join()
@@ -48,9 +62,21 @@ public:
 
     ConflictPhase phase() const;            // atomic load
     std::string status();                   // LightLock-guarded copy
-    std::vector<ConflictItem> conflicts();  // LightLock-guarded copy
+    u32 version() const { return version_.load(); } // bumped on every conflicts_ change
+    std::vector<ConflictView> views();      // LightLock-guarded lightweight copy
 
 private:
+    struct ResolveReq {
+        u32 id;
+        bool keep_local;
+    };
+    struct ResolveCtx {
+        ConflictWorker* self;
+        bool keep_local;
+        u32 id;
+    };
+    enum ResolveResult { RR_OK, RR_FAILED, RR_UNKNOWN };
+
     WsVault* vault_;
     std::string device_id_;
     std::string dav_url_;
@@ -61,24 +87,27 @@ private:
     std::atomic<int> phase_;
     std::atomic<bool> running_;
     std::atomic<bool> cancel_;
+    std::atomic<u32> version_;
     LightLock mu_;
     char status_buf_[256];
-    std::vector<ConflictItem> conflicts_;
+    std::vector<ConflictItem> conflicts_;   // guarded by mu_
+    std::vector<ResolveReq> queue_;          // guarded by mu_
+    bool scan_active_;                       // guarded by mu_; true => resolves are queued
+    u32 next_id_;                            // scan thread only
     Thread thread_;
+    ResolveCtx* pending_resolve_;
 
     static void scan_entry(void* arg);
     static void resolve_entry(void* arg);
     void scan_worker();
+    void drain_queue(WebDavSession* sess, int* resolved, int* failed);
 
-    struct ResolveCtx {
-        ConflictWorker* self;
-        bool keep_local;
-        ConflictItem item;
-        size_t index;
-    };
-    ResolveCtx* pending_resolve_;
-    void start_resolve(size_t index, bool keep_local);
-    void resolve_worker(bool keep_local, ConflictItem item, size_t index);
+    void request_resolve(u32 id, bool keep_local);
+    void start_resolve(u32 id, bool keep_local);
+    void resolve_worker(u32 id, bool keep_local);
+    ResolveResult resolve_one(WebDavSession* sess, u32 id, bool keep_local);
+
+    ConflictItem* find_locked(u32 id);       // mu_ must be held
 
     ConflictWorker(const ConflictWorker&);
     ConflictWorker& operator=(const ConflictWorker&);

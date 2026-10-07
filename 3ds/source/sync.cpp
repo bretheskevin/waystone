@@ -4,10 +4,12 @@
 #include "snapshot.h"
 #include "snapshot_browse.h" // history_timestamp (shared)
 #include "sync_summary.h"
+#include "rom_parse.h"
 
 #include <3ds.h>
 #include <cstdio>
 #include <cstring>
+#include <set>
 
 extern "C" {
 #include "waystone.h"
@@ -42,6 +44,18 @@ static std::string make_base_path(const WsVault* vault,
     ws_string_free(game_seg);
     ws_string_free(slot_seg);
     return result;
+}
+
+static const char* ffi_err() { return ws_last_error() ? ws_last_error() : "unknown"; }
+
+static WsBuf normalize_title(const TitleInfo& title, const std::vector<uint8_t>& raw) {
+    if (title.source == SourceRom) {
+        printf("[sync] normalize rom system=%s rom_id=%s file=%s\n", title.system.c_str(),
+               title.rom_id.c_str(), title.rom_file_name.c_str());
+        return ws_rom_keyed_normalize(title.system.c_str(), title.rom_id.c_str(), title.name.c_str(),
+                                      title.rom_file_name.c_str(), raw.data(), raw.size());
+    }
+    return ws_checkpoint_normalize("3ds", raw.data(), raw.size());
 }
 
 static void report_step(SyncProgress* prog, const char* label) {
@@ -88,41 +102,20 @@ static int put_creating_parent(WebDavSession* dav, const std::string& parent_dir
     return rc;
 }
 
-SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
-                                const char* mtime, const char* device_id,
-                                int policy, WebDavSession* dav,
-                                const std::vector<uint8_t>& raw_tree,
-                                const uint8_t* files_ptr, size_t files_len) {
-    SaveDecision d;
-    d.raw_tree = raw_tree;
-
-    WsBuf zip = {nullptr, 0};
-    char* entry_json = ws_package(save_meta, files_ptr, files_len, &zip);
-    if (!entry_json) {
-        printf("FAIL ws_package: %s\n", ws_last_error() ? ws_last_error() : "unknown");
-        return d;
-    }
-    d.local_hash = json_get_nested_string(entry_json, "content", "hash");
-    d.group_key  = json_get_string(entry_json, "group_key");
-    ws_string_free(entry_json);
-    ws_buf_free(zip);
-    if (d.group_key.empty()) {
-        printf("FAIL: could not parse SaveEntry group_key\n");
-        return d;
-    }
-    d.base_path = make_base_path(vault, d.group_key);
-    if (d.base_path.empty()) return d;
-
+// Fetch + decrypt remote heads under d.base_path and fill d.decision_type/pull_hash/winner.
+// d.local_hash may be empty (remote-only ROM slot -> core decides Pull).
+static void decide_from_heads(const WsVault* vault, SaveDecision& d, const char* mtime,
+                              const char* device_id, int policy, WebDavSession* dav) {
     std::string heads_path = d.base_path + "/heads";
     std::vector<std::string> hrefs;
     if (webdav_propfind_s(dav, heads_path.c_str(), &hrefs) != 0) {
         printf("FAIL: PROPFIND %s\n", heads_path.c_str());
-        return d;
+        return;
     }
     if (hrefs.empty()) {
         printf("no remote heads found -- skipping\n");
         d.decision_type = "in_sync";
-        return d;
+        return;
     }
 
     d.heads_array = "[";
@@ -148,14 +141,14 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
     if (first_head) {
         printf("no decryptable heads -- skipping\n");
         d.decision_type = "in_sync";
-        return d;
+        return;
     }
 
     const char* local_hash_ptr = d.local_hash.empty() ? nullptr : d.local_hash.c_str();
     char* decision_json = ws_decide_pull(local_hash_ptr, mtime, d.heads_array.c_str(), device_id, policy);
     if (!decision_json) {
         printf("FAIL ws_decide_pull: %s\n", ws_last_error() ? ws_last_error() : "unknown");
-        return d;
+        return;
     }
     d.decision_type = json_get_string(decision_json, "type");
     if (d.decision_type == "pull") {
@@ -171,6 +164,34 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
         }
     }
     ws_string_free(decision_json);
+}
+
+SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
+                                const char* mtime, const char* device_id,
+                                int policy, WebDavSession* dav,
+                                const std::vector<uint8_t>& raw_tree,
+                                const uint8_t* files_ptr, size_t files_len) {
+    SaveDecision d;
+    d.raw_tree = raw_tree;
+
+    WsBuf zip = {nullptr, 0};
+    char* entry_json = ws_package(save_meta, files_ptr, files_len, &zip);
+    if (!entry_json) {
+        printf("FAIL ws_package: %s\n", ws_last_error() ? ws_last_error() : "unknown");
+        return d;
+    }
+    d.local_hash = json_get_nested_string(entry_json, "content", "hash");
+    d.group_key  = json_get_string(entry_json, "group_key");
+    ws_string_free(entry_json);
+    ws_buf_free(zip);
+    if (d.group_key.empty()) {
+        printf("FAIL: could not parse SaveEntry group_key\n");
+        return d;
+    }
+    d.base_path = make_base_path(vault, d.group_key);
+    if (d.base_path.empty()) return d;
+
+    decide_from_heads(vault, d, mtime, device_id, policy, dav);
     return d;
 }
 
@@ -247,9 +268,77 @@ int restore_remote_save(const WsVault* vault, const std::string& pull_hash,
     printf("[saves] restore routing group_key=%s -> kind=%s\n",
            group_key.c_str(), save_kind_name(kind));
 
+    if (title.source == SourceRom) {
+        std::string slot = group_key.substr(group_key.rfind('/') + 1);
+        WsBuf native = {nullptr, 0};
+        int nrc = ws_rom_keyed_to_native(title.system.c_str(), slot.c_str(),
+                                         title.rom_file_name.c_str(),
+                                         file_tree.ptr, file_tree.len, &native);
+        ws_buf_free(file_tree);
+        if (nrc != 0) {
+            printf("[sync] ws_rom_keyed_to_native failed for %s: %s\n", group_key.c_str(), ffi_err());
+            return -1;
+        }
+        printf("[saves] rom restore %s -> dir=%s (%zu bytes native tree)\n",
+               group_key.c_str(), title.save_dir.c_str(), (size_t)native.len);
+        int rrc = write_save_files(title, native.ptr, native.len, SaveRomFile);
+        ws_buf_free(native);
+        return rrc;
+    }
+
     int wrc = write_save_files(title, file_tree.ptr, file_tree.len, kind);
     ws_buf_free(file_tree);
     return wrc;
+}
+
+// ROM saves that exist on the server but not on this SD yet: restore-only decisions, one per remote slot.
+static void append_remote_only_rom_decisions(const WsVault* vault, const TitleInfo& title,
+                                             const char* device_id, int policy,
+                                             WebDavSession* dav,
+                                             const std::vector<uint8_t>& raw_tree,
+                                             std::vector<SaveDecision>& results) {
+    if (title.source != SourceRom || !title.has_remote) return;
+    const std::string game_key = rom_group_key(title.system, title.rom_id, 0);
+    char* slots_c = ws_rom_keyed_slots(title.system.c_str());
+    if (!slots_c) { printf("[sync] remote-only %s: ws_rom_keyed_slots failed: %s\n", game_key.c_str(), ffi_err()); return; }
+    std::string slots(slots_c);
+    ws_string_free(slots_c);
+
+    std::string probe = make_base_path(vault, rom_group_key(title.system, title.rom_id, "battery"));
+    if (probe.empty()) return;
+    std::string game_dir = probe.substr(0, probe.rfind('/'));
+    std::vector<std::string> hrefs;
+    u64 t0 = osGetTime();
+    int rc = webdav_propfind_s(dav, game_dir.c_str(), &hrefs);
+    if (rc != 0) { printf("[sync] remote-only %s: PROPFIND failed rc=%d\n", game_key.c_str(), rc); return; }
+    std::set<std::string> remote_slots;
+    for (size_t i = 0; i < hrefs.size(); i++) remote_slots.insert(href_last_segment(hrefs[i]));
+    printf("[sync] remote-only %s: %zu remote entr%s in %llu ms\n", game_key.c_str(),
+           hrefs.size(), hrefs.size() == 1 ? "y" : "ies", elapsed_ms(t0));
+
+    std::string mtime = current_utc_time();
+    size_t start = 0;
+    while (start < slots.size()) {
+        size_t nl = slots.find('\n', start);
+        if (nl == std::string::npos) nl = slots.size();
+        std::string slot = slots.substr(start, nl - start);
+        start = nl + 1;
+        if (slot.empty()) continue;
+        std::string gk = rom_group_key(title.system, title.rom_id, slot.c_str());
+        bool local = false;
+        for (size_t i = 0; i < results.size(); i++) if (results[i].group_key == gk) { local = true; break; }
+        if (local) continue;
+        std::string base = make_base_path(vault, gk);
+        if (base.empty() || !remote_slots.count(base.substr(base.rfind('/') + 1))) continue;
+        SaveDecision d;
+        d.raw_tree = raw_tree;
+        d.group_key = gk;
+        d.base_path = base;
+        decide_from_heads(vault, d, mtime.c_str(), device_id, policy, dav);
+        printf("[sync] remote-only %s -> %s\n", gk.c_str(),
+               d.decision_type.empty() ? "(no decision)" : d.decision_type.c_str());
+        results.push_back(d);
+    }
 }
 
 std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& title,
@@ -263,10 +352,9 @@ std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& titl
     if (raw_tree.empty()) return results;
 
     size_t raw_len = raw_tree.size();
-    WsBuf savelist = ws_checkpoint_normalize("3ds", raw_tree.data(), raw_tree.size());
+    WsBuf savelist = normalize_title(title, raw_tree);
     if (!savelist.ptr) {
-        printf("  ws_checkpoint_normalize failed: %s\n",
-               ws_last_error() ? ws_last_error() : "unknown");
+        printf("  normalize failed (%s)\n", ffi_err());
         if (error) *error = true;
         return results;
     }
@@ -280,7 +368,8 @@ std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& titl
     }
     printf("[sync] normalize ok (raw %zu -> %zu bytes, %zu saves)\n",
            raw_len, (size_t)savelist.len, saves.size());
-    if (saves.empty()) { ws_buf_free(savelist); return results; }
+    // ROM titles without a local save still probe the server for remote-only slots below.
+    if (saves.empty() && title.source != SourceRom) { ws_buf_free(savelist); return results; }
     report_step(prog, "Checking server");
 
     std::string mtime = current_utc_time();
@@ -292,6 +381,7 @@ std::vector<SaveDecision> scan_title(const WsVault* vault, const TitleInfo& titl
         results.push_back(d);
     }
     ws_buf_free(savelist);
+    append_remote_only_rom_decisions(vault, title, device_id, policy, dav, raw_tree, results);
     return results;
 }
 
@@ -310,10 +400,9 @@ std::vector<SaveLocation> resolve_save_locations(const WsVault* vault,
         return results;
     }
 
-    WsBuf savelist = ws_checkpoint_normalize("3ds", raw_tree.data(), raw_tree.size());
+    WsBuf savelist = normalize_title(title, raw_tree);
     if (!savelist.ptr) {
-        printf("[history] resolve_save_locations: ws_checkpoint_normalize failed: %s\n",
-               ws_last_error() ? ws_last_error() : "unknown");
+        printf("[history] resolve_save_locations: normalize failed (%s)\n", ffi_err());
         if (error) *error = true;
         return results;
     }
@@ -327,9 +416,19 @@ std::vector<SaveLocation> resolve_save_locations(const WsVault* vault,
         return results;
     }
     if (saves.empty()) {
+        ws_buf_free(savelist);
+        if (title.source == SourceRom) {
+            SaveLocation loc;
+            loc.raw_tree = raw_tree;
+            loc.group_key = rom_group_key(title.system, title.rom_id, "battery");
+            loc.base_path = make_base_path(vault, loc.group_key);
+            printf("[history] resolve_save_locations: ROM %s has no local save -> %s\n",
+                   title.rom_file_name.c_str(), loc.group_key.c_str());
+            results.push_back(loc);
+            return results;
+        }
         printf("[history] resolve_save_locations: no saves after normalize for %s\n",
                title.name.c_str());
-        ws_buf_free(savelist);
         return results;
     }
 
@@ -393,11 +492,10 @@ int push_title(const WsVault* vault,
     report_step(prog, "Normalizing");
     printf("  Normalizing...\n");
     size_t raw_len = raw_tree.size();
-    WsBuf savelist = ws_checkpoint_normalize("3ds", raw_tree.data(), raw_tree.size());
+    WsBuf savelist = normalize_title(title, raw_tree);
     std::vector<uint8_t>().swap(raw_tree); // eager-free
     if (!savelist.ptr) {
-        printf("  ws_checkpoint_normalize failed: %s\n",
-               ws_last_error() ? ws_last_error() : "unknown");
+        printf("  normalize failed (%s)\n", ffi_err());
         return -1;
     }
 

@@ -45,7 +45,8 @@ interface SaveSourceProvider {
     suspend fun findSave(settings: Settings, groupKey: String): Pair<SourceFolder, NormalizedSave>?
 
     // Blocking SAF write; callers invoke on an IO dispatcher (guardedRestore's write lambda is not suspend).
-    fun writeFiles(folder: SourceFolder, files: List<FileEntry>): Int
+    // `save` lets ROM-keyed sources map canonical files to the local ROM's native save names.
+    fun writeFiles(folder: SourceFolder, save: NormalizedSave, files: List<FileEntry>): Int
 }
 
 data class SnapshotInfo(
@@ -82,7 +83,7 @@ internal suspend fun restoreIntoSource(
     repo.guardedRestore(
         save = save,
         files = files,
-        write = { saveSourceProvider.writeFiles(folder, it) },
+        write = { saveSourceProvider.writeFiles(folder, save, it) },
         currentLocalFiles = currentLocalFiles,
         takeSnapshot = { key, map -> snapshotStoreProvider.snapshot(key, map) },
         prune = { snapshotStoreProvider.prune(it) },

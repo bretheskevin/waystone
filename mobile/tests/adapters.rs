@@ -1,6 +1,6 @@
 use waystone_mobile::exports::{
     checkpoint_normalize, checkpoint_to_native, jksv_normalize, jksv_to_native, mgba_normalize,
-    mgba_to_native, twilight_normalize, twilight_to_native,
+    mgba_to_native,
 };
 use waystone_mobile::types::{RawFileEntry, RawTree};
 
@@ -64,53 +64,6 @@ fn mgba_normalize_invalid_system_errors() {
     };
     let result = mgba_normalize("megadrive".into(), raw);
     assert!(result.is_err());
-}
-
-#[test]
-fn twilight_normalize_and_to_native_round_trip() {
-    let raw = RawTree {
-        files: vec![
-            RawFileEntry {
-                path: "saves/Diamond.sav".into(),
-                content: vec![0xFF; 64],
-            },
-            RawFileEntry {
-                path: "saves/Diamond.sav2".into(),
-                content: vec![0xBB; 32],
-            },
-        ],
-    };
-    let saves = twilight_normalize(raw);
-    assert_eq!(saves.len(), 2);
-
-    let battery = saves.iter().find(|s| s.slot == "battery").unwrap();
-    assert_eq!(battery.game_key, "Diamond");
-    assert_eq!(battery.system, "nds");
-
-    let native = twilight_to_native(battery.clone()).unwrap();
-    assert_eq!(native.files.len(), 1);
-    assert_eq!(native.files[0].path, "saves/Diamond.sav");
-    assert_eq!(native.files[0].content, vec![0xFF; 64]);
-}
-
-#[test]
-fn twilight_normalize_dsiware_paired() {
-    let raw = RawTree {
-        files: vec![
-            RawFileEntry {
-                path: "saves/DSiApp.pub".into(),
-                content: vec![0x01; 16],
-            },
-            RawFileEntry {
-                path: "saves/DSiApp.prv".into(),
-                content: vec![0x02; 16],
-            },
-        ],
-    };
-    let saves = twilight_normalize(raw);
-    assert_eq!(saves.len(), 1);
-    assert_eq!(saves[0].slot, "dsiware");
-    assert_eq!(saves[0].files.len(), 2);
 }
 
 #[test]

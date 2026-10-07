@@ -79,3 +79,10 @@ size_t next_xfer_total(size_t prev, size_t reported) {
 bool put_needs_parent_dir(int put_rc) {
     return put_rc == 409 || put_rc == 404;
 }
+
+std::string href_last_segment(const std::string& href) {
+    std::string h = href;
+    while (!h.empty() && h[h.size() - 1] == '/') h.erase(h.size() - 1);
+    size_t slash = h.rfind('/');
+    return (slash == std::string::npos) ? h : h.substr(slash + 1);
+}

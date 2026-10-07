@@ -2,18 +2,19 @@ use anyhow::{Context, Result};
 use chrono::Utc;
 use std::path::{Path, PathBuf};
 use waystone_core::adapters::Adapter;
+use waystone_core::adapters::rom_keyed::{RomKeyedAdapter, rom_keyed_to_native};
+use waystone_core::crc32::Crc32;
 use waystone_core::model::{NormalizedSave, RawFile, RawTree, SystemId};
+use waystone_core::rom_id::{ROM_HEADER_LEN, display_name, needs_full_hash, rom_identity};
+use waystone_core::rom_pair::pair_roms;
+use waystone_core::rom_systems::base_name;
+
+pub fn is_rom_keyed(adapter: &str) -> bool {
+    matches!(adapter, "rom_keyed" | "twilight")
+}
 
 pub fn parse_system(s: &str) -> Result<SystemId> {
-    match s {
-        "switch" => Ok(SystemId::Switch),
-        "3ds" => Ok(SystemId::ThreeDS),
-        "nds" => Ok(SystemId::Nds),
-        "gba" => Ok(SystemId::Gba),
-        "gbc" => Ok(SystemId::Gbc),
-        "gb" => Ok(SystemId::Gb),
-        other => anyhow::bail!("unknown system: {}", other),
-    }
+    SystemId::parse(s).ok_or_else(|| anyhow::anyhow!("unknown system: {}", s))
 }
 
 pub fn make_adapter(name: &str, system: SystemId) -> Result<Box<dyn Adapter>> {
@@ -24,14 +25,109 @@ pub fn make_adapter(name: &str, system: SystemId) -> Result<Box<dyn Adapter>> {
         "mgba" => Ok(Box::new(waystone_core::adapters::mgba::MgbaAdapter::new(
             system,
         ))),
-        "twilight" => Ok(Box::new(
-            waystone_core::adapters::twilight::TwilightAdapter::new(),
-        )),
+        name if is_rom_keyed(name) => {
+            anyhow::bail!("[roms] '{name}' is per-ROM; use load_rom_keyed_saves / restore_target")
+        }
         "checkpoint" => Ok(Box::new(
             waystone_core::adapters::checkpoint::CheckpointAdapter::new(system),
         )),
         other => anyhow::bail!("unknown adapter: {}", other),
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalRom {
+    pub system: SystemId,
+    pub rom_file_name: String,
+    pub rom_id: String,
+    pub display_name: String,
+    pub save_dir: PathBuf,
+    pub save_paths: Vec<PathBuf>,
+}
+
+/// Header bytes + identity; streams a full-file CRC32 only when core asks for it.
+pub fn rom_identity_of_file(system: SystemId, path: &Path) -> Result<(String, Vec<u8>)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f =
+        std::fs::File::open(path).with_context(|| format!("[roms] open {}", path.display()))?;
+    let mut header = Vec::with_capacity(ROM_HEADER_LEN);
+    (&mut f)
+        .take(ROM_HEADER_LEN as u64)
+        .read_to_end(&mut header)
+        .with_context(|| format!("[roms] read header {}", path.display()))?;
+    let crc = if needs_full_hash(system, &header) {
+        f.seek(SeekFrom::Start(0))?;
+        let mut c = Crc32::new();
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            let n = f
+                .read(&mut buf)
+                .with_context(|| format!("[roms] hash {}", path.display()))?;
+            if n == 0 {
+                break;
+            }
+            c.update(&buf[..n]);
+        }
+        Some(c.finish())
+    } else {
+        None
+    };
+    let id = rom_identity(system, &header, crc)
+        .with_context(|| format!("[roms] no identity for {}", path.display()))?;
+    Ok((id, header))
+}
+
+pub fn scan_local_roms(root: &Path) -> Result<Vec<LocalRom>> {
+    scan_local_roms_where(root, |_| true)
+}
+
+fn scan_local_roms_where(root: &Path, keep: impl Fn(SystemId) -> bool) -> Result<Vec<LocalRom>> {
+    let rels: Vec<String> = walkdir(root)
+        .with_context(|| format!("[roms] walk {}", root.display()))?
+        .iter()
+        .filter_map(|p| p.strip_prefix(root).ok())
+        .map(|r| r.to_string_lossy().replace('\\', "/"))
+        .collect();
+    let mut roms = Vec::new();
+    for pairing in pair_roms(&rels).into_iter().filter(|p| keep(p.system)) {
+        let rom_file_name = base_name(&pairing.rom_path).to_string();
+        let (rom_id, header) = rom_identity_of_file(pairing.system, &root.join(&pairing.rom_path))?;
+        roms.push(LocalRom {
+            system: pairing.system,
+            display_name: display_name(pairing.system, &header, &rom_file_name),
+            rom_file_name,
+            rom_id,
+            save_dir: root.join(&pairing.save_dir),
+            save_paths: pairing.save_paths.iter().map(|s| root.join(s)).collect(),
+        });
+    }
+    Ok(roms)
+}
+
+pub fn load_rom_keyed_saves(root: &Path) -> Result<Vec<NormalizedSave>> {
+    let mut saves = Vec::new();
+    for rom in scan_local_roms(root)? {
+        if rom.save_paths.is_empty() {
+            continue;
+        }
+        let mut files = Vec::new();
+        for p in &rom.save_paths {
+            let name = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .with_context(|| format!("[roms] non-UTF-8 save name {}", p.display()))?;
+            let content =
+                std::fs::read(p).with_context(|| format!("[roms] read save {}", p.display()))?;
+            files.push(RawFile {
+                path: name.to_string(),
+                content,
+            });
+        }
+        let adapter =
+            RomKeyedAdapter::new(rom.system, rom.rom_id, rom.display_name, rom.rom_file_name);
+        saves.extend(adapter.normalize(&RawTree { files }));
+    }
+    Ok(saves)
 }
 
 pub fn read_source_tree(path: &Path) -> Result<RawTree> {
@@ -54,6 +150,9 @@ pub fn load_saves(
     system_name: &str,
     source: &Path,
 ) -> Result<Vec<NormalizedSave>> {
+    if is_rom_keyed(adapter_name) {
+        return load_rom_keyed_saves(source);
+    }
     let system = parse_system(system_name)?;
     let adapter = make_adapter(adapter_name, system)?;
     let raw = read_source_tree(source)?;
@@ -113,9 +212,7 @@ pub fn snapshot_save_dir(
         return Ok(None);
     }
 
-    let sanitized_key = sanitize_group_key(group_key);
-    let ts = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
-    let snap_dir = backups_root.join(&sanitized_key).join(ts.to_string());
+    let snap_dir = new_snapshot_dir(backups_root, group_key);
     std::fs::create_dir_all(&snap_dir)?;
 
     copy_tree(src, &snap_dir)?;
@@ -123,10 +220,91 @@ pub fn snapshot_save_dir(
     Ok(Some(snap_dir))
 }
 
+#[derive(Debug, Clone)]
+pub struct RestoreTarget {
+    pub dir: PathBuf,
+    pub guard_files: Option<Vec<PathBuf>>,
+    pub rom_file_name: Option<String>,
+}
+
+impl RestoreTarget {
+    pub fn dir(path: &Path) -> Self {
+        Self {
+            dir: path.to_path_buf(),
+            guard_files: None,
+            rom_file_name: None,
+        }
+    }
+}
+
+/// Where a restore writes: the target root for folder adapters, the matching ROM's save dir for rom_keyed.
+pub fn restore_target(adapter: &str, dest: &Path, group_key: &str) -> Result<RestoreTarget> {
+    if !is_rom_keyed(adapter) {
+        return Ok(RestoreTarget::dir(dest));
+    }
+    let mut parts = group_key.splitn(3, '/');
+    let (Some(sys), Some(rom_id), Some(_)) = (parts.next(), parts.next(), parts.next()) else {
+        anyhow::bail!("[roms] malformed group key {group_key}");
+    };
+    let system = parse_system(sys)?;
+    let rom = scan_local_roms_where(dest, |s| s == system)?
+        .into_iter()
+        .find(|r| r.rom_id == rom_id)
+        .with_context(|| {
+            format!(
+                "[roms] no local ROM for {group_key} under {}; cannot restore",
+                dest.display()
+            )
+        })?;
+    Ok(RestoreTarget {
+        dir: rom.save_dir,
+        guard_files: Some(rom.save_paths),
+        rom_file_name: Some(rom.rom_file_name),
+    })
+}
+
+fn new_snapshot_dir(backups_root: &Path, group_key: &str) -> PathBuf {
+    let ts = Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+    backups_root
+        .join(sanitize_group_key(group_key))
+        .join(ts.to_string())
+}
+
+pub fn snapshot_files(
+    files: &[PathBuf],
+    backups_root: &Path,
+    group_key: &str,
+) -> Result<Option<PathBuf>> {
+    if files.is_empty() {
+        return Ok(None);
+    }
+    let snap_dir = new_snapshot_dir(backups_root, group_key);
+    std::fs::create_dir_all(&snap_dir)?;
+    for f in files {
+        let name = f
+            .file_name()
+            .with_context(|| format!("[roms] save path without file name {}", f.display()))?;
+        std::fs::copy(f, snap_dir.join(name))
+            .with_context(|| format!("[roms] snapshot copy {}", f.display()))?;
+    }
+    Ok(Some(snap_dir))
+}
+
+pub fn snapshot_target(
+    target: &RestoreTarget,
+    backups_root: &Path,
+    group_key: &str,
+) -> Result<Option<PathBuf>> {
+    match &target.guard_files {
+        Some(files) => snapshot_files(files, backups_root, group_key),
+        None => snapshot_save_dir(&target.dir, backups_root, group_key),
+    }
+}
+
 /// Run the safety-backup snapshot before a destructive restore.
 /// Returns the snapshot path, `None` if src was empty/missing or backup is disabled.
 pub fn safety_snapshot(
-    dest: &Path,
+    target: &RestoreTarget,
     group_key: &str,
     safety_backup: bool,
 ) -> Result<Option<PathBuf>> {
@@ -134,7 +312,7 @@ pub fn safety_snapshot(
         return Ok(None);
     }
     let backups_root = crate::config::WaystoneConfig::config_dir()?.join("backups");
-    snapshot_save_dir(dest, &backups_root, group_key)
+    snapshot_target(target, &backups_root, group_key)
         .with_context(|| format!("safety backup failed for {group_key}; restore aborted"))
 }
 
@@ -228,7 +406,7 @@ pub fn restore_from_snapshot_in(
     backups_root: &Path,
     group_key: &str,
     timestamp: &str,
-    dest: &Path,
+    target: &RestoreTarget,
     safety_backup: bool,
 ) -> Result<Option<PathBuf>> {
     let snap_dir = backups_root
@@ -238,23 +416,23 @@ pub fn restore_from_snapshot_in(
         anyhow::bail!("snapshot '{}' not found for {}", timestamp, group_key);
     }
     let guard = if safety_backup {
-        snapshot_save_dir(dest, backups_root, group_key)
+        snapshot_target(target, backups_root, group_key)
             .with_context(|| format!("safety backup failed for {group_key}; restore aborted"))?
     } else {
         None
     };
-    copy_tree(&snap_dir, dest)?;
+    copy_tree(&snap_dir, &target.dir)?;
     Ok(guard)
 }
 
 pub fn restore_from_snapshot(
     group_key: &str,
     timestamp: &str,
-    dest: &Path,
+    target: &RestoreTarget,
     safety_backup: bool,
 ) -> Result<Option<PathBuf>> {
     let backups_root = crate::config::WaystoneConfig::config_dir()?.join("backups");
-    restore_from_snapshot_in(&backups_root, group_key, timestamp, dest, safety_backup)
+    restore_from_snapshot_in(&backups_root, group_key, timestamp, target, safety_backup)
 }
 
 /// Perform a guarded restore: safety-snapshot the destination, fetch the blob,
@@ -271,9 +449,10 @@ pub fn guarded_restore(
     system_name: &str,
     safety_backup: bool,
 ) -> Result<Option<PathBuf>> {
-    let snap = safety_snapshot(dest, &save.group_key, safety_backup)?;
+    let target = restore_target(adapter_name, dest, &save.group_key)?;
+    let snap = safety_snapshot(&target, &save.group_key, safety_backup)?;
     let zip_bytes = waystone_sync::fetch_blob(vault, save, hash, dav)?;
-    restore_save_from_blob(&zip_bytes, save, dest, adapter_name, system_name)?;
+    restore_save_from_blob(&zip_bytes, save, &target, adapter_name, system_name)?;
     Ok(snap)
 }
 
@@ -284,22 +463,42 @@ pub fn guarded_restore(
 pub fn restore_save_from_blob(
     zip_bytes: &[u8],
     save: &waystone_core::model::NormalizedSave,
-    dest: &Path,
+    target: &RestoreTarget,
     adapter_name: &str,
     system_name: &str,
 ) -> Result<()> {
     let files = waystone_core::packaging::unzip(zip_bytes)?;
-    let system = parse_system(system_name)?;
-    let adapter = make_adapter(adapter_name, system)?;
-    let mut restored = save.clone();
-    restored.files = files;
-    let native = adapter.to_native(&restored);
-    for file in &native.files {
-        let path = dest.join(&file.path);
+    let native: Vec<(String, Vec<u8>)> = match &target.rom_file_name {
+        Some(rom_file_name) => {
+            let native = rom_keyed_to_native(save.id.system, &save.id.slot, rom_file_name, &files);
+            if native.is_empty() {
+                anyhow::bail!(
+                    "[roms] blob for {} has no file for slot {}",
+                    save.group_key,
+                    save.id.slot
+                );
+            }
+            native
+        }
+        None => {
+            let adapter = make_adapter(adapter_name, parse_system(system_name)?)?;
+            let mut restored = save.clone();
+            restored.files = files;
+            adapter
+                .to_native(&restored)
+                .files
+                .into_iter()
+                .map(|f| (f.path, f.content))
+                .collect()
+        }
+    };
+    for (rel, content) in &native {
+        let path = target.dir.join(rel);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        std::fs::write(&path, &file.content)?;
+        std::fs::write(&path, content)
+            .with_context(|| format!("[roms] write {}", path.display()))?;
     }
     Ok(())
 }
@@ -353,6 +552,112 @@ mod tests {
     }
 
     #[test]
+    fn parse_system_accepts_new_rom_systems() {
+        assert_eq!(parse_system("snes").unwrap(), SystemId::Snes);
+        assert!(
+            parse_system("bogus")
+                .unwrap_err()
+                .to_string()
+                .contains("unknown system")
+        );
+        assert!(is_rom_keyed("twilight") && is_rom_keyed("rom_keyed") && !is_rom_keyed("mgba"));
+    }
+
+    fn nds_rom(code: &[u8; 4], crc16: u16) -> Vec<u8> {
+        let mut h = vec![0u8; 0x400];
+        h[0x0C..0x10].copy_from_slice(code);
+        h[0x15E..0x160].copy_from_slice(&crc16.to_le_bytes());
+        h
+    }
+
+    fn write(p: &Path, bytes: &[u8]) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, bytes).unwrap();
+    }
+
+    #[test]
+    fn rom_keyed_load_pairs_by_rom_identity() {
+        let root = tempfile::tempdir().unwrap();
+        write(
+            &root.path().join("roms/nds/Mario.nds"),
+            &nds_rom(b"AMCE", 0x1A2B),
+        );
+        write(&root.path().join("roms/nds/saves/Mario.sav"), b"nds-save");
+        write(&root.path().join("roms/gb/Tetris.gb"), b"123456789");
+        write(&root.path().join("roms/gb/Tetris.sav"), b"gb-save");
+        write(&root.path().join("roms/gb/NoSave.gb"), b"abc");
+        let mut saves = load_saves("twilight", "", root.path()).unwrap();
+        saves.sort_by(|a, b| a.group_key.cmp(&b.group_key));
+        let keys: Vec<_> = saves.iter().map(|s| s.group_key.as_str()).collect();
+        assert_eq!(keys, vec!["gb/CBF43926/battery", "nds/AMCE-1A2B/battery"]);
+        assert_eq!(
+            saves[1].files,
+            vec![("battery".to_string(), b"nds-save".to_vec())]
+        );
+        assert_eq!(saves[0].id.game.display_name, "Tetris");
+    }
+
+    #[test]
+    fn rom_keyed_load_on_missing_root_is_empty() {
+        assert!(
+            load_saves("rom_keyed", "", Path::new("/nonexistent_rom_root_42"))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn rom_keyed_restore_writes_under_local_rom_name() {
+        let root = tempfile::tempdir().unwrap();
+        write(
+            &root.path().join("roms/nds/Mario Kart (E).nds"),
+            &nds_rom(b"AMCE", 0x1A2B),
+        );
+        let remote = RomKeyedAdapter::new(SystemId::Nds, "AMCE-1A2B", "MKDS", "mkds.nds")
+            .normalize(&RawTree {
+                files: vec![RawFile {
+                    path: "mkds.sav".into(),
+                    content: b"remote".to_vec(),
+                }],
+            });
+        let (_, zip) = waystone_core::packaging::package(&remote[0]);
+        let target = restore_target("rom_keyed", root.path(), &remote[0].group_key).unwrap();
+        assert!(target.guard_files.as_ref().unwrap().is_empty());
+        restore_save_from_blob(&zip, &remote[0], &target, "rom_keyed", "").unwrap();
+        assert_eq!(
+            std::fs::read(root.path().join("roms/nds/saves/Mario Kart (E).sav")).unwrap(),
+            b"remote"
+        );
+    }
+
+    #[test]
+    fn rom_keyed_restore_without_local_rom_errors() {
+        let root = tempfile::tempdir().unwrap();
+        let err = restore_target("rom_keyed", root.path(), "nds/AMCE-1A2B/battery").unwrap_err();
+        assert!(err.to_string().contains("no local ROM"), "got: {err}");
+    }
+
+    #[test]
+    fn rom_keyed_safety_snapshot_only_copies_that_roms_saves() {
+        let root = tempfile::tempdir().unwrap();
+        write(&root.path().join("roms/gb/A.gb"), b"aaaa");
+        write(&root.path().join("roms/gb/B.gb"), b"bbbb");
+        write(&root.path().join("roms/gb/saves/A.sav"), b"a-save");
+        write(&root.path().join("roms/gb/saves/B.sav"), b"b-save");
+        let key = format!("gb/{:08X}/battery", waystone_core::crc32::crc32(b"aaaa"));
+        let target = restore_target("rom_keyed", root.path(), &key).unwrap();
+        let backups = tempfile::tempdir().unwrap();
+        let snap = snapshot_target(&target, backups.path(), &key)
+            .unwrap()
+            .unwrap();
+        let names: Vec<_> = std::fs::read_dir(&snap)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec![std::ffi::OsString::from("A.sav")]);
+    }
+
+    #[test]
     fn load_saves_on_missing_path_returns_empty() {
         let saves = load_saves(
             "jksv",
@@ -383,7 +688,14 @@ mod tests {
         let (_, zip_bytes) = waystone_core::packaging::package(&save);
         let dest = tempfile::tempdir().unwrap();
 
-        restore_save_from_blob(&zip_bytes, &save, dest.path(), "jksv", "switch").unwrap();
+        restore_save_from_blob(
+            &zip_bytes,
+            &save,
+            &RestoreTarget::dir(dest.path()),
+            "jksv",
+            "switch",
+        )
+        .unwrap();
 
         // JKSV adapter writes: <Title> - <titleID>/<slot>/<filename>
         // So the file ends up at: dest/Test Game - TEST_GAME/main/save.dat
@@ -555,7 +867,7 @@ mod tests {
             backups.path(),
             "switch/GAME_001/main",
             "20260907T143100.000Z",
-            dest.path(),
+            &RestoreTarget::dir(dest.path()),
             true,
         )
         .unwrap();
@@ -586,7 +898,7 @@ mod tests {
             backups.path(),
             "switch/GAME_001/main",
             "20260907T143100.000Z",
-            dest.path(),
+            &RestoreTarget::dir(dest.path()),
             false,
         )
         .unwrap();
@@ -607,7 +919,7 @@ mod tests {
             backups.path(),
             "switch/GAME_001/main",
             "20260101T000000.000Z",
-            dest.path(),
+            &RestoreTarget::dir(dest.path()),
             true,
         );
         assert!(result.is_err());

@@ -30,7 +30,7 @@ std::string snapshot_sanitize_key(const std::string& key) {
 // Create each directory component along path, ignoring EEXIST.
 // The first slash-delimited component is treated as a device prefix (e.g. "sdmc:") and skipped.
 // Returns false on the first mkdir failure that is NOT EEXIST.
-static bool mkdir_p(const std::string& path) {
+bool fs_mkdir_p(const std::string& path) {
     std::string current;
     bool first = true;
     size_t start = 0;
@@ -66,7 +66,7 @@ bool write_snapshot(const char* backup_dir, const uint8_t* ft_ptr, size_t ft_len
     std::string dir(backup_dir);
     while (!dir.empty() && dir.back() == '/') dir.pop_back();
     printf("[saves] write_snapshot: %zu file(s) -> %s\n", files.size(), dir.c_str());
-    if (!mkdir_p(dir)) {
+    if (!fs_mkdir_p(dir)) {
         printf("[saves] write_snapshot: mkdir failed %s\n", dir.c_str());
         return false;
     }
@@ -82,7 +82,7 @@ bool write_snapshot(const char* backup_dir, const uint8_t* ft_ptr, size_t ft_len
         size_t last_slash = path.rfind('/');
         if (last_slash != std::string::npos) {
             std::string parent = dir + "/" + path.substr(0, last_slash);
-            if (!mkdir_p(parent)) {
+            if (!fs_mkdir_p(parent)) {
                 printf("[saves] write_snapshot: mkdir failed %s\n", parent.c_str());
                 return false;
             }

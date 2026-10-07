@@ -3,22 +3,8 @@ use alloc::vec::Vec;
 
 use sha2::{Digest, Sha256};
 
+use crate::crc32::crc32;
 use crate::model::{ContentRef, FileRef, NormalizedSave, SaveEntry};
-
-fn crc32(data: &[u8]) -> u32 {
-    let mut crc: u32 = 0xFFFF_FFFF;
-    for &byte in data {
-        crc ^= byte as u32;
-        for _ in 0..8 {
-            if crc & 1 != 0 {
-                crc = (crc >> 1) ^ 0xEDB8_8320;
-            } else {
-                crc >>= 1;
-            }
-        }
-    }
-    !crc
-}
 
 // STORE-only ZIP writer producing byte-exact output on every platform.
 // Spec: PKZIP APPNOTE 6.3.9, features from version 2.0 only.

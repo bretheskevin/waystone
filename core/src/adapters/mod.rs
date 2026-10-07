@@ -4,7 +4,7 @@ pub mod checkpoint;
 pub(crate) mod folder_layout;
 pub mod jksv;
 pub mod mgba;
-pub mod twilight;
+pub mod rom_keyed;
 
 use crate::model::{NormalizedSave, RawTree, SystemId};
 
