@@ -29,15 +29,18 @@ RUN set -eux; \
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN rustup --version && rustc --version
 
-# CIA packaging tools (makerom + bannertool) — pinned, x86_64 prebuilts.
+# CIA packaging tools (makerom + bannertool) — pinned (version + sha256, identical to
+# .github/workflows/release.yml), x86_64 prebuilts.
 # Used only when this image is built for amd64 (see 3ds/build-cia.sh); harmless
 # (unused) on arm64. NOT executed at build time (x86_64 can't run on an arm64 build host).
 RUN set -eux; \
     curl -fsSL "https://github.com/3DSGuy/Project_CTR/releases/download/makerom-v0.18.4/makerom-v0.18.4-ubuntu_x86_64.zip" -o /tmp/makerom.zip; \
+    echo "dd596854718c195c6e3229286be485b122921715555af8ae5cf8e9a465d9f970  /tmp/makerom.zip" | sha256sum -c -; \
     mkdir -p /tmp/mr; unzip -o /tmp/makerom.zip -d /tmp/mr; \
     install -m755 "$(find /tmp/mr -name makerom -type f | head -1)" /usr/local/bin/makerom; \
     rm -rf /tmp/makerom.zip /tmp/mr; \
     curl -fsSL "https://github.com/Epicpkmn11/bannertool/releases/download/v1.2.2/bannertool.zip" -o /tmp/bannertool.zip; \
+    echo "e4259c08fe8944ebadd5f4b96f9a8603e5427338074cfc46323fbbc3410d51ed  /tmp/bannertool.zip" | sha256sum -c -; \
     mkdir -p /tmp/bt; unzip -o /tmp/bannertool.zip linux-x86_64/bannertool -d /tmp/bt; \
     install -m755 /tmp/bt/linux-x86_64/bannertool /usr/local/bin/bannertool; \
     rm -rf /tmp/bannertool.zip /tmp/bt

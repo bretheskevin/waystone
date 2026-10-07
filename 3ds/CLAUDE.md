@@ -114,9 +114,10 @@ https://libctru.devkitpro.org/swkbd_8h_source.html before using it.
     → `3ds/waystone-3ds-spike.cia`.
     **Do NOT** run `make -C 3ds cia` inside the arm64 image — `makerom`/`bannertool` are x86_64 binaries
     and will SIGILL/exec-format-error on arm64.
-  - Tool version pins (both Dockerfile and CI must match): **makerom v0.18.4** (v0.19.0 needs
-    GLIBC_2.38; the `devkitpro/devkitarm` bookworm base ships 2.36 — v0.19.0 is broken there),
-    **bannertool v1.2.2** (Epicpkmn11 fork; Steveice10's repo is archived/404).
+  - Tool version + zip sha256 pins (both Dockerfile and CI must match; bump the hash with the
+    version): **makerom v0.18.4** (v0.19.0 needs GLIBC_2.38; the `devkitpro/devkitarm` bookworm base
+    ships 2.36 — v0.19.0 is broken there), **bannertool v1.2.2** (Epicpkmn11 fork; Steveice10's
+    repo is archived/404).
   - CI (`release.yml`) runs on x86_64 GitHub runners — no platform flag needed; it installs makerom +
     bannertool natively and runs `make -C 3ds cia` directly.
   - Incremental `make -C 3ds` (no `clean`) recompiles only changed files; `clean` after Makefile/romfs changes.
@@ -128,7 +129,8 @@ https://libctru.devkitpro.org/swkbd_8h_source.html before using it.
 
 Releases are cut by pushing a version tag — the GitHub Actions workflow `.github/workflows/release.yml`
 (builds inside `devkitpro/devkitarm`, same toolchain as the Docker image) creates the release and attaches
-the built `waystone-3ds-spike.3dsx`:
+both the built `waystone-3ds-spike.3dsx` (listed first) and the installable `waystone-3ds-spike.cia`
+(`make -C 3ds cia`, makerom + bannertool installed by the workflow):
 
 1. Bump `WS_APP_VERSION` in `3ds/source/version.h` and commit.
 2. `git tag vX.Y.Z` (must match the version baked into the binary).
@@ -136,7 +138,6 @@ the built `waystone-3ds-spike.3dsx`:
 4. Verify on the GitHub release page that BOTH `.3dsx` and `.cia` are attached. The in-app updater
    downloads the release asset ending in `.3dsx` (it ignores the `.cia`).
 
-The `.cia` is an alternate installable artifact for users who prefer title-manager install; the
-`.3dsx` remains the self-update path used by the in-app updater.
+The `.cia` is an alternate artifact for users who prefer installing via a title manager.
 
 Note: the repo must be **public** — the updater queries the GitHub releases API unauthenticated.
