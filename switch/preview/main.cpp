@@ -29,6 +29,7 @@
 #include "no_internet_activity.h"
 #include "loading_activity.h"
 #include "conflicts_activity.h"
+#include "worker_reaper.h"
 #include "history_controller.h"
 #include "history_activity.h"
 #include "title_list_activity.h"
@@ -127,6 +128,7 @@ int main(int argc, char** argv)
     }
 
     brls::Application::createWindow("Waystone Preview");
+    worker_reaper_start();
 
     static Session session;
 

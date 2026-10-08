@@ -4,6 +4,7 @@
 #include "keymap_switch.h"
 #include "keys_file.h"
 #include "unlock_activity.h"
+#include "worker_reaper.h"
 #include <cstdio>
 
 extern "C" {
@@ -104,6 +105,11 @@ brls::View* SettingsActivity::createContentView()
         if (session_->sync_busy && session_->sync_busy()) {
             printf("[ui] settings: log out refused -- sync in progress\n");
             status_label_->setText("Sync in progress \xe2\x80\x94 wait for it to finish");
+            return true;
+        }
+        if (worker_reaper_pending() > 0) {
+            printf("[ui] settings: log out refused -- %zu worker(s) still finishing\n", worker_reaper_pending());
+            status_label_->setText("Finishing a background task \xe2\x80\x94 try again in a moment");
             return true;
         }
         if (logout_pending_) return true;

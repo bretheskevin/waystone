@@ -2,6 +2,7 @@
 #include "borealis_focus.h"
 #include "keymap_switch.h"
 #include "confirm_banner.h"
+#include "worker_reaper.h"
 #include <cstdio>
 
 // -----------------------------------------------------------------------
@@ -13,7 +14,7 @@ ConflictsActivity::~ConflictsActivity() {
     // Pump FIRST (mirrors WizardActivity destructor ordering).
     pump_.stop();
     poll_timer_.stop();
-    delete ctrl_;
+    reap_worker(ctrl_);
 }
 
 // -----------------------------------------------------------------------
@@ -62,17 +63,8 @@ void ConflictsActivity::onContentAvailable() {
         // In-place status update (no rebuild needed)
         status_label_->setText("Status: " + ctrl_->status());
 
-        auto phase = ctrl_->phase();
-        if (phase == ConflictPhase::Ready || phase == ConflictPhase::Done) {
-            size_t count = ctrl_->conflicts().size();
-            if (count != last_conflict_count_) {
-                last_conflict_count_ = count;
-                // Do NOT rebuild while the confirm banner is showing
-                if (!confirm_remote_) {
-                    schedule_refresh();
-                }
-            }
-        }
+        uint32_t v = ctrl_->version();
+        if (v != seen_version_ && !confirm_remote_) schedule_refresh();
     });
     poll_timer_.start(300);
 
@@ -81,16 +73,18 @@ void ConflictsActivity::onContentAvailable() {
     // A = Keep Local (normal mode). During confirm, A confirms the resolve.
     registerAction(ws_label(WsAction::KeepLocal), ws_brls(WsAction::KeepLocal), [this](brls::View*) {
         if (confirm_remote_) {
-            ctrl_->resolve_keep_remote(confirm_index_);
+            printf("[conflict] ui: keep remote confirmed id=%u\n", confirm_id_);
+            ctrl_->resolve_keep_remote(confirm_id_);
             confirm_remote_ = false;
+            confirm_id_ = 0;
             schedule_refresh();
             return true;
         }
-        auto items = ctrl_->conflicts();
-        selected_index_ = focused_row_index();
-        if (!items.empty() && selected_index_ < items.size()) {
-            ctrl_->resolve_keep_local(selected_index_);
-            schedule_refresh();
+        size_t fi = focused_row_index();
+        if (fi < items_.size() && !items_[fi].queued) {
+            selected_id_ = items_[fi].id;
+            printf("[conflict] ui: keep local id=%u\n", selected_id_);
+            ctrl_->resolve_keep_local(selected_id_);
         }
         return true;
     });
@@ -98,11 +92,11 @@ void ConflictsActivity::onContentAvailable() {
     // X = Keep Remote (enters confirm mode)
     registerAction(ws_label(WsAction::KeepRemote), ws_brls(WsAction::KeepRemote), [this](brls::View*) {
         if (confirm_remote_) return true;  // already confirming, no-op
-        auto items = ctrl_->conflicts();
-        selected_index_ = focused_row_index();
-        if (!items.empty() && selected_index_ < items.size()) {
-            confirm_index_ = selected_index_;
+        size_t fi = focused_row_index();
+        if (fi < items_.size() && !items_[fi].queued) {
+            confirm_id_ = selected_id_ = items_[fi].id;
             confirm_remote_ = true;
+            printf("[conflict] ui: keep remote requested id=%u (confirming)\n", confirm_id_);
             schedule_refresh();
         }
         return true;
@@ -112,6 +106,7 @@ void ConflictsActivity::onContentAvailable() {
     registerAction(ws_label(WsAction::Back), ws_brls(WsAction::Back), [this](brls::View*) {
         if (confirm_remote_) {
             confirm_remote_ = false;
+            confirm_id_ = 0;
             schedule_refresh();
             return true;
         }
@@ -128,16 +123,15 @@ void ConflictsActivity::schedule_refresh() {
 }
 
 void ConflictsActivity::refresh() {
-    // Capture current focus position BEFORE rebuilding (old children still exist).
-    // In confirm mode, selected_index_ was already set by the X action.
-    if (!confirm_remote_) {
+    // Capture focus by stable id BEFORE rebuilding (old children still exist).
+    if (!confirm_remote_ && !items_.empty()) {
         size_t fi = focused_row_index();
-        auto& ch = list_box_->getChildren();
-        if (!ch.empty() && fi < ch.size())
-            selected_index_ = fi;
+        if (fi < items_.size()) { selected_id_ = items_[fi].id; focus_index_ = fi; }
     }
+    // Read the version BEFORE copying so a concurrent mutation re-triggers a refresh.
+    seen_version_ = ctrl_->version();
+    items_ = ctrl_->views();
 
-    // --- Rebuild list rows ---
     rebuild_list();
 
     // --- Manage confirm banner ---
@@ -165,7 +159,7 @@ void ConflictsActivity::rebuild_list() {
     while (!ch.empty())
         list_box_->removeView(ch.front());
 
-    auto items = ctrl_->conflicts();
+    const auto& items = items_;
     if (items.empty()) {
         auto* empty = new brls::Label();
         empty->setText("No conflicts");
@@ -178,8 +172,9 @@ void ConflictsActivity::rebuild_list() {
         const auto& item = items[i];
         char buf[512];
         snprintf(buf, sizeof(buf),
-                 "%s | %s\n  Local: %.12s (%s)\n  Remote: %.12s (%s, dev:%s)",
+                 "%s | %s%s\n  Local: %.12s (%s)\n  Remote: %.12s (%s, dev:%s)",
                  item.title_name.c_str(), item.group_key.c_str(),
+                 item.queued ? "  [Queued]" : "",
                  item.local_hash.c_str(), item.local_mtime.c_str(),
                  item.remote_hash.c_str(), item.remote_mtime.c_str(),
                  item.remote_device_id.c_str());
@@ -191,6 +186,7 @@ void ConflictsActivity::rebuild_list() {
         auto* label = new brls::Label();
         label->setText(buf);
         label->setFontSize(18.0f);
+        if (item.queued) label->setTextColor(nvgRGB(140, 140, 140));
         label->setGrow(1.0f);
         row->addView(label);
 
@@ -209,7 +205,11 @@ size_t ConflictsActivity::focused_row_index() const {
 // Focus the row closest to the previously selected position
 // -----------------------------------------------------------------------
 void ConflictsActivity::focus_selected_row() {
-    borealis_focus_child(list_box_, selected_index_, getContentView());
+    size_t idx = focus_index_;
+    for (size_t i = 0; i < items_.size(); i++)
+        if (items_[i].id == selected_id_) { idx = i; break; }
+    borealis_focus_child(list_box_, idx, getContentView());
+    focus_index_ = idx;
 }
 
 // -----------------------------------------------------------------------
@@ -223,10 +223,10 @@ brls::Box* ConflictsActivity::build_confirm_banner() {
 // Preview support: trigger the confirm banner programmatically
 // -----------------------------------------------------------------------
 void ConflictsActivity::trigger_confirm_for_preview() {
-    auto items = ctrl_->conflicts();
-    if (!items.empty()) {
-        selected_index_ = 0;
-        confirm_index_ = 0;
+    items_ = ctrl_->views();
+    if (!items_.empty()) {
+        selected_id_ = confirm_id_ = items_.front().id;
+        focus_index_ = 0;
         confirm_remote_ = true;
         schedule_refresh();
     }

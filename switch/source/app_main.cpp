@@ -18,6 +18,7 @@ extern "C" {
 #include "wsconfig.h"
 #include "ui/session.h"
 #include "ui/theme_tint.h"
+#include "ui/worker_reaper.h"
 #include "ui/setup_activity.h"
 #include "ui/unlock_activity.h"
 #include "ui/no_internet_activity.h"
@@ -85,6 +86,7 @@ int main(int argc, char* argv[])
     if (brls::Application::init()) {
         brls::Application::createWindow("Waystone");
         brls::Application::setGlobalQuit(true);
+        worker_reaper_start();
         printf("[boot] window created\n");
 
         uint8_t* kbuf = nullptr;

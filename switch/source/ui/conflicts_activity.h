@@ -1,5 +1,7 @@
 #pragma once
 #include <borealis.hpp>
+#include <cstdint>
+#include <vector>
 #include "conflict_controller.h"
 #include "deferred_refresh_pump.h"
 
@@ -23,15 +25,13 @@ class ConflictsActivity : public brls::Activity {
     brls::Box*   list_box_      = nullptr;
     brls::Box*   banner_        = nullptr;
 
-    // Confirm state
-    bool   confirm_remote_     = false;
-    size_t confirm_index_      = 0;  // index captured when X was pressed
-
-    // Selection tracking (logical cursor, mirrors 3DS cursor_ model)
-    size_t selected_index_     = 0;
-
-    // Change detection
-    size_t last_conflict_count_ = SIZE_MAX;  // force first rebuild
+    // List snapshot (view copies, keyed by stable id) and confirm state
+    std::vector<ConflictView> items_;
+    uint32_t seen_version_  = UINT32_MAX;  // force first rebuild
+    uint32_t selected_id_   = 0;
+    uint32_t confirm_id_    = 0;
+    bool     confirm_remote_ = false;
+    size_t   focus_index_   = 0;
 
     // Deferred rebuild: never rebuild the focused view synchronously inside
     // its own action callback (UAF). ConflictsActivity has its own poll_timer_
