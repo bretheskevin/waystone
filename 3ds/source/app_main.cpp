@@ -1,6 +1,9 @@
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <fcntl.h>
 #include <malloc.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <3ds.h>
@@ -38,6 +41,35 @@ static bool ctr_device_key(uint8_t* out_key, size_t* out_len) {
     return true;
 }
 
+static const char* const LOG_DIR = "sdmc:/waystone";
+static const char* const LOG_PATH = "sdmc:/waystone/log.txt";
+
+static void redirect_logs() {
+    int link_fd = link3dsStdio();
+    if (link_fd >= 0) {
+        printf("[net] link3dsStdio fd=%d\n", link_fd);
+        return;
+    }
+
+    mkdir(LOG_DIR, 0755);
+    int fd = open(LOG_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) {
+        printf("[sys] log file open failed path=%s errno=%d (link3dsStdio fd=%d)\n",
+               LOG_PATH, errno, link_fd);
+        return;
+    }
+    fflush(stdout);
+    fflush(stderr);
+    // Both streams share one handle (and so one file offset) so interleaved writes append.
+    int out_rc = dup2(fd, STDOUT_FILENO);
+    int err_rc = dup2(fd, STDERR_FILENO);
+    close(fd);
+    setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
+    setvbuf(stderr, NULL, _IOLBF, BUFSIZ);
+    printf("[sys] logging to %s (link3dsStdio fd=%d dup2 out=%d err=%d)\n",
+           LOG_PATH, link_fd, out_rc, err_rc);
+}
+
 int main(int argc, char* argv[]) {
     // Plain setter, safe before any init: records where we were launched from so
     // the self-updater can find (and replace) the running .3dsx later.
@@ -52,13 +84,6 @@ int main(int argc, char* argv[]) {
     C2D_Init(C2D_DEFAULT_MAX_OBJECTS);
     C2D_Prepare();
 
-    if (is_new_3ds()) {
-        osSetSpeedupEnable(true);
-        printf("[sys] model=New3DS speedup=on\n");
-    } else {
-        printf("[sys] model=Old3DS speedup=n/a\n");
-    }
-
     if (!SOC_buffer) { printf("FATAL: SOC buffer alloc failed\n"); goto cleanup; }
     if (psInit() != 0) { printf("FATAL: psInit failed\n"); goto cleanup; }
     ps_ok = true;
@@ -67,9 +92,15 @@ int main(int argc, char* argv[]) {
     session_store_set_device_key_fn(ctr_device_key);
     if (socInit(SOC_buffer, 0x100000) != 0) { printf("FATAL: socInit failed\n"); goto cleanup; }
     soc_ok = true;
-    // Redirect stdout/stderr to the `3dslink -s` host so tagged [vault]/[sync]/[saves]
-    // logs stream to the dev machine on hardware (no-op when not launched via netload).
-    printf("[net] link3dsStdio fd=%d\n", link3dsStdio());
+    redirect_logs();
+
+    if (is_new_3ds()) {
+        osSetSpeedupEnable(true);
+        printf("[sys] model=New3DS speedup=on\n");
+    } else {
+        printf("[sys] model=Old3DS speedup=n/a\n");
+    }
+
     if (romfsInit() != 0) { printf("FATAL: romfsInit failed\n"); goto cleanup; }
     romfs_ok = true;
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) { printf("FATAL: curl_global_init failed\n"); goto cleanup; }
