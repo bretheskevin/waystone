@@ -1,9 +1,17 @@
 #include "update_worker.h"
 #include "worker_thread.h"
+#include "cia_install.h"
+#include "net.h"
+#include <cerrno>
 #include <cstdio>
+#include <sys/stat.h>
+
+static const char* const CIA_TMP_DIR  = "sdmc:/waystone";
+static const char* const CIA_TMP_PATH = "sdmc:/waystone/update.cia";
 
 UpdateWorker::UpdateWorker()
-    : phase_((int)UpdatePhase::Idle),
+    : cia_mode_(!envIsHomebrew()),
+      phase_((int)UpdatePhase::Idle),
       running_(false),
       cancel_(false),
       progress_(0),
@@ -12,6 +20,8 @@ UpdateWorker::UpdateWorker()
       thread_(0)
 {
     LightLock_Init(&mu_);
+    printf("[update] worker created mode=%s (envIsHomebrew=%d)\n",
+           cia_mode_ ? "cia" : "3dsx", cia_mode_ ? 0 : 1);
 }
 
 UpdateWorker::~UpdateWorker() {
@@ -82,10 +92,10 @@ void UpdateWorker::start_check() {
 }
 
 void UpdateWorker::check_worker() {
-    printf("[update] worker: checking latest release\n");
+    printf("[update] worker: checking latest release (asset %s)\n", asset_suffix());
     char ver[64];
     char url[768];
-    int rc = updater_check_latest(".3dsx", ver, sizeof(ver), url, sizeof(url));
+    int rc = updater_check_latest(asset_suffix(), ver, sizeof(ver), url, sizeof(url));
     check_rc_.store(rc);
     if (rc == UP_OK) {
         LightLock_Lock(&mu_);
@@ -129,28 +139,62 @@ void UpdateWorker::start_install(const std::string& url) {
     }
 }
 
-bool UpdateWorker::download_progress(size_t got, size_t total, void* ctx) {
+bool UpdateWorker::transfer_progress(size_t got, size_t total, void* ctx) {
     auto* self = static_cast<UpdateWorker*>(ctx);
     if (self->cancel_.load()) {
-        printf("[update] download cancelled by user\n");
-        return false;  // aborts the curl transfer
+        printf("[update] transfer cancelled by user\n");
+        return false;  // aborts the curl transfer / AM import
     }
-    int pct = (total > 0) ? static_cast<int>(got * 100 / total) : 0;
+    int pct = (total > 0) ? static_cast<int>((unsigned long long)got * 100 / total) : 0;
     if (pct > 100) pct = 100;
     self->progress_.store(pct);
     return true;
 }
 
-void UpdateWorker::install_worker() {
-    char self_path[768];
-    int rc = updater_self_path(self_path, sizeof(self_path));
-    if (rc != UP_OK) {
-        install_rc_.store(rc);
+void UpdateWorker::finish_install(int rc) {
+    install_rc_.store(rc);
+    if (rc == UP_OK) {
+        progress_.store(100);
+        phase_.store((int)UpdatePhase::Done);
+        printf("[update] worker: install complete\n");
+    } else {
+        progress_.store(0);
         phase_.store((int)UpdatePhase::Error);
-        running_.store(false);
+        printf("[update] worker: install FAILED rc=%d\n", rc);
+    }
+    running_.store(false);  // last: reap_worker deletes us once this flips
+}
+
+void UpdateWorker::install_cia(const std::string& url) {
+    printf("[update] worker: cia install from %.48s -> %s\n", url.c_str(), CIA_TMP_PATH);
+    if (mkdir(CIA_TMP_DIR, 0755) != 0 && errno != EEXIST) {
+        printf("[update] worker: mkdir %s FAILED errno=%d\n", CIA_TMP_DIR, errno);
+    }
+    remove(CIA_TMP_PATH);  // stale leftover from an interrupted run
+
+    int drc = http_download(url.c_str(), CIA_TMP_PATH, transfer_progress, this);
+    if (drc != 0) {
+        // http_download already removed the temp file on any failure (documented contract).
+        printf("[update] worker: cia download FAILED rc=%d (installed title untouched)\n", drc);
+        finish_install(UP_NET);
         return;
     }
+    printf("[update] worker: cia download done, importing via AM\n");
 
+    progress_.store(0);
+    phase_.store((int)UpdatePhase::Installing);
+    int irc = cia_install_file(CIA_TMP_PATH, transfer_progress, this);
+    printf("[update] worker: cia import %s\n", irc == 0 ? "ok" : "FAILED");
+
+    if (remove(CIA_TMP_PATH) == 0) {
+        printf("[update] worker: removed %s\n", CIA_TMP_PATH);
+    } else {
+        printf("[update] worker: remove %s FAILED errno=%d\n", CIA_TMP_PATH, errno);
+    }
+    finish_install(irc == 0 ? UP_OK : UP_INSTALL);
+}
+
+void UpdateWorker::install_worker() {
     std::string url;
     {
         LightLock_Lock(&mu_);
@@ -158,19 +202,18 @@ void UpdateWorker::install_worker() {
         LightLock_Unlock(&mu_);
     }
 
-    printf("[update] worker: installing from %.48s\n", url.c_str());
-    rc = updater_install(url.c_str(), self_path, download_progress, this);
-    if (rc != UP_OK) {
-        install_rc_.store(rc);
-        progress_.store(0);
-        phase_.store((int)UpdatePhase::Error);
-        printf("[update] worker: install FAILED rc=%d\n", rc);
-        running_.store(false);
+    if (cia_mode_) {
+        install_cia(url);
         return;
     }
 
-    progress_.store(100);
-    phase_.store((int)UpdatePhase::Done);
-    printf("[update] worker: install complete\n");
-    running_.store(false);
+    char self_path[768];
+    int rc = updater_self_path(self_path, sizeof(self_path));
+    if (rc != UP_OK) {
+        printf("[update] worker: no self path rc=%d\n", rc);
+        finish_install(rc);
+        return;
+    }
+    printf("[update] worker: installing from %.48s\n", url.c_str());
+    finish_install(updater_install(url.c_str(), self_path, transfer_progress, this));
 }

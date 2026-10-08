@@ -27,7 +27,8 @@ SettingsScreen::SettingsScreen(Session* session)
       last_phase_(UpdatePhase::Idle),
       confirm_update_(false),
       update_cancelled_(false),
-      install_started_(false) {}
+      install_started_(false),
+      restart_prompt_(false) {}
 
 SettingsScreen::~SettingsScreen() {
     // Only join if we still own the worker (not detached by handle_input B).
@@ -41,11 +42,15 @@ void SettingsScreen::poll() {
     // Live progress while phases run.
     if (phase_ == UpdatePhase::Checking) {
         status_text_ = "Checking for updates...";
-    } else if (phase_ == UpdatePhase::Downloading) {
+    } else if (phase_ == UpdatePhase::Downloading || phase_ == UpdatePhase::Installing) {
         char buf[64];
-        snprintf(buf, sizeof(buf), "Downloading... %d%%",
+        snprintf(buf, sizeof(buf), "%s... %d%%",
+                 phase_ == UpdatePhase::Installing ? "Installing" : "Downloading",
                  worker_->progress_percent());
         status_text_ = buf;
+    }
+    if (phase_ == UpdatePhase::Installing && last_phase_ != UpdatePhase::Installing) {
+        printf("[update] ui: download done, installing CIA\n");
     }
 
     // ---- Finished a check ----
@@ -59,21 +64,27 @@ void SettingsScreen::poll() {
                 pending_url_ = worker_->asset_url();
                 confirm_update_ = true;
                 status_text_ = "Update available: v" + ver;
-                printf("[update] newer version available: v%s\n", ver.c_str());
+                printf("[update] newer version available: v%s (%s)\n",
+                       ver.c_str(), worker_->asset_suffix());
             } else {
                 status_text_ = "Up to date (v" + ver + ")";
             }
         } else {
-            status_text_ = updater_check_message(rc, ".3dsx");
+            status_text_ = updater_check_message(rc, worker_->asset_suffix());
             printf("[update] check failed rc=%d\n", rc);
         }
     }
 
     // ---- Finished an install ----
-    if (install_started_ && last_phase_ == UpdatePhase::Downloading &&
+    if (install_started_ &&
+        (last_phase_ == UpdatePhase::Downloading || last_phase_ == UpdatePhase::Installing) &&
         (phase_ == UpdatePhase::Done || phase_ == UpdatePhase::Error)) {
         int rc = worker_->install_rc();
-        if (rc == UP_OK) {
+        if (rc == UP_OK && worker_->cia_mode()) {
+            status_text_ = "Updated to v" + pending_ver_;
+            restart_prompt_ = true;
+            printf("[update] cia install succeeded -> restart prompt\n");
+        } else if (rc == UP_OK) {
             status_text_ = "Updated to v" + pending_ver_ + ". Restart to apply.";
             printf("[update] install succeeded\n");
         } else {
@@ -98,7 +109,8 @@ void SettingsScreen::draw_top(C3D_RenderTarget* target) {
         else if (phase_ == UpdatePhase::Done && !confirm_update_ && !update_cancelled_)
             clr = CLR_SUCCESS;
         else if (phase_ == UpdatePhase::Checking ||
-                 phase_ == UpdatePhase::Downloading) clr = CLR_SYNC;
+                 phase_ == UpdatePhase::Downloading ||
+                 phase_ == UpdatePhase::Installing) clr = CLR_SYNC;
         draw_text_centered(buf, 0, 80.0f, 0.5f, TEXT_BASE, clr, status_text_.c_str(), (float)SCREEN_TOP_W);
     }
 }
@@ -110,6 +122,18 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
     float w = (float)SCREEN_BOT_W - 2.0f * SP_MD;
     float row_h = 28.0f;
     float y = (float)SP_MD;
+
+    // ---- CIA installed: restart now or later ----
+    if (restart_prompt_) {
+        char line[128];
+        snprintf(line, sizeof(line), "v%s installed", pending_ver_.c_str());
+        std::string restart_hint = ws_hint(WsAction::Confirm, "Restart now") +
+                                   ws_hint_style().item_sep +
+                                   ws_hint(WsAction::Cancel, "Later");
+        draw_confirm_banner(buf, y, 150.0f, line, restart_hint.c_str(), 0, 56.0f);
+        draw_footer_hint(buf, restart_hint.c_str());
+        return;
+    }
 
     // ---- Confirm banner replaces the row list while deciding ----
     if (confirm_update_) {
@@ -167,6 +191,23 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
 
 void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
     (void)touch;
+
+    // ---- Restart prompt (CIA installed) ----
+    if (restart_prompt_) {
+        if (kDown & ws_key(WsAction::Confirm)) {
+            printf("[update] restart now: aptSetChainloaderToSelf + quit (v%s)\n",
+                   pending_ver_.c_str());
+            restart_prompt_ = false;
+            status_text_ = "Restarting...";
+            aptSetChainloaderToSelf();
+            App::instance().quit();  // normal teardown; aptExit performs the relaunch
+        } else if (kDown & ws_key(WsAction::Cancel)) {
+            printf("[update] restart later (v%s installed)\n", pending_ver_.c_str());
+            restart_prompt_ = false;
+            status_text_ = "Updated to v" + pending_ver_ + " \xe2\x80\x94 restart to apply";
+        }
+        return;
+    }
 
     // ---- Confirm mode (update now?) ----
     if (confirm_update_) {
@@ -229,9 +270,11 @@ void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
                     printf("[update] check ignored -- update worker busy\n");
                     break;
                 }
-                printf("[update] check requested from settings\n");
+                printf("[update] check requested from settings (mode=%s)\n",
+                       worker_->cia_mode() ? "cia" : "3dsx");
                 install_started_ = false;
                 confirm_update_ = false;
+                restart_prompt_ = false;
                 update_cancelled_ = false;
                 pending_ver_.clear();
                 pending_url_.clear();

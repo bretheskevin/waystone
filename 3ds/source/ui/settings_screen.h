@@ -22,6 +22,7 @@ private:
     bool confirm_update_;   // confirm banner for "update now?"
     bool update_cancelled_; // "Update cancelled" shown: exclude it from the success color
     bool install_started_;  // distinguishes install-Done from check-Done
+    bool restart_prompt_;   // CIA installed: "Restart now / Later" banner
     std::string pending_ver_;
     std::string pending_url_;
     static const size_t NUM_ROWS = 7;

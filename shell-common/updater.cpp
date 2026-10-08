@@ -275,6 +275,7 @@ std::string updater_install_message(int rc) {
     switch (rc) {
     case UP_NO_SELF: return "Relaunch from SD card to enable updates";
     case UP_NET:     return "Download failed \xe2\x80\x94 connection lost";
+    case UP_INSTALL: return "Install failed \xe2\x80\x94 current version kept";
     default:         return "SD write failed";
     }
 }

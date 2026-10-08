@@ -109,6 +109,10 @@ static void test_suffix_selects_asset() {
     assert(updater_parse_release_json(only3ds, ".nro", ver, sizeof ver, url, sizeof url) == UP_NO_ASSET);
     assert(updater_check_message(UP_NO_ASSET, ".nro") == "Latest release has no .nro build");
     assert(updater_install_message(UP_NO_SELF) == "Relaunch from SD card to enable updates");
+    assert(updater_parse_release_json(kBothAssets, ".cia", ver, sizeof ver, url, sizeof url) == UP_OK);
+    assert(strcmp(url, "https://x/waystone-3ds-spike.cia") == 0);
+    assert(updater_install_message(UP_INSTALL) ==
+           "Install failed \xe2\x80\x94 current version kept");
     printf("test_suffix_selects_asset PASSED\n");
 }
 

@@ -138,9 +138,11 @@ and the Switch (`devkitpro/devkita64`) in parallel jobs, then a `publish` job cr
 2. `git tag vX.Y.Z`.
 3. `git push origin vX.Y.Z` — the workflow builds and publishes the release.
 4. Verify on the GitHub release page that `waystone-3ds-spike.3dsx` (first), `waystone-3ds-spike.cia` and
-   `waystone.nro` are all attached. The 3DS in-app updater downloads the release asset ending in `.3dsx`
-   (it ignores the `.cia`); the Switch updater matches the `.nro`.
+   `waystone.nro` are all attached. The 3DS in-app updater picks its asset by run mode (`envIsHomebrew()`):
+   under HBL/netload it replaces the `.3dsx`; as the installed CIA it downloads the `.cia` to
+   `sdmc:/waystone/update.cia`, imports it via AM (`3ds/source/cia_install.cpp`), deletes the temp file and
+   offers Restart now (`aptSetChainloaderToSelf`) / Later. The Switch updater matches the `.nro`.
 
-The `.cia` is an alternate artifact for users who prefer installing via a title manager.
+The `.cia` is the installable artifact (Home Menu) and self-updates in place (same permanent title ID).
 
 Note: the repo must be **public** — the updater queries the GitHub releases API unauthenticated.

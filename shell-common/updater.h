@@ -14,6 +14,7 @@ enum UpdaterRc {
     UP_NO_ASSET,  // latest release has no asset with the requested suffix
     UP_NO_SELF,   // own binary not found on SD card (e.g. netload-launched)
     UP_IO,        // local file IO failure (write/rename)
+    UP_INSTALL,   // platform installer rejected the package (3DS AM CIA import)
 };
 
 // argv0 is used when it points into the SD card ("sdmc:"); otherwise fallback_path
