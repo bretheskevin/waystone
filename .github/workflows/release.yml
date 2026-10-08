@@ -1,7 +1,8 @@
 name: Release
 
-# Build the 3DS shell (.3dsx + installable .cia) and publish both as a GitHub Release.
-# Triggered by pushing a version tag (v*) or manually.
+# Build the 3DS shell (.3dsx + installable .cia) and the Switch shell (.nro) from one vX.Y.Z tag
+# and publish them as one GitHub Release. Each in-app updater picks its asset by suffix
+# (.3dsx / .nro), so asset names must not change.
 
 on:
   push:
@@ -13,11 +14,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build-3ds:
     runs-on: ubuntu-latest
-    # Build inside the devkitARM container: it ships devkitARM/libctru/3ds-curl
-    # preinstalled (same base as 3ds/Dockerfile, minus the corp-CA injection,
-    # which is gitignored and absent in CI).
     container: devkitpro/devkitarm
     steps:
       - uses: actions/checkout@v4
@@ -39,9 +37,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-          # makerom v0.18.4 (3DSGuy/Project_CTR) — v0.19.0 needs GLIBC_2.38, image has 2.36
-          # bannertool v1.2.2 (Epicpkmn11/bannertool — Steveice10's repo is archived/404)
-          # Identical pins to 3ds/Dockerfile; sha256 pinned because release assets are mutable.
           apt-get update -y
           apt-get install -y --no-install-recommends unzip
           curl -fsSL "https://github.com/3DSGuy/Project_CTR/releases/download/makerom-v0.18.4/makerom-v0.18.4-ubuntu_x86_64.zip" -o /tmp/makerom.zip
@@ -67,12 +62,124 @@ jobs:
           make -C 3ds cia
           test -f 3ds/waystone-3ds-spike.cia
 
+      - name: Upload 3DS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: waystone-3ds
+          path: |
+            3ds/waystone-3ds-spike.3dsx
+            3ds/waystone-3ds-spike.cia
+          if-no-files-found: error
+
+  build-switch:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64
+    steps:
+      # git must exist BEFORE checkout so the workspace is a real repo: the Makefile's
+      # borealis-patch target runs `git -C lib/borealis apply`.
+      - name: Install git
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if ! command -v git >/dev/null 2>&1; then
+            apt-get update -y
+            apt-get install -y --no-install-recommends git ca-certificates
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Mark workspace safe for git
+        shell: bash
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Check shared version matches the tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          V3=$(sed -n 's/.*WS_APP_VERSION "\([^"]*\)".*/\1/p' 3ds/source/version.h)
+          VS=$(sed -n 's/.*WS_APP_VERSION "\([^"]*\)".*/\1/p' switch/source/version.h)
+          echo "3ds=$V3 switch=$VS ref=$GITHUB_REF_NAME"
+          [ "$V3" = "$VS" ] || { echo "::error::3ds/switch version.h differ ($V3 vs $VS)"; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "v$V3" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME != v$V3"; exit 1
+          fi
+
+      - name: Install Rust nightly + rust-src
+        shell: bash
+        run: |
+          set -euxo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/rustup.sh
+            sh /tmp/rustup.sh -y --default-toolchain nightly --profile minimal
+            rm /tmp/rustup.sh
+          fi
+          export PATH="$HOME/.cargo/bin:$PATH"
+          rustup component add rust-src
+          rustup --version && rustc --version
+
+      - name: Build Switch shell
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export PATH="$HOME/.cargo/bin:$PATH"
+          cargo +nightly build -Zbuild-std=core,alloc --target aarch64-nintendo-switch-freestanding --features switch -p waystone-ffi --release
+          make -C switch clean
+          make -C switch
+          test -f switch/waystone.nro
+
+      - name: Relocation guard (libnx NRO loader accepts only RELATIVE/NONE)
+        shell: bash
+        run: |
+          set -euo pipefail
+          READELF=/opt/devkitpro/devkitA64/bin/aarch64-none-elf-readelf
+          ELF=switch/waystone.elf
+          # RELATIVE relocs live in .relr.dyn (DT_RELR) and are invisible to `readelf -r`, so a
+          # grep for allowed types alone is vacuous: also require an empty RELA/PLT table.
+          DYN=$("$READELF" -d "$ELF")
+          echo "$DYN" | grep -E 'RELA|RELR|JMPREL|PLTREL' || true
+          FAIL=0
+          RELASZ=$(echo "$DYN" | sed -n 's/.*(RELASZ)[^0-9]*\([0-9]*\).*/\1/p' | head -1)
+          RELASZ=${RELASZ:-0}
+          if [ "$RELASZ" != "0" ]; then
+            echo "::error::non-empty DT_RELA table in waystone.elf (RELASZ=$RELASZ)"; FAIL=1
+          fi
+          if echo "$DYN" | grep -qE '\((PLTRELSZ|JMPREL)\)'; then
+            echo "::error::PLT relocations (PLTRELSZ/JMPREL) in waystone.elf: libnx does not apply them"; FAIL=1
+          fi
+          TYPES=$("$READELF" -r "$ELF" | grep -oE 'R_AARCH64_[A-Z0-9_]+' | sort | uniq -c || true)
+          echo "$TYPES"
+          BAD=$(echo "$TYPES" | grep -E 'R_AARCH64_' | grep -vE 'R_AARCH64_(RELATIVE|NONE)$' || true)
+          if [ -n "$BAD" ]; then
+            echo "::error::forbidden relocation types in waystone.elf (crash at boot):"
+            echo "$BAD"; FAIL=1
+          fi
+          [ "$FAIL" = "0" ]
+
+      - name: Upload Switch artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: waystone-switch
+          path: switch/waystone.nro
+          if-no-files-found: error
+
+  publish:
+    needs: [build-3ds, build-switch]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: List release assets
+        run: ls -lR dist
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            3ds/waystone-3ds-spike.3dsx
-            3ds/waystone-3ds-spike.cia
+            dist/waystone-3ds/waystone-3ds-spike.3dsx
+            dist/waystone-3ds/waystone-3ds-spike.cia
+            dist/waystone-switch/waystone.nro
           fail_on_unmatched_files: true
           generate_release_notes: true
         env:

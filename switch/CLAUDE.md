@@ -61,3 +61,17 @@ after input dispatch unwinds. Two safe patterns: (1) mutate views in place (`set
 - On-hardware: launch in **full application mode** (hold **R** over a game) for save-mount + enough
   heap; Atmosphère dumps crash logs to `sdmc:/atmosphere/crash_reports/*.log` — symbolize with
   `aarch64-none-elf-addr2line -f -C -i -e switch/waystone.elf <module-offset…>`.
+
+## Releasing
+
+Same shared flow as the 3DS (see `3ds/CLAUDE.md` "Releasing"): bump `WS_APP_VERSION` in both
+`3ds/source/version.h` and `switch/source/version.h`, tag `vX.Y.Z`, push the tag; the `build-switch` job
+in `.github/workflows/release.yml` builds `switch/waystone.nro` and `publish` attaches it.
+
+- The in-app updater (Settings -> Check for updates) downloads the release asset ending in `.nro` to
+  `<self>.tmp` and renames it over `argv[0]` (or `sdmc:/switch/waystone.nro`). netload runs report
+  "Relaunch from SD card". Never rename the asset.
+- CI has a relocation guard: the release fails if `waystone.elf` has a non-empty RELA/PLT table or any
+  relocation other than `R_AARCH64_RELATIVE`/`NONE`. The RELATIVE relocs live in `.relr.dyn` (DT_RELR) and are
+  invisible to `readelf -r`, so also check `aarch64-none-elf-readelf -d switch/waystone.elf`: `RELASZ` must be 0
+  and there must be no `PLTRELSZ`/`JMPREL`.
