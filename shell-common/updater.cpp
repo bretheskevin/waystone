@@ -12,7 +12,6 @@
 
 static const char* kLatestReleaseUrl =
     "https://api.github.com/repos/bretheskevin/waystone/releases/latest";
-static const char* kFallbackSelfPath = "sdmc:/3ds/waystone/waystone-3ds-spike.3dsx";
 
 // A /releases/latest body has ~10 top-level keys plus one small object per asset;
 // 4096 tokens is far beyond worst case (heap, not the 3DS worker stack).
@@ -20,15 +19,22 @@ static const int UPDATE_MAX_TOKENS = 4096;
 
 static char g_argv0[512];
 static bool g_have_argv0 = false;
+static char g_fallback[512];
+static bool g_have_fallback = false;
 
-void updater_set_argv0(const char* argv0) {
-    printf("[update] set_argv0: %s\n", argv0 ? argv0 : "(null)");
+void updater_set_self_candidates(const char* argv0, const char* fallback_path) {
+    printf("[update] self candidates: argv0=%s fallback=%s\n", argv0 ? argv0 : "(null)",
+           fallback_path ? fallback_path : "(null)");
+    if (fallback_path && *fallback_path) {
+        snprintf(g_fallback, sizeof(g_fallback), "%s", fallback_path);
+        g_have_fallback = true;
+    }
     if (argv0 && strncmp(argv0, "sdmc:", 5) == 0) {
         snprintf(g_argv0, sizeof(g_argv0), "%s", argv0);
         g_have_argv0 = true;
         printf("[update] argv0 captured: %s\n", g_argv0);
     } else {
-        printf("[update] argv0 not on SD (netload?), self-update will need relaunch\n");
+        printf("[update] argv0 not on SD (netload?) -- using fallback path\n");
     }
 }
 
@@ -93,13 +99,14 @@ static int skip_token(const jsmntok_t* tokens, int idx, int total) {
     return idx + 1;  // STRING or PRIMITIVE
 }
 
-static bool ends_with_3dsx(const char* s) {
+static bool ends_with(const char* s, const char* suffix) {
     size_t len = strlen(s);
-    return len >= 5 && strncmp(s + len - 5, ".3dsx", 5) == 0;
+    size_t sl = strlen(suffix);
+    return len >= sl && strncmp(s + len - sl, suffix, sl) == 0;
 }
 
-int updater_parse_release_json(const char* json, char* out_ver, size_t ver_sz,
-                               char* out_asset_url, size_t url_sz) {
+int updater_parse_release_json(const char* json, const char* asset_suffix, char* out_ver,
+                               size_t ver_sz, char* out_asset_url, size_t url_sz) {
     std::vector<jsmntok_t> tokens(UPDATE_MAX_TOKENS);
     jsmn_parser parser;
     jsmn_init(&parser);
@@ -144,7 +151,7 @@ int updater_parse_release_json(const char* json, char* out_ver, size_t ver_sz,
                             if (!have_asset && len < sizeof(url)) {
                                 memcpy(url, start, len);
                                 url[len] = '\0';
-                                if (ends_with_3dsx(url)) {
+                                if (ends_with(url, asset_suffix)) {
                                     have_asset = true;
                                     printf("[update] parse_release: picked asset %s\n", url);
                                 }
@@ -166,7 +173,7 @@ int updater_parse_release_json(const char* json, char* out_ver, size_t ver_sz,
         return UP_PARSE;
     }
     if (!have_asset) {
-        printf("[update] parse_release: no .3dsx asset (ver=%s)\n", ver);
+        printf("[update] parse_release: no %s asset (ver=%s)\n", asset_suffix, ver);
         return UP_NO_ASSET;
     }
     snprintf(out_ver, ver_sz, "%s", ver);
@@ -177,7 +184,7 @@ int updater_parse_release_json(const char* json, char* out_ver, size_t ver_sz,
 
 // ---- network check ----
 
-int updater_check_latest(char* out_ver, size_t ver_sz,
+int updater_check_latest(const char* asset_suffix, char* out_ver, size_t ver_sz,
                          char* out_asset_url, size_t url_sz) {
     printf("[update] check_latest: GET %s\n", kLatestReleaseUrl);
     std::string json;
@@ -190,14 +197,18 @@ int updater_check_latest(char* out_ver, size_t ver_sz,
         printf("[update] check_latest: GitHub HTTP %d\n", rc);
         return UP_GH;
     }
-    return updater_parse_release_json(json.c_str(), out_ver, ver_sz,
+    return updater_parse_release_json(json.c_str(), asset_suffix, out_ver, ver_sz,
                                       out_asset_url, url_sz);
 }
 
 // ---- self path + install ----
 
 int updater_self_path(char* out, size_t out_sz) {
-    const char* path = g_have_argv0 ? g_argv0 : kFallbackSelfPath;
+    const char* path = g_have_argv0 ? g_argv0 : (g_have_fallback ? g_fallback : 0);
+    if (!path) {
+        printf("[update] self_path: no candidates set\n");
+        return UP_NO_SELF;
+    }
     printf("[update] self_path: probing %s (argv0 %s)\n",
            path, g_have_argv0 ? "captured" : "not captured, fallback");
     FILE* f = fopen(path, "rb");
@@ -235,11 +246,35 @@ int updater_install(const char* url, const char* self_path,
         return UP_NET;
     }
     if (rename(tmp.c_str(), self_path) != 0) {
-        printf("[update] install: rename %s -> %s FAILED\n",
+        printf("[update] install: rename %s -> %s failed -- removing old binary and retrying\n",
                tmp.c_str(), self_path);
-        remove(tmp.c_str());
-        return UP_IO;
+        if (remove(self_path) != 0) {
+            printf("[update] install: remove %s FAILED\n", self_path);
+            remove(tmp.c_str());
+            return UP_IO;
+        }
+        if (rename(tmp.c_str(), self_path) != 0) {
+            printf("[update] install: rename retry FAILED -- new build left at %s\n", tmp.c_str());
+            return UP_IO;
+        }
     }
     printf("[update] install: %s updated successfully\n", self_path);
     return UP_OK;
+}
+
+std::string updater_check_message(int rc, const char* asset_suffix) {
+    switch (rc) {
+    case UP_NET:      return "No connection \xe2\x80\x94 couldn't check for updates";
+    case UP_GH:       return "GitHub error or rate-limited \xe2\x80\x94 try again later";
+    case UP_NO_ASSET: return std::string("Latest release has no ") + asset_suffix + " build";
+    default:          return "Unexpected GitHub response";
+    }
+}
+
+std::string updater_install_message(int rc) {
+    switch (rc) {
+    case UP_NO_SELF: return "Relaunch from SD card to enable updates";
+    case UP_NET:     return "Download failed \xe2\x80\x94 connection lost";
+    default:         return "SD write failed";
+    }
 }

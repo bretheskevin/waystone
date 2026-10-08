@@ -41,7 +41,8 @@ static bool ctr_device_key(uint8_t* out_key, size_t* out_len) {
 int main(int argc, char* argv[]) {
     // Plain setter, safe before any init: records where we were launched from so
     // the self-updater can find (and replace) the running .3dsx later.
-    if (argc > 0 && argv && argv[0]) updater_set_argv0(argv[0]);
+    updater_set_self_candidates(argc > 0 && argv ? argv[0] : 0,
+                            "sdmc:/3ds/waystone/waystone-3ds-spike.3dsx");
     u32* SOC_buffer = static_cast<u32*>(memalign(0x1000, 0x100000));
     bool ps_ok=false, cfgu_ok=false, soc_ok=false, romfs_ok=false, curl_ok=false;
     uint8_t* kbuf = 0;

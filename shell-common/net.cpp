@@ -401,7 +401,7 @@ int http_get(const char* url, std::string* out) {
     curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
     // GitHub API 403s the default curl UA — documented behavior change for all
     // http_get callers, required for api.github.com.
-    curl_easy_setopt(c, CURLOPT_USERAGENT, "waystone-3ds");
+    curl_easy_setopt(c, CURLOPT_USERAGENT, "waystone");
     curl_easy_setopt(c, CURLOPT_CONNECTTIMEOUT, 5L);
     curl_easy_setopt(c, CURLOPT_TIMEOUT, 15L);
     curl_apply_tls(c);
@@ -453,7 +453,7 @@ int http_download(const char* url, const char* dest_path,
     FileWriteCtx wctx = { fp, false };
     XferCtx xctx = { progress, ctx, false };
     curl_easy_setopt(c, CURLOPT_URL, url);
-    curl_easy_setopt(c, CURLOPT_USERAGENT, "waystone-3ds");
+    curl_easy_setopt(c, CURLOPT_USERAGENT, "waystone");
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, file_write_cb);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &wctx);
     apply_progress(c, &xctx);

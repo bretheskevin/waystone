@@ -19,23 +19,6 @@ extern "C" {
 #include "waystone.h"
 }
 
-static std::string check_error_message(int rc) {
-    switch (rc) {
-    case UP_NET:      return "No connection — couldn't check for updates";
-    case UP_GH:       return "GitHub error or rate-limited — try again later";
-    case UP_NO_ASSET: return "Latest release has no .3dsx build";
-    default:          return "Unexpected GitHub response";
-    }
-}
-
-static std::string install_error_message(int rc) {
-    switch (rc) {
-    case UP_NO_SELF: return "Relaunch from SD card to enable updates";
-    case UP_NET:     return "Download failed — connection lost";
-    default:         return "SD write failed";
-    }
-}
-
 SettingsScreen::SettingsScreen(Session* session)
     : session_(session),
       worker_(new UpdateWorker()),
@@ -81,7 +64,7 @@ void SettingsScreen::poll() {
                 status_text_ = "Up to date (v" + ver + ")";
             }
         } else {
-            status_text_ = check_error_message(rc);
+            status_text_ = updater_check_message(rc, ".3dsx");
             printf("[update] check failed rc=%d\n", rc);
         }
     }
@@ -94,7 +77,7 @@ void SettingsScreen::poll() {
             status_text_ = "Updated to v" + pending_ver_ + ". Restart to apply.";
             printf("[update] install succeeded\n");
         } else {
-            status_text_ = install_error_message(rc);
+            status_text_ = updater_install_message(rc);
             printf("[update] install failed rc=%d\n", rc);
         }
     }

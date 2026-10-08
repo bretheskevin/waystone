@@ -85,7 +85,7 @@ void UpdateWorker::check_worker() {
     printf("[update] worker: checking latest release\n");
     char ver[64];
     char url[768];
-    int rc = updater_check_latest(ver, sizeof(ver), url, sizeof(url));
+    int rc = updater_check_latest(".3dsx", ver, sizeof(ver), url, sizeof(url));
     check_rc_.store(rc);
     if (rc == UP_OK) {
         LightLock_Lock(&mu_);

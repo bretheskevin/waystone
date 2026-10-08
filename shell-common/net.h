@@ -84,7 +84,7 @@ int webdav_propfind_s(WebDavSession* s, const char* path,
 // Unauthenticated HTTPS GET. On HTTP 200, writes body into *out and returns 200.
 // Returns the HTTP status code on successful transport (non-200 = fetch failed).
 // Returns -1 on curl/transport error. Follows redirects; TLS via romfs:/cacert.pem.
-// Sends User-Agent "waystone-3ds" (GitHub API 403s the default curl UA).
+// Sends User-Agent "waystone" (GitHub API 403s the default curl UA).
 int http_get(const char* url, std::string* out);
 
 // Streaming download: response body is written to dest_path as it arrives (no
