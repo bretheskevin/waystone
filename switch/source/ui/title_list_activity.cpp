@@ -32,6 +32,7 @@ TitleListActivity::TitleListActivity(SyncController* ctrl, Session* session)
     : ctrl_(ctrl), session_(session) {}
 
 TitleListActivity::~TitleListActivity() {
+    session_->sync_busy = nullptr;
     poll_timer_.stop();
     if (single_ctrl_) { single_ctrl_->join(); delete single_ctrl_; }
     if (ctrl_) { ctrl_->join(); delete ctrl_; }
@@ -166,6 +167,10 @@ brls::View* TitleListActivity::createContentView() {
 
 void TitleListActivity::onContentAvailable() {
     printf("[ui] dashboard onContentAvailable\n");
+    session_->sync_busy = [this]() {
+        return ctrl_->phase() == SyncPhase::Running ||
+               (single_ctrl_ && single_ctrl_->phase() == SyncPhase::Running);
+    };
     const size_t game_count = ctrl_->titles().size();
 
     // FIX 2: The ScrollingFrame detaches its contentView (standalone Yoga layout,

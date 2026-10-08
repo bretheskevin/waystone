@@ -7,6 +7,7 @@
 #include "session_store.h"
 #include "wsconfig.h"
 #include "saves.h"
+#include "keys_file.h"
 #include "version.h"
 #include "updater.h"
 #include "keymap_3ds.h"

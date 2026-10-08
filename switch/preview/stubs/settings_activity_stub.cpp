@@ -17,3 +17,4 @@ brls::View* SettingsActivity::createContentView() {
 
 void SettingsActivity::onContentAvailable() {}
 void SettingsActivity::refresh_labels() {}
+void SettingsActivity::do_logout() {}

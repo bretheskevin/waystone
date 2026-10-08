@@ -16,6 +16,7 @@ extern "C" {
 }
 
 #include "saves.h"
+#include "keys_file.h"
 #include "wsconfig.h"
 #include "session_store.h"
 #include "secure_clear.h"

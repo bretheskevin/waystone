@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <string>
 #include "net.h"
 #include "saves.h"
@@ -42,6 +43,8 @@ struct Session {
     OwnedWebDavCfg dav;
     WaystoneShellConfig config;
     std::string config_path;  // e.g. "sdmc:/waystone/config.json"
+    // Set by the dashboard: true while a Sync All / single-title sync worker is running.
+    std::function<bool()> sync_busy;
 
     Session() = default;
     Session(const Session&) = delete;

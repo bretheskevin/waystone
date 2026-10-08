@@ -931,23 +931,6 @@ std::string get_device_id() {
     return std::string(hex, 32);
 }
 
-uint8_t* read_keys_file(const char* path, long* len_out) {
-    *len_out = 0;
-    FILE* f = fopen(path, "rb");
-    if (!f) return nullptr;
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (len <= 0) { fclose(f); return nullptr; }
-    uint8_t* buf = static_cast<uint8_t*>(malloc(static_cast<size_t>(len)));
-    if (!buf) { fclose(f); return nullptr; }
-    size_t got = fread(buf, 1, static_cast<size_t>(len), f);
-    fclose(f);
-    if (got != static_cast<size_t>(len)) { free(buf); return nullptr; }
-    *len_out = len;
-    return buf;
-}
-
 int write_save_files(const TitleInfo& title, const uint8_t* ft_ptr, size_t ft_len,
                      SaveArchiveKind kind) {
     std::vector<FileTreeEntry> entries;

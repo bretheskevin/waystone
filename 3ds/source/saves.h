@@ -45,11 +45,6 @@ std::string current_utc_time();
 // Get or create a persistent device ID (stored at sdmc:/waystone/device_id.txt).
 std::string get_device_id();
 
-// Read a file into a newly malloc'd buffer.
-// Returns the buffer (caller owns → free()) and sets *len_out, or nullptr/0 on
-// missing/empty/short-read.
-uint8_t* read_keys_file(const char* path, long* len_out);
-
 enum SaveArchiveKind {
     SaveUser,    // ARCHIVE_USER_SAVEDATA (SD media)
     SaveExtdata, // ARCHIVE_EXTDATA (always on SD)

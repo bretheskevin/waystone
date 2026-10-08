@@ -1,6 +1,7 @@
 #pragma once
 #include <borealis.hpp>
 #include "session.h"
+#include "deferred_refresh_pump.h"
 
 class SettingsActivity : public brls::Activity {
   public:
@@ -20,4 +21,7 @@ class SettingsActivity : public brls::Activity {
     brls::Label* status_label_  = nullptr;
     void refresh_labels();
     void save_settings();
+    void do_logout();
+    bool logout_pending_ = false;
+    DeferredRefreshPump pump_{[this] { do_logout(); }};
 };

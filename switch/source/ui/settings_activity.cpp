@@ -2,6 +2,8 @@
 #include "swkbd_util.h"
 #include "session_store.h"
 #include "keymap_switch.h"
+#include "keys_file.h"
+#include "unlock_activity.h"
 #include <cstdio>
 
 extern "C" {
@@ -10,7 +12,7 @@ struct Vault;
 }
 
 SettingsActivity::SettingsActivity(Session* session) : session_(session) {}
-SettingsActivity::~SettingsActivity() = default;
+SettingsActivity::~SettingsActivity() { pump_.stop(); }
 
 brls::View* SettingsActivity::createContentView()
 {
@@ -99,15 +101,16 @@ brls::View* SettingsActivity::createContentView()
     logout_label_->setFocusable(true);
     logout_label_->setTextColor(nvgRGB(220, 50, 50));
     logout_label_->registerClickAction([this](brls::View*) {
-        printf("[ui] settings: log out\n");
-        session_store_clear();
-        if (session_->vault) {
-            ws_vault_free(session_->vault);
-            session_->vault = nullptr;
+        if (session_->sync_busy && session_->sync_busy()) {
+            printf("[ui] settings: log out refused -- sync in progress\n");
+            status_label_->setText("Sync in progress \xe2\x80\x94 wait for it to finish");
+            return true;
         }
-        zeroize_string(session_->dav.pass);
-        zeroize_string(session_->dav.user);
-        status_label_->setText("Logged out. Please restart the app.");
+        if (logout_pending_) return true;
+        printf("[ui] settings: log out requested (deferred one frame)\n");
+        logout_pending_ = true;
+        status_label_->setText("Logging out\xe2\x80\xa6");
+        pump_.schedule();
         return true;
     });
     col->addView(logout_label_);
@@ -122,6 +125,7 @@ brls::View* SettingsActivity::createContentView()
 
 void SettingsActivity::onContentAvailable()
 {
+    pump_.start();
     refresh_labels();
 
     registerAction(ws_label(WsAction::Back), ws_brls(WsAction::Back), [](brls::View*) {
@@ -156,4 +160,28 @@ void SettingsActivity::refresh_labels()
         + (session_->config.safety_backup ? "ON" : "OFF"));
 
     device_label_->setText("Device ID: " + session_->device_id + " (read-only)");
+}
+
+void SettingsActivity::do_logout()
+{
+    if (!logout_pending_) return;
+    logout_pending_ = false;
+    printf("[vault] logout: clearing session + freeing vault\n");
+    session_store_clear();
+    if (session_->vault) {
+        ws_vault_free(session_->vault);
+        session_->vault = nullptr;
+    }
+    zeroize_string(session_->dav.pass);   // in place: OwnedWebDavCfg is non-movable
+    zeroize_string(session_->dav.user);
+    long klen = 0;
+    uint8_t* kbuf = read_keys_file("sdmc:/waystone/keys.json", &klen);
+    if (!kbuf || klen <= 0) {
+        printf("[vault] logout: keys.json unreadable -- staying on Settings\n");
+        status_label_->setText("Logged out. Please restart the app.");
+        return;
+    }
+    // kbuf intentionally never freed: UnlockActivity borrows it for the app lifetime (3DS does the same).
+    printf("[ui] logout -> push UnlockActivity (activities below stay; not popped)\n");
+    brls::Application::pushActivity(new UnlockActivity(session_, kbuf, static_cast<size_t>(klen)));
 }

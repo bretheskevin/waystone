@@ -14,6 +14,7 @@ extern "C" {
 #include "net.h"
 #include "net_status.h"
 #include "saves.h"
+#include "keys_file.h"
 #include "wsconfig.h"
 #include "ui/session.h"
 #include "ui/theme_tint.h"
@@ -92,62 +93,43 @@ int main(int argc, char* argv[])
         // Task 6: when session.bin exists, try auto-unlock via LoadingActivity first.
         auto route_to_first_screen = [&]() {
             const char* keys_path = "sdmc:/waystone/keys.json";
-            FILE* kf = fopen(keys_path, "rb");
-            if (kf) {
-                fseek(kf, 0, SEEK_END);
-                long klen = ftell(kf);
-                fseek(kf, 0, SEEK_SET);
-                if (klen > 0) {
-                    kbuf = static_cast<uint8_t*>(malloc(static_cast<size_t>(klen)));
-                    if (kbuf) {
-                        size_t got = fread(kbuf, 1, static_cast<size_t>(klen), kf);
-                        if (got != static_cast<size_t>(klen)) {
-                            free(kbuf);
-                            kbuf = nullptr;
-                            klen = 0;
-                        }
-                    }
-                }
-                fclose(kf);
-                if (kbuf && klen > 0) {
-                    if (session_store_exists()) {
-                        auto worker = [&session]() -> LoadingActivity::LoadResult {
-                            std::string webdav_pass;
-                            WsVault* vault = session_store_load_vault(webdav_pass);
-                            if (!vault) return {false, "session expired", {}};
+            long klen = 0;
+            kbuf = read_keys_file(keys_path, &klen);
+            if (kbuf && klen > 0) {
+                if (session_store_exists()) {
+                    auto worker = [&session]() -> LoadingActivity::LoadResult {
+                        std::string webdav_pass;
+                        WsVault* vault = session_store_load_vault(webdav_pass);
+                        if (!vault) return {false, "session expired", {}};
 
-                            session.vault          = vault;
-                            session.dav.server_url = session.config.server_url;
-                            session.dav.user       = session.config.username;
-                            session.dav.pass       = std::move(webdav_pass);
-                            zeroize_string(webdav_pass);
+                        session.vault          = vault;
+                        session.dav.server_url = session.config.server_url;
+                        session.dav.user       = session.config.username;
+                        session.dav.pass       = std::move(webdav_pass);
+                        zeroize_string(webdav_pass);
 
-                            auto titles = list_titles();
-                            return {true, "", std::move(titles)};
-                        };
+                        auto titles = list_titles();
+                        return {true, "", std::move(titles)};
+                    };
 
-                        // on_failure runs from RefreshPump::run() on the render thread.
-                        // pushActivity is safe; popActivity is NOT (UAF).
-                        auto on_failure = [&session, kbuf, klen](const std::string&) {
-                            session_store_clear();
-                            brls::Application::pushActivity(
-                                new UnlockActivity(&session, kbuf, static_cast<size_t>(klen)));
-                        };
-
-                        printf("[boot] vault present + session -> LoadingActivity\n");
-                        brls::Application::pushActivity(
-                            new LoadingActivity(&session, worker, on_failure));
-                    } else {
-                        printf("[boot] vault present, no session -> UnlockActivity\n");
+                    // on_failure runs from RefreshPump::run() on the render thread.
+                    // pushActivity is safe; popActivity is NOT (UAF).
+                    auto on_failure = [&session, kbuf, klen](const std::string&) {
+                        session_store_clear();
                         brls::Application::pushActivity(
                             new UnlockActivity(&session, kbuf, static_cast<size_t>(klen)));
-                    }
+                    };
+
+                    printf("[boot] vault present + session -> LoadingActivity\n");
+                    brls::Application::pushActivity(
+                        new LoadingActivity(&session, worker, on_failure));
                 } else {
-                    printf("[boot] no vault -> SetupActivity\n");
-                    brls::Application::pushActivity(new SetupActivity(&session));
+                    printf("[boot] vault present, no session -> UnlockActivity\n");
+                    brls::Application::pushActivity(
+                        new UnlockActivity(&session, kbuf, static_cast<size_t>(klen)));
                 }
             } else {
-                printf("[boot] no keys.json -> SetupActivity\n");
+                printf("[boot] no usable keys.json -> SetupActivity\n");
                 brls::Application::pushActivity(new SetupActivity(&session));
             }
         };
