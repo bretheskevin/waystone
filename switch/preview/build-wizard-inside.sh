@@ -187,6 +187,15 @@ OBJS+=( $(cxx "$UI/theme_tint.cpp"              ws_theme_tint) )
 OBJS+=( $(cxx "$UI/title_list_activity.cpp"     ws_title_list_activity) )
 
 # ---------------------------------------------------------------------------
+# shell-common TUs referenced by the compiled UI (history_activity -> human_timestamp).
+# Add any later shared .cpp the compiled UI files reference here as well.
+# ---------------------------------------------------------------------------
+echo "=== Compiling shell-common ===" >&2
+OBJS+=( $(cxx "$SHELL_COMMON/snapshot_browse.cpp" sc_snapshot_browse) )
+OBJS+=( $(cxx "$SHELL_COMMON/snapshot.cpp"        sc_snapshot) )
+OBJS+=( $(cxx "$SHELL_COMMON/file_tree.cpp"       sc_file_tree) )
+
+# ---------------------------------------------------------------------------
 # Preview stubs (replace Switch-only or complex real implementations)
 # ---------------------------------------------------------------------------
 echo "=== Compiling preview stubs ===" >&2
