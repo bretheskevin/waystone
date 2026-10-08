@@ -141,10 +141,13 @@ int updater_parse_release_json(const char* json, char* out_ver, size_t ver_sz,
                             const char* start = json + tokens[f + 1].start;
                             size_t len = static_cast<size_t>(
                                 tokens[f + 1].end - tokens[f + 1].start);
-                            if (len < sizeof(url)) {
+                            if (!have_asset && len < sizeof(url)) {
                                 memcpy(url, start, len);
                                 url[len] = '\0';
-                                if (ends_with_3dsx(url)) have_asset = true;
+                                if (ends_with_3dsx(url)) {
+                                    have_asset = true;
+                                    printf("[update] parse_release: picked asset %s\n", url);
+                                }
                             }
                         }
                         f++;                                  // skip key

@@ -55,6 +55,21 @@ static void test_parse_release_picks_3dsx() {
     printf("test_parse_release_picks_3dsx PASSED\n");
 }
 
+// GitHub lists the .3dsx before the .cia on real releases; a later asset must
+// not overwrite the chosen .3dsx URL.
+static void test_parse_release_3dsx_before_cia() {
+    const char* j =
+        "{\"tag_name\":\"v0.4.0\",\"assets\":["
+        "{\"browser_download_url\":\"https://example.com/dl/waystone-3ds.3dsx\"},"
+        "{\"browser_download_url\":\"https://example.com/dl/waystone-3ds.cia\"}"
+        "]}";
+    char ver[64];
+    char url[512];
+    assert(updater_parse_release_json(j, ver, sizeof(ver), url, sizeof(url)) == UP_OK);
+    assert(strcmp(url, "https://example.com/dl/waystone-3ds.3dsx") == 0);
+    printf("test_parse_release_3dsx_before_cia PASSED\n");
+}
+
 static void test_parse_release_no_asset() {
     char ver[64];
     char url[512];
@@ -80,6 +95,7 @@ static void test_parse_release_bad_json() {
 int main() {
     test_version_newer();
     test_parse_release_picks_3dsx();
+    test_parse_release_3dsx_before_cia();
     test_parse_release_no_asset();
     test_parse_release_bad_json();
     printf("All updater tests PASSED\n");
