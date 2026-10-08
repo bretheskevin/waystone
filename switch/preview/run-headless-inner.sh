@@ -170,6 +170,9 @@ echo "=== Capturing conflicts: confirm banner ==="
 # The capture() helper waits 5 seconds, so the banner is visible.
 capture "$WIZARD_OUT/conflicts-confirm.png" "$PREVIEW_DIR" "$WIZARD_BIN" conflicts-confirm
 
+echo "=== Capturing sync modal (mid-sync) ==="
+capture "$WIZARD_OUT/sync-running.png" "$PREVIEW_DIR" "$WIZARD_BIN" sync-running
+
 echo "=== Capturing dashboard (AppletFrame + icon+name game list) ==="
 capture "$WIZARD_OUT/dashboard.png" "$PREVIEW_DIR" "$WIZARD_BIN" dashboard
 

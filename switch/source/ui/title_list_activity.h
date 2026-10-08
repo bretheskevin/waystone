@@ -1,6 +1,7 @@
 #pragma once
 #include <borealis.hpp>
 #include "sync_controller.h"
+#include "sync_activity.h"
 #include "session.h"
 
 class TitleListActivity : public brls::Activity {
@@ -14,6 +15,8 @@ class TitleListActivity : public brls::Activity {
     SyncController* ctrl_;
     Session* session_;
     SyncController* single_ctrl_ = nullptr;  // owned; single-title sync (A button)
+
+    SyncController* pending_modal_ = nullptr;  // borrowed; modal to push once the dashboard is visible
 
     brls::Label* status_label_ = nullptr;
     brls::RepeatingTimer poll_timer_;

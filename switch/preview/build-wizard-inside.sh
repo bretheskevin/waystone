@@ -182,6 +182,7 @@ OBJS+=( $(cxx "$UI/no_internet_activity.cpp"    ws_no_internet_activity) )
 OBJS+=( $(cxx "$UI/loading_activity.cpp"        ws_loading_activity) )
 OBJS+=( $(cxx "$UI/conflicts_activity.cpp"      ws_conflicts_activity) )
 OBJS+=( $(cxx "$UI/history_activity.cpp"        ws_history_activity) )
+OBJS+=( $(cxx "$UI/sync_activity.cpp"           ws_sync_activity) )
 OBJS+=( $(cxx "$UI/theme_tint.cpp"              ws_theme_tint) )
 # Real TitleListActivity — compiled from source so the dashboard preview is faithful.
 OBJS+=( $(cxx "$UI/title_list_activity.cpp"     ws_title_list_activity) )
@@ -194,6 +195,7 @@ echo "=== Compiling shell-common ===" >&2
 OBJS+=( $(cxx "$SHELL_COMMON/snapshot_browse.cpp" sc_snapshot_browse) )
 OBJS+=( $(cxx "$SHELL_COMMON/snapshot.cpp"        sc_snapshot) )
 OBJS+=( $(cxx "$SHELL_COMMON/file_tree.cpp"       sc_file_tree) )
+OBJS+=( $(cxx "$SHELL_COMMON/sync_summary.cpp"    sc_sync_summary) )
 
 # ---------------------------------------------------------------------------
 # Preview stubs (replace Switch-only or complex real implementations)

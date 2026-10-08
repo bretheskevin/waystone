@@ -192,6 +192,12 @@ void TitleListActivity::onContentAvailable() {
     }
 
     poll_timer_.setCallback([this, game_count]() {
+        if (pending_modal_ && !isHidden()) {
+            SyncController* c = pending_modal_;
+            pending_modal_ = nullptr;
+            printf("[ui] dashboard visible again -> push deferred sync modal\n");
+            brls::Application::pushActivity(new SyncActivity(c));
+        }
         std::string sync_status;
         if (single_ctrl_ && single_ctrl_->phase() == SyncPhase::Running)
             sync_status = single_ctrl_->status();
@@ -244,18 +250,23 @@ void TitleListActivity::onContentAvailable() {
 
 void TitleListActivity::start_sync_or_gate() {
     printf("[ui] sync all triggered (%zu titles)\n", ctrl_->titles().size());
-    if (single_ctrl_ && single_ctrl_->phase() == SyncPhase::Running) {
-        printf("[sync] sync all: single-title sync in progress, skip\n");
+    if (ctrl_->phase() == SyncPhase::Running ||
+        (single_ctrl_ && single_ctrl_->phase() == SyncPhase::Running)) {
+        printf("[sync] sync all: a sync is already running, skip\n");
         return;
     }
     if (!network_available()) {
+        // NoInternetActivity pops itself then calls back: never push from that callback.
         brls::Application::pushActivity(
             new NoInternetActivity(NoInternetReason::NoNetwork, [this]() {
                 ctrl_->start();
+                pending_modal_ = ctrl_;
+                printf("[ui] sync all: modal deferred until dashboard is visible again\n");
             }));
         return;
     }
     ctrl_->start();
+    brls::Application::pushActivity(new SyncActivity(ctrl_));
 }
 
 void TitleListActivity::start_single_sync_or_gate() {
@@ -293,10 +304,13 @@ void TitleListActivity::start_single_sync_or_gate() {
         brls::Application::pushActivity(
             new NoInternetActivity(NoInternetReason::NoNetwork, [this]() {
                 single_ctrl_->start();
+                pending_modal_ = single_ctrl_;
+                printf("[ui] sync single: modal deferred until dashboard is visible again\n");
             }));
         return;
     }
     single_ctrl_->start();
+    brls::Application::pushActivity(new SyncActivity(single_ctrl_));
 }
 
 size_t TitleListActivity::focused_title_index() const {

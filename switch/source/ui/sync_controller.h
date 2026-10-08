@@ -32,6 +32,13 @@ public:
     std::vector<TitleResult> results() const;  // one per title, mutex-guarded snapshot
     const std::vector<TitleInfo>& titles() const;  // immutable after construction
 
+    std::string step() const;      // current step label, "" between titles
+    int current_index() const;     // -1 when none
+    size_t bytes_got() const;
+    size_t bytes_total() const;
+    float progress() const;        // 0..1 single pass
+    int total_count() const;
+
 private:
     WsVault* vault_;
     AccountUid uid_;
@@ -50,7 +57,13 @@ private:
     std::string status_;
     std::vector<TitleResult> results_;
     std::thread thread_;
+    std::atomic<int> cur_index_{-1};
+    std::atomic<size_t> xfer_got_{0};
+    std::atomic<size_t> xfer_total_{0};
+    std::string step_;  // guarded by mu_
 
+    static void on_step(void* ctx, const char* label);
+    static bool on_bytes(size_t got, size_t total, void* ctx);
     void worker();
     void set_result(size_t i, TitleState s, const std::string& reason);
 };

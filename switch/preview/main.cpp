@@ -13,6 +13,7 @@
  *   conflicts       — ConflictsActivity with 3 canned conflicts (normal mode)
  *   conflicts-confirm — ConflictsActivity with confirm banner auto-triggered
  *   history           — HistoryActivity with 3 canned history entries
+ *   sync-running      — SyncActivity modal with canned mid-sync progress
  *   dashboard         — TitleListActivity (AppletFrame + icon+name rows)
  *
  * Set BOREALIS_THEME=DARK before running to force the dark theme.
@@ -31,11 +32,14 @@
 #include "history_controller.h"
 #include "history_activity.h"
 #include "title_list_activity.h"
+#include "sync_activity.h"
 #include "session.h"
 #include <chrono>
 #include <cstring>
 #include <string>
 #include <thread>
+
+extern bool g_preview_sync_running;
 
 // ---------------------------------------------------------------------------
 // Preview-only subclass of SetupActivity.
@@ -184,6 +188,11 @@ int main(int argc, char** argv)
         ctrl->start_scan();
         brls::Application::pushActivity(
             new PreviewConflictsConfirmActivity(ctrl));
+
+    } else if (strcmp(mode, "sync-running") == 0) {
+        g_preview_sync_running = true;
+        auto* ctrl = new SyncController(nullptr, AccountUid{}, "", WebDavCfg{nullptr, nullptr, nullptr}, {}, &session.config);
+        brls::Application::pushActivity(new SyncActivity(ctrl));
 
     } else if (strcmp(mode, "history") == 0) {
         TitleInfo ti;

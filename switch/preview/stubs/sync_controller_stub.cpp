@@ -9,6 +9,8 @@
  */
 #include "sync_controller.h"
 
+bool g_preview_sync_running = false;
+
 // Placeholder icon path — resolved relative to switch/preview/ where the
 // preview binary runs, matching BRLS_RESOURCES="./resources/".
 static const char* PREVIEW_ICON = "./resources/placeholder_icon.jpg";
@@ -46,18 +48,31 @@ void SyncController::join() {}
 
 SyncPhase SyncController::phase() const
 {
-    return SyncPhase::Idle;
+    return g_preview_sync_running ? SyncPhase::Running : SyncPhase::Idle;
 }
 
 std::string SyncController::status() const
 {
-    return "Idle";
+    return g_preview_sync_running ? "Syncing 3/8" : "Idle";
 }
 
 std::vector<TitleResult> SyncController::results() const
 {
-    return std::vector<TitleResult>(titles_.size());
+    std::vector<TitleResult> r(titles_.size());
+    if (g_preview_sync_running && r.size() > 2) {
+        r[0].state = TitleState::InSync;
+        r[1].state = TitleState::InSync;
+        r[2].state = TitleState::Active;
+    }
+    return r;
 }
+
+std::string SyncController::step() const { return g_preview_sync_running ? "Uploading" : ""; }
+int SyncController::current_index() const { return g_preview_sync_running ? 2 : -1; }
+size_t SyncController::bytes_got() const { return g_preview_sync_running ? 512 * 1024 : 0; }
+size_t SyncController::bytes_total() const { return g_preview_sync_running ? 2 * 1024 * 1024 : 0; }
+float SyncController::progress() const { return g_preview_sync_running ? 0.31f : 0.0f; }
+int SyncController::total_count() const { return (int)titles_.size(); }
 
 const std::vector<TitleInfo>& SyncController::titles() const
 {
