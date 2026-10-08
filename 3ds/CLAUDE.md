@@ -79,9 +79,9 @@ https://libctru.devkitpro.org/swkbd_8h_source.html before using it.
 
 ## Engine facts (unchanged by the GUI)
 
-- **No `AccountUid`** — 3DS saves are per-title. `push_title`/`pull_title` take
-  `(vault, title, device_id, dav)` (see `source/sync.h`), and the `Session`/`sync_worker` drop the uid
-  the Switch carries.
+- **No `AccountUid`** — 3DS saves are per-title. Sync runs through the shared engine
+  (`shell-common/sync_engine.h`) with `ctr_shell_ops()` (see `source/sync.h`), whose ctx is unused; the
+  `Session`/`sync_worker` drop the uid the Switch carries.
 - Bootstrap order (LIFO cleanup): `gfxInitDefault`→`psInit`→`socInit(aligned SOC buffer)`→`romfsInit`
   (before curl)→`curl_global_init`; teardown reverse. GUI adds `C3D_Init`/`C2D_Init` after
   `gfxInitDefault` and `C2D_Fini`/`C3D_Fini` before `gfxExit`.

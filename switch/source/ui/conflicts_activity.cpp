@@ -175,8 +175,8 @@ void ConflictsActivity::rebuild_list() {
                  "%s | %s%s\n  Local: %.12s (%s)\n  Remote: %.12s (%s, dev:%s)",
                  item.title_name.c_str(), item.group_key.c_str(),
                  item.queued ? "  [Queued]" : "",
-                 item.local_hash.c_str(), item.local_mtime.c_str(),
-                 item.remote_hash.c_str(), item.remote_mtime.c_str(),
+                 item.local_hash.c_str(), item.local_mtime.empty() ? "time unknown" : item.local_mtime.c_str(),
+                 item.remote_hash.c_str(), item.remote_mtime.empty() ? "time unknown" : item.remote_mtime.c_str(),
                  item.remote_device_id.c_str());
 
         auto* row = new brls::Box(brls::Axis::ROW);

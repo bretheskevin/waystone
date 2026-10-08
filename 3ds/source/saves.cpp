@@ -392,7 +392,7 @@ std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav) {
 
                     // Build TitleInfo and read SMDH BEFORE the filter so
                     // the game-key derivation uses the SMDH display name —
-                    // the same name that extract_save_json / push_title will
+                    // the same name that extract_save_json / the sync engine will
                     // feed to the Rust normalizer.
                     TitleInfo info;
                     info.title_id  = tid;

@@ -237,6 +237,24 @@ static void test_remote_newer_pulls_and_updates_base() {
     printf("test_remote_newer_pulls_and_updates_base PASSED\n");
 }
 
+static void test_conflict_resolved_remote_pulls_folded_head() {
+    reset();
+    seed_head("sw/game/main", "me", "h0", "2026-01-01T00:00:00Z");
+    seed_head("sw/game/main", "other", "h3", "2026-01-03T00:00:00Z");
+    seed_blob("sw/game/main", "h3", "remote");
+    g_events.clear();
+    g_decisions.push_back("{\"type\":\"conflict_resolved\",\"winner\":\"remote\"}");
+    FakeTitle t; t.saves.push_back(save("sw/game/main", "h1", "2026-01-02T00:00:00Z"));
+    TitleTally r = sync_title(0, &t, "game", fake_ops(), cfg(0, true), 0, 0);
+    assert(r.downloaded && !r.failed && !r.uploaded && !r.conflict);
+    assert(first_event("write:sw/game/main") >= 0);
+    std::string me = file_str("sw/game/main/heads/me.json");
+    assert(json_get_string(me.c_str(), "hash") == "h3");
+    assert(json_get_string(me.c_str(), "mtime") == "2026-01-03T00:00:00Z");
+    assert(g_live == 0);
+    printf("test_conflict_resolved_remote_pulls_folded_head PASSED\n");
+}
+
 static void test_safety_backup_off_skips_snapshot() {
     reset();
     seed_head("sw/game/main", "me", "h0", "2026-01-01T00:00:00Z");
@@ -407,6 +425,7 @@ int main() {
     test_adopt_normalized_owns_or_frees_buffer();
     test_first_upload_pushes();
     test_remote_newer_pulls_and_updates_base();
+    test_conflict_resolved_remote_pulls_folded_head();
     test_safety_backup_off_skips_snapshot();
     test_prompt_conflict_is_skipped();
     test_newest_wins_without_mtime_downgrades_to_prompt();

@@ -16,6 +16,9 @@ permissions:
 jobs:
   build-3ds:
     runs-on: ubuntu-latest
+    # Build inside the devkitARM container: it ships devkitARM/libctru/3ds-curl
+    # preinstalled (same base as 3ds/Dockerfile, minus the corp-CA injection,
+    # which is gitignored and absent in CI).
     container: devkitpro/devkitarm
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +40,9 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
+          # makerom v0.18.4 (3DSGuy/Project_CTR) — v0.19.0 needs GLIBC_2.38, image has 2.36
+          # bannertool v1.2.2 (Epicpkmn11/bannertool — Steveice10's repo is archived/404)
+          # Identical pins to 3ds/Dockerfile; sha256 pinned because release assets are mutable.
           apt-get update -y
           apt-get install -y --no-install-recommends unzip
           curl -fsSL "https://github.com/3DSGuy/Project_CTR/releases/download/makerom-v0.18.4/makerom-v0.18.4-ubuntu_x86_64.zip" -o /tmp/makerom.zip

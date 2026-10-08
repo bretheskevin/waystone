@@ -227,7 +227,7 @@ void ConflictController::start_resolve(uint32_t id, bool keep_local) {
     if (!running_.compare_exchange_strong(expected, true)) {
         printf("[conflict] resolve id=%u ignored: worker busy\n", id);
         std::lock_guard<std::mutex> lk(mu_);
-        status_ = "Busy finishing the scan \xe2\x80\x94 try again";
+        status_ = "Busy \xe2\x80\x94 try again in a moment";
         return;
     }
     join();
