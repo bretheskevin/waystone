@@ -176,8 +176,8 @@ void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
             update_cancelled_ = false;
             install_started_ = true;
             status_text_ = "Downloading...";
-            last_phase_ = UpdatePhase::Idle;  // re-arm transition detection
             worker_->start_install(pending_url_);
+            last_phase_ = UpdatePhase::Downloading;  // e.g. UP_NO_SELF lands before the next poll
         } else if (kDown & ws_key(WsAction::Cancel)) {
             printf("[update] update cancelled\n");
             confirm_update_ = false;
@@ -225,6 +225,10 @@ void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
                 break;
             }
             case 4: {
+                if (worker_->is_running()) {
+                    printf("[update] check ignored -- update worker busy\n");
+                    break;
+                }
                 printf("[update] check requested from settings\n");
                 install_started_ = false;
                 confirm_update_ = false;
@@ -232,9 +236,9 @@ void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
                 pending_ver_.clear();
                 pending_url_.clear();
                 status_text_ = "Checking for updates...";
-                last_phase_ = UpdatePhase::Idle;  // re-arm transition detection
                 phase_ = UpdatePhase::Checking;
                 worker_->start_check();
+                last_phase_ = UpdatePhase::Checking;  // a check that fails before the next poll still reports
                 break;
             }
             case 5: {
