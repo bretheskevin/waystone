@@ -111,6 +111,7 @@ brls::View* SettingsActivity::createContentView()
         printf("[update] check requested from settings\n");
         install_started_ = false;
         updater_->start_check();
+        last_phase_ = UpdatePhase::Checking;  // a check that fails before the next poll still reports
         status_label_->setText("Checking for updates\xe2\x80\xa6");
         return true;
     });
@@ -243,6 +244,7 @@ bool SettingsActivity::consume_confirm()
     confirm_update_ = false;
     install_started_ = true;
     updater_->start_install(url);
+    last_phase_ = UpdatePhase::Downloading;  // e.g. UP_NO_SELF returns before the next poll
     status_label_->setText("Downloading\xe2\x80\xa6");
     pump_.schedule();
     return true;
