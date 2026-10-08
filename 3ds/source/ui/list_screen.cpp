@@ -181,7 +181,7 @@ void ListScreen::draw_bottom(C3D_RenderTarget* target) {
     float footer_y = (float)SCREEN_BOT_H;
     if (has_back() && !modal_active()) {
         footer_y -= FOOTER_H;
-        draw_footer_hint(buf, "B: Back");
+        draw_footer_hint(buf, ws_hint(WsAction::Back).c_str());
     }
 
     float bar_total_h = (rows > 0)
@@ -239,10 +239,10 @@ void ListScreen::draw_action_bar(C2D_TextBuf buf, float bar_y,
                 draw_rounded_rect(bx, y, 0.5f, btn_w, ABTN_H,
                                   RAD_MD, CLR_NEUTRAL_200);
                 float th = text_height(buf, TEXT_BASE, btn_text);
-                draw_text_centered(buf, bx,
-                                   y + (ABTN_H - th) / 2.0f,
-                                   0.51f, TEXT_BASE, CLR_NEUTRAL_400,
-                                   btn_text, btn_w);
+                draw_text_centered_fit(buf, bx + (float)SP_XS,
+                                       y + (ABTN_H - th) / 2.0f,
+                                       0.51f, TEXT_BASE, CLR_NEUTRAL_400,
+                                       btn_text, btn_w - 2.0f * (float)SP_XS, TEXT_BASE * 0.6f);
                 r.x = bx; r.y = y; r.w = btn_w; r.h = ABTN_H;
             }
             action_rects_.push_back(r);
@@ -274,8 +274,9 @@ void ListScreen::handle_input(u32 kDown, touchPosition touch) {
         clamp_scroll();
     }
 
-    // B: Back
-    if (kDown & KEY_B) {
+    // B: Back (or Cancel while a confirm modal is up)
+    u32 back_key = modal_active() ? ws_key(WsAction::Cancel) : ws_key(WsAction::Back);
+    if (kDown & back_key) {
         if (has_back() || modal_active()) {
             printf("[ui] back pressed\n");
             on_back();

@@ -2,6 +2,7 @@
 #include "app.h"
 #include "theme.h"
 #include "widgets.h"
+#include "keymap_3ds.h"
 #include "snapshot_browse.h" // human_size
 #include <cstdio>
 
@@ -167,9 +168,12 @@ void SyncScreen::draw_bottom(C3D_RenderTarget* /*target*/) {
         y += ROW_PITCH;
     }
 
-    const char* hint = "Syncing... please wait";
-    if (finished()) hint = (n > vis) ? "A: Continue  D-Pad: Scroll" : "Press A to continue";
-    draw_footer_hint(buf, hint);
+    std::string hint = "Syncing... please wait";
+    if (finished()) {
+        hint = ws_hint(WsAction::Continue);
+        if (n > vis) hint += "  D-Pad: Scroll";
+    }
+    draw_footer_hint(buf, hint.c_str());
 }
 
 void SyncScreen::handle_input(u32 kDown, touchPosition /*touch*/) {
@@ -183,7 +187,7 @@ void SyncScreen::handle_input(u32 kDown, touchPosition /*touch*/) {
         scroll_++;
         printf("[ui] sync list scroll -> %zu\n", scroll_);
     }
-    if (kDown & (KEY_A | KEY_B)) {
+    if (kDown & (ws_key(WsAction::Continue) | ws_key(WsAction::Back))) {
         printf("[sync] modal loader dismissed by user\n");
         App::instance().pop_screen();  // deletes this
         return;

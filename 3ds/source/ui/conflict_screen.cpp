@@ -99,7 +99,7 @@ void ConflictScreen::draw_detail(C2D_TextBuf buf,
     if (confirm_remote_) {
         draw_confirm_banner(buf, area_y, area_h,
                             "Overwrite local with remote?",
-                            "A: Confirm   B: Cancel",
+                            ws_confirm_cancel_hint().c_str(),
                             0,
                             44.0f);
         return;
@@ -154,16 +154,13 @@ void ConflictScreen::draw_detail(C2D_TextBuf buf,
 std::vector<Action> ConflictScreen::actions() {
     std::vector<Action> a;
     if (confirm_remote_) {
-        a.push_back({KEY_A, "A", "Confirm",
-                     ACT_CONFIRM, true, ButtonStyle::PRIMARY});
+        a.push_back(make_action(WsAction::Confirm, ACT_CONFIRM, true, ButtonStyle::PRIMARY));
     } else {
         bool focus_ok = cursor_ < items_.size() && !items_[cursor_].queued;
         bool can_act = (phase_ == ConflictPhase::Ready ||
                         phase_ == ConflictPhase::Scanning) && focus_ok;
-        a.push_back({KEY_A, "A", "Keep Local",
-                     ACT_KEEP_LOCAL, can_act, ButtonStyle::PRIMARY});
-        a.push_back({KEY_X, "X", "Keep Remote",
-                     ACT_KEEP_REMOTE, can_act, ButtonStyle::SECONDARY});
+        a.push_back(make_action(WsAction::KeepLocal,  ACT_KEEP_LOCAL,  can_act, ButtonStyle::PRIMARY));
+        a.push_back(make_action(WsAction::KeepRemote, ACT_KEEP_REMOTE, can_act, ButtonStyle::SECONDARY));
     }
     return a;
 }

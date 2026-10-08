@@ -2,6 +2,8 @@
 #include "app.h"
 #include "theme.h"
 #include "widgets.h"
+#include "keymap_3ds.h"
+#include <cstdio>
 
 // Mirror the exact Switch wording; split at the sentence boundary so each
 // line fits the 400 px top screen at TEXT_SM.
@@ -49,12 +51,13 @@ void NoInternetScreen::draw_bottom(C3D_RenderTarget* /*target*/) {
     float btn_x = ((float)SCREEN_BOT_W - btn_w) / 2.0f;
     float btn_y = ((float)SCREEN_BOT_H - btn_h) / 2.0f - 20.0f;
     retry_rect_ = draw_button(buf, btn_x, btn_y, btn_w, btn_h,
-                              "Retry", ButtonStyle::PRIMARY, /*focused=*/true);
-    draw_footer_hint(buf, "A: Retry  B: Exit");
+                              ws_label(WsAction::Retry), ButtonStyle::PRIMARY, /*focused=*/true);
+    static const WsAction acts[] = { WsAction::Retry, WsAction::ExitApp };
+    draw_footer_hint(buf, ws_hint_bar(acts).c_str());
 }
 
 void NoInternetScreen::handle_input(u32 kDown, touchPosition touch) {
-    bool retry = (kDown & KEY_A) != 0;
+    bool retry = (kDown & ws_key(WsAction::Retry)) != 0;
     if (!retry && (touch.px != 0 || touch.py != 0)) {
         retry = retry_rect_.contains((float)touch.px, (float)touch.py);
     }
@@ -72,7 +75,8 @@ void NoInternetScreen::handle_input(u32 kDown, touchPosition touch) {
         }
     }
 
-    if (kDown & KEY_B) {
+    if (kDown & ws_key(WsAction::ExitApp)) {
+        printf("[ui] no-internet: exit app\n");
         App::instance().quit();
     }
 }

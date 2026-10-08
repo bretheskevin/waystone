@@ -1,5 +1,6 @@
 #include "app.h"
 #include "theme.h"
+#include "keymap_3ds.h"
 #include <cstdio>
 
 App* App::instance_ = 0;
@@ -32,7 +33,11 @@ void App::run() {
         hidScanInput();
         u32 kDown = hidKeysDown();
         touchPosition touch; hidTouchRead(&touch);
-        if (kDown & KEY_START) { quit(); break; }
+        if (kDown & ws_key(WsAction::Quit)) {
+            printf("[ui] quit requested (%s)\n", ws_glyph(ws_button(WsAction::Quit)));
+            quit();
+            break;
+        }
         // Reap deferred background workers; drop each once it reports finished.
         for (size_t i = 0; i < reapers_.size(); ) {
             if (reapers_[i]()) reapers_.erase(reapers_.begin() + (long)i);

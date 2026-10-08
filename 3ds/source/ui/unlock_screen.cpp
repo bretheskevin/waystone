@@ -5,6 +5,7 @@
 #include "app.h"
 #include "theme.h"
 #include "worker_thread.h"
+#include "keymap_3ds.h"
 #include <cstdio>
 
 extern "C" {
@@ -145,8 +146,9 @@ void UnlockScreen::draw_bottom(C3D_RenderTarget* target) {
 
 void UnlockScreen::handle_input(u32 kDown, touchPosition touch) {
     if (unlocking_) return;
-    if (kDown & KEY_Y) {
+    if (kDown & ws_key(WsAction::ToggleRecovery)) {
         recovery_mode_ = !recovery_mode_;
+        printf("[ui] unlock: recovery mode -> %s\n", recovery_mode_ ? "on" : "off");
         zeroize_string(wizard_.value(FIELD_PASSPHRASE));
         wizard_.clear_error();
         wizard_.reload_steps(make_steps());

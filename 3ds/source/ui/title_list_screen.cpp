@@ -124,12 +124,12 @@ void TitleListScreen::draw_detail(C2D_TextBuf buf, float area_y, float area_h) {
     bool enabled = !titles_.empty();
     if (enabled) {
         sync_all_btn_rect_ = draw_button(buf, btn_x, btn_y, BTN_W, BTN_H,
-                                         "Sync All", ButtonStyle::PRIMARY, /*focused=*/false);
+                                         ws_label(WsAction::SyncAll), ButtonStyle::PRIMARY, /*focused=*/false);
     } else {
         draw_rounded_rect(btn_x, btn_y, 0.5f, BTN_W, BTN_H, RAD_MD, CLR_NEUTRAL_200);
-        float th = text_height(buf, TEXT_BASE, "Sync All");
+        float th = text_height(buf, TEXT_BASE, ws_label(WsAction::SyncAll));
         draw_text_centered(buf, btn_x, btn_y + (BTN_H - th) / 2.0f,
-                           0.51f, TEXT_BASE, CLR_NEUTRAL_400, "Sync All", BTN_W);
+                           0.51f, TEXT_BASE, CLR_NEUTRAL_400, ws_label(WsAction::SyncAll), BTN_W);
         sync_all_btn_rect_ = {btn_x, btn_y, BTN_W, BTN_H};
     }
 }
@@ -138,18 +138,12 @@ std::vector<Action> TitleListScreen::actions() {
     bool has_sel = !titles_.empty() && cursor_ < titles_.size();
     bool has_any = !titles_.empty();
     std::vector<Action> a;
-    a.push_back({KEY_A, "A", "Sync Game",
-                 ACT_SYNC, has_sel, ButtonStyle::PRIMARY});
-    a.push_back({KEY_SELECT, "sel.", "Sync All",
-                 ACT_SYNC_ALL, has_any, ButtonStyle::SECONDARY});
-    a.push_back({KEY_X, "X", "Conflicts",
-                 ACT_CONFLICTS, true, ButtonStyle::SECONDARY});
-    a.push_back({KEY_Y, "Y", "Settings",
-                 ACT_SETTINGS, true, ButtonStyle::SECONDARY});
-    a.push_back({KEY_L, "L", "Snapshots",
-                 ACT_SNAPSHOTS, has_sel, ButtonStyle::SECONDARY});
-    a.push_back({KEY_R, "R", "History",
-                 ACT_HISTORY, has_sel, ButtonStyle::SECONDARY});
+    a.push_back(make_action(WsAction::SyncGame,      ACT_SYNC,      has_sel, ButtonStyle::PRIMARY));
+    a.push_back(make_action(WsAction::SyncAll,       ACT_SYNC_ALL,  has_any, ButtonStyle::SECONDARY));
+    a.push_back(make_action(WsAction::OpenConflicts, ACT_CONFLICTS, true,    ButtonStyle::SECONDARY));
+    a.push_back(make_action(WsAction::OpenSettings,  ACT_SETTINGS,  true,    ButtonStyle::SECONDARY));
+    a.push_back(make_action(WsAction::OpenSnapshots, ACT_SNAPSHOTS, has_sel, ButtonStyle::SECONDARY));
+    a.push_back(make_action(WsAction::OpenHistory,   ACT_HISTORY,   has_sel, ButtonStyle::SECONDARY));
     return a;
 }
 
@@ -163,6 +157,7 @@ void TitleListScreen::on_action(int id) {
         }
         break;
     case ACT_SYNC_ALL:
+        printf("[ui] sync all triggered (%zu titles)\n", titles_.size());
         printf("[sync] sync all: %zu titles\n", titles_.size());
         start_sync_or_gate(titles_);
         break;
@@ -193,7 +188,7 @@ void TitleListScreen::handle_input(u32 kDown, touchPosition touch) {
     if (touch.px != 0 || touch.py != 0) {
         if (sync_all_btn_rect_.contains((float)touch.px, (float)touch.py)) {
             if (!titles_.empty()) {
-                printf("[ui] Sync All button tapped\n");
+                printf("[ui] sync all triggered (tap, %zu titles)\n", titles_.size());
                 start_sync_or_gate(titles_);
             } else {
                 printf("[ui] Sync All button tapped (no-op: no titles)\n");

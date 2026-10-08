@@ -33,7 +33,7 @@ void RestoreBrowseScreen::draw_detail(C2D_TextBuf buf,
         draw_confirm_banner(buf, area_y, area_h,
                             confirm_line1(),
                             "Current save will be backed up first.",
-                            "A: Confirm   B: Cancel",
+                            ws_confirm_cancel_hint().c_str(),
                             54.0f);
         return;
     }
@@ -43,12 +43,10 @@ void RestoreBrowseScreen::draw_detail(C2D_TextBuf buf,
 std::vector<Action> RestoreBrowseScreen::actions() {
     std::vector<Action> a;
     if (confirm_restore_) {
-        a.push_back({KEY_A, "A", "Confirm",
-                     ACT_CONFIRM, true, ButtonStyle::PRIMARY});
+        a.push_back(make_action(WsAction::Confirm, ACT_CONFIRM, true, ButtonStyle::PRIMARY));
     } else {
         bool can = (browse_phase() == BrowsePhase::Ready && item_count() > 0);
-        a.push_back({KEY_A, "A", "Restore",
-                     ACT_RESTORE, can, ButtonStyle::PRIMARY});
+        a.push_back(make_action(WsAction::Restore, ACT_RESTORE, can, ButtonStyle::PRIMARY));
     }
     return a;
 }

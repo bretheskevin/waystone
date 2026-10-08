@@ -3,6 +3,8 @@
 #include "app.h"
 #include "theme.h"
 #include "widgets.h"
+#include "keymap_3ds.h"
+#include <cstdio>
 
 RecoveryScreen::RecoveryScreen(Session* session,
                                const std::string& recovery_hex,
@@ -41,12 +43,12 @@ void RecoveryScreen::draw_bottom(C3D_RenderTarget* target) {
     float btn_w = 160.0f, btn_h = 32.0f;
     float btn_x = ((float)SCREEN_BOT_W - btn_w) / 2.0f;
     draw_button(buf, btn_x, 130.0f, btn_w, btn_h, "I've saved it", ButtonStyle::PRIMARY, true);
-    draw_footer_hint(buf, "A: Confirm");
+    draw_footer_hint(buf, ws_hint(WsAction::Continue).c_str());
 }
 
 void RecoveryScreen::handle_input(u32 kDown, touchPosition touch) {
     bool confirm = false;
-    if (kDown & KEY_A) confirm = true;
+    if (kDown & ws_key(WsAction::Continue)) confirm = true;
     if (!confirm && (touch.px != 0 || touch.py != 0)) {
         float btn_w = 160.0f, btn_h = 32.0f;
         float btn_x = ((float)SCREEN_BOT_W - btn_w) / 2.0f;
@@ -54,6 +56,7 @@ void RecoveryScreen::handle_input(u32 kDown, touchPosition touch) {
         if (btn.contains((float)touch.px, (float)touch.py)) confirm = true;
     }
     if (confirm) {
+        printf("[ui] recovery key acknowledged\n");
         // set_screen deletes 'this'
         // list_titles runs off the render thread inside LoadingScreen
         App::instance().set_screen(new LoadingScreen(session_, false));

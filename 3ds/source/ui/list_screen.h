@@ -2,17 +2,23 @@
 #include "screen.h"
 #include "widgets.h"
 #include "theme.h"
+#include "keymap_3ds.h"
 #include <vector>
 #include <string>
 
 struct Action {
-    u32         key;      // KEY_A, KEY_X, KEY_Y, KEY_L, KEY_R; 0 = touch-only
-    const char* glyph;   // "A"/"X"/"Y"/"L"/"R" drawn on the button face
+    u32         key;      // from ws_key(); 0 = touch-only
+    const char* glyph;   // from ws_glyph(); drawn before the label
     const char* label;   // "Sync All" -- always a string literal (no heap alloc per frame)
     int         id;      // passed to on_action()
     bool        enabled;
     ButtonStyle style;   // PRIMARY / SECONDARY
 };
+
+inline Action make_action(WsAction wa, int id, bool enabled, ButtonStyle style) {
+    Action a = { ws_key(wa), ws_glyph(ws_button(wa)), ws_label(wa), id, enabled, style };
+    return a;
+}
 
 class App;  // forward; include app.h only in the .cpp
 

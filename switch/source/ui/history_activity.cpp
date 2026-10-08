@@ -1,6 +1,8 @@
 #include "history_activity.h"
 #include "snapshot_browse.h" // human_timestamp
 #include "borealis_focus.h"
+#include "keymap_switch.h"
+#include "confirm_banner.h"
 #include <cstdio>
 
 HistoryActivity::HistoryActivity(HistoryController* ctrl) : ctrl_(ctrl) {}
@@ -56,7 +58,7 @@ void HistoryActivity::onContentAvailable() {
     });
     poll_timer_.start(300);
 
-    registerAction("Restore", brls::BUTTON_A, [this](brls::View*) {
+    registerAction(ws_label(WsAction::Restore), ws_brls(WsAction::Restore), [this](brls::View*) {
         if (confirm_restore_) {
             ctrl_->start_restore(confirm_index_);
             confirm_restore_ = false;
@@ -74,7 +76,7 @@ void HistoryActivity::onContentAvailable() {
         return true;
     });
 
-    registerAction("Back", brls::BUTTON_B, [this](brls::View*) {
+    registerAction(ws_label(WsAction::Back), ws_brls(WsAction::Back), [this](brls::View*) {
         if (confirm_restore_) {
             confirm_restore_ = false;
             schedule_refresh();
@@ -156,31 +158,5 @@ void HistoryActivity::focus_selected_row() {
 }
 
 brls::Box* HistoryActivity::build_confirm_banner() {
-    auto* box = new brls::Box(brls::Axis::COLUMN);
-    box->setPadding(12.0f);
-    box->setMargins(12.0f, 0.0f, 12.0f, 0.0f);
-    box->setBackgroundColor(nvgRGBA(0xFF, 0xAA, 0x00, 0xFF));
-
-    auto* line1 = new brls::Label();
-    line1->setText("Restore this version?");
-    line1->setFontSize(22.0f);
-    line1->setTextColor(nvgRGB(0x1A, 0x1A, 0x1A));
-    line1->setSingleLine(true);
-    box->addView(line1);
-
-    auto* line2 = new brls::Label();
-    line2->setText("Current save will be backed up first.");
-    line2->setFontSize(18.0f);
-    line2->setTextColor(nvgRGB(0x33, 0x33, 0x33));
-    line2->setSingleLine(true);
-    box->addView(line2);
-
-    auto* line3 = new brls::Label();
-    line3->setText("\xee\x82\xa0 Confirm   \xee\x82\xa1 Cancel");
-    line3->setFontSize(18.0f);
-    line3->setTextColor(nvgRGB(0x33, 0x33, 0x33));
-    line3->setSingleLine(true);
-    box->addView(line3);
-
-    return box;
+    return make_confirm_banner("Restore this version?", "Current save will be backed up first.");
 }

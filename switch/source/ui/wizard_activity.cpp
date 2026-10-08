@@ -1,20 +1,17 @@
 #include "wizard_activity.h"
 #include "applet_footer_hint.h"
+#include "keymap_switch.h"
 #include "session.h"
 #include "swkbd_util.h"
 #include <cstdio>
 
-// NintendoExt (PlSharedFontType_NintendoExt) private-use button glyph codepoints:
-//   U+E0A0  "\xEE\x82\xA0"  A button
-//   U+E0A5  "\xEE\x82\xA5"  R shoulder button (Switch nomenclature: R, not RB)
-//   U+E0A4  "\xEE\x82\xA4"  L shoulder button (Switch nomenclature: L, not LB)
-//   U+E0B5  "\xEE\x82\xB5"  Plus (+) button  [source: WerWolv/libtesla, confirmed NintendoExt]
-// On Switch hardware these render via the NintendoExt system font registered as
-// FONT_SWITCH_ICONS (fallback of FONT_REGULAR).  On desktop/preview the font is
-// absent (User-Switch-Icons.ttf not provided), so they appear as replacement boxes.
-static std::string build_hint_text(const std::string& rb_label) {
-    return "\xEE\x82\xA0 Edit   \xc2\xb7   \xEE\x82\xA5 " + rb_label
-         + "   \xc2\xb7   \xEE\x82\xA4 Back   \xc2\xb7   \xEE\x82\xB5 Exit";
+static std::string build_hint_text(const std::string& next_label, bool show_back) {
+    const std::string sep = ws_hint_style().item_sep;
+    std::string s = ws_hint(WsAction::WizardEdit) + sep
+                  + ws_hint(WsAction::WizardNext, next_label.c_str());
+    if (show_back) s += sep + ws_hint(WsAction::WizardPrev);
+    s += sep + ws_hint(WsAction::Quit);
+    return s;
 }
 
 WizardActivity::WizardActivity(size_t num_values) : values_(num_values) {}
@@ -43,7 +40,7 @@ brls::View* WizardActivity::createContentView() {
 
     // AppletFrame children after setContentView: [header(0), content(1), footer(2)].
     // Clear the debug-placeholder rectangles from the footer and add the full hint bar.
-    hint_label_ = set_footer_hint(frame, build_hint_text("Next"));
+    hint_label_ = set_footer_hint(frame, build_hint_text(ws_label(WsAction::WizardNext), false));
 
     return frame;
 }
@@ -54,17 +51,16 @@ void WizardActivity::onContentAvailable() {
 
     pump_.start();
 
-    registerAction("Next", brls::BUTTON_RB, [this](brls::View*) {
+    registerAction(ws_label(WsAction::WizardNext), ws_brls(WsAction::WizardNext), [this](brls::View*) {
         go_next();
         return true;
     });
-    registerAction("Back", brls::BUTTON_LB, [this](brls::View*) {
+    registerAction(ws_label(WsAction::WizardPrev), ws_brls(WsAction::WizardPrev), [this](brls::View*) {
         go_back();
         return true;
     });
-    registerAction("Exit", brls::BUTTON_B, [this](brls::View*) {
-        zeroize_secrets();
-        brls::Application::popActivity();
+    registerAction(ws_label(WsAction::WizardPrevAlt), ws_brls(WsAction::WizardPrevAlt), [this](brls::View*) {
+        go_back();
         return true;
     });
 
@@ -102,7 +98,7 @@ void WizardActivity::edit_field(const WizardFieldDef& f) {
 
 void WizardActivity::refresh() {
     bool is_last = (current_step_ == steps_.size() - 1);
-    std::string action = is_last ? finish_label() : "Next";
+    std::string action = is_last ? finish_label() : std::string(ws_label(WsAction::WizardNext));
 
     WizardTransition trans = WizardTransition::NONE;
     if (step_changed_) {
@@ -119,10 +115,10 @@ void WizardActivity::refresh() {
                        flabel, fcb, trans);
 
     if (hint_label_)
-        hint_label_->setText(build_hint_text(action));
+        hint_label_->setText(build_hint_text(action, current_step_ > 0));
 
     if (auto* cv = getContentView()) {
-        cv->updateActionHint(brls::BUTTON_RB, action);
+        cv->updateActionHint(ws_brls(WsAction::WizardNext), action);
         brls::Application::giveFocus(cv);
     }
 }
@@ -133,11 +129,13 @@ void WizardActivity::register_extra_actions() {}
 
 void WizardActivity::go_next() {
     size_t n = steps_.size();
+    if (!validate_step(current_step_)) {
+        printf("[ui] wizard step %zu: validation failed\n", current_step_);
+        schedule_refresh();
+        return;
+    }
     if (current_step_ < n - 1) {
-        if (!validate_step(current_step_)) {
-            schedule_refresh();
-            return;
-        }
+        printf("[ui] wizard step %zu -> %zu (next)\n", current_step_, current_step_ + 1);
         current_step_++;
         error_.clear();
         status_.clear();
@@ -145,24 +143,21 @@ void WizardActivity::go_next() {
         go_forward_   = true;
         schedule_refresh();
     } else {
-        if (!validate_step(current_step_)) {
-            schedule_refresh();
-            return;
-        }
+        printf("[ui] wizard finish on step %zu\n", current_step_);
         on_finish();
     }
 }
 
 void WizardActivity::go_back() {
-    if (current_step_ > 0) {
-        current_step_--;
-        error_.clear();
-        status_.clear();
-        step_changed_ = true;
-        go_forward_   = false;
-        schedule_refresh();
-    } else {
-        zeroize_secrets();
-        brls::Application::popActivity();
+    if (current_step_ == 0) {
+        printf("[ui] wizard back ignored on first step\n");
+        return;
     }
+    printf("[ui] wizard step %zu -> %zu (back)\n", current_step_, current_step_ - 1);
+    current_step_--;
+    error_.clear();
+    status_.clear();
+    step_changed_ = true;
+    go_forward_   = false;
+    schedule_refresh();
 }

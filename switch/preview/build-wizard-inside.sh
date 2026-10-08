@@ -172,6 +172,7 @@ OBJS+=( $(cxx "$BRL/lib/extern/yoga/src/yoga/Yoga.cpp"                          
 # ---------------------------------------------------------------------------
 echo "=== Compiling wizard UI ===" >&2
 OBJS+=( $(cxx "$UI/applet_footer_hint.cpp"      ws_applet_footer_hint) )
+OBJS+=( $(cxx "$UI/confirm_banner.cpp"          ws_confirm_banner) )
 OBJS+=( $(cxx "$UI/wizard.cpp"                  ws_wizard) )
 OBJS+=( $(cxx "$UI/wizard_activity.cpp"         ws_wizard_activity) )
 OBJS+=( $(cxx "$UI/setup_activity.cpp"          ws_setup_activity) )

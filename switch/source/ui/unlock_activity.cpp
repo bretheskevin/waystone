@@ -2,6 +2,7 @@
 #include "loading_activity.h"
 #include "vault_helpers.h"
 #include "session_store.h"
+#include "keymap_switch.h"
 #include <cstdio>
 
 extern "C" {
@@ -46,9 +47,10 @@ bool UnlockActivity::validate_step(size_t /*step*/) {
 void UnlockActivity::on_finish() { do_unlock(); }
 
 void UnlockActivity::register_extra_actions() {
-    registerAction("Toggle Recovery", brls::BUTTON_Y, [this](brls::View*) {
+    registerAction(ws_label(WsAction::ToggleRecovery), ws_brls(WsAction::ToggleRecovery), [this](brls::View*) {
         if (current_step_ == 0) {
             recovery_mode_ = !recovery_mode_;
+            printf("[ui] unlock: recovery mode -> %s\n", recovery_mode_ ? "on" : "off");
             zeroize_string(values_[FIELD_PASSPHRASE]);
             error_.clear();
             reload_steps();

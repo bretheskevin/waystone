@@ -105,7 +105,7 @@ Rect draw_button(C2D_TextBuf buf, float x, float y, float w, float h, const char
     u32 fg = (style==ButtonStyle::PRIMARY)?CLR_BTN_TEXT:CLR_TEXT;
     if (focused) draw_rounded_rect(x-2,y-2,Z-0.01f,w+4,h+4,RAD_MD+2,CLR_ACCENT);
     draw_rounded_rect(x,y,Z,w,h,RAD_MD,bg);
-    draw_text_centered(buf, x, y+(h-text_height(buf,TEXT_BASE,label))/2.0f, Z+0.01f, TEXT_BASE, fg, label, w);
+    draw_text_centered_fit(buf, x + SP_XS, y+(h-text_height(buf,TEXT_BASE,label))/2.0f, Z+0.01f, TEXT_BASE, fg, label, w - 2*SP_XS, TEXT_BASE*0.6f);
     Rect rect = {x,y,w,h}; return rect;
 }
 Rect draw_text_field_row(C2D_TextBuf buf, float x, float y, float w, const char* label, const char* value, bool is_secret, bool focused, const char* hint) {

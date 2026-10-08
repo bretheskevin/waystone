@@ -1,6 +1,8 @@
 #include "wizard.h"
 #include "theme.h"
 #include "session.h"
+#include "keymap_3ds.h"
+#include <cstdio>
 #include <cstring>
 
 Wizard::Wizard(std::vector<WizardStepDef> steps, size_t num_values)
@@ -34,10 +36,15 @@ void Wizard::recompute_layout(bool has_finish) {
     if (cursor_ >= interactive_count() && interactive_count() > 0) cursor_ = interactive_count()-1;
 }
 void Wizard::go_next() {
-    if (current_step_+1 < steps_.size()) { current_step_++; cursor_=0; error_.clear(); recompute_layout(current_step_==steps_.size()-1); }
+    if (current_step_+1 < steps_.size()) {
+        printf("[ui] wizard step %zu -> %zu (next)\n", current_step_, current_step_+1);
+        current_step_++; cursor_=0; error_.clear(); recompute_layout(current_step_==steps_.size()-1);
+    }
 }
 void Wizard::go_back() {
-    if (current_step_ > 0) { current_step_--; cursor_=0; error_.clear(); recompute_layout(false); }
+    if (current_step_ == 0) { printf("[ui] wizard back ignored on first step\n"); return; }
+    printf("[ui] wizard step %zu -> %zu (back)\n", current_step_, current_step_-1);
+    current_step_--; cursor_=0; error_.clear(); recompute_layout(false);
 }
 void Wizard::draw_top(C3D_RenderTarget* target, C2D_TextBuf buf, const char* screen_title) {
     (void)target;
@@ -57,7 +64,7 @@ void Wizard::draw_bottom(C3D_RenderTarget* target, C2D_TextBuf buf, const char* 
     draw_text_centered(buf, 0, 20.0f, 0.5f, TEXT_LG, CLR_TEXT, step.title.c_str(), (float)SCREEN_BOT_W);
     if (step.fields.empty() && !step.hint.empty()) {
         draw_text_centered(buf, 0, (float)SCREEN_BOT_H-60.0f, 0.5f, TEXT_BASE, CLR_TEXT_HINT, step.hint.c_str(), (float)SCREEN_BOT_W);
-        if (current_step_ != 0) draw_footer_hint(buf, "R: Next");
+        if (current_step_ != 0) draw_footer_hint(buf, ws_hint(WsAction::WizardNext).c_str());
         return;
     }
     for (size_t i=0;i<step.fields.size();i++) {
@@ -69,9 +76,10 @@ void Wizard::draw_bottom(C3D_RenderTarget* target, C2D_TextBuf buf, const char* 
         bool focused=(cursor_==step.fields.size());
         draw_button(buf, finish_rect_.x, finish_rect_.y, finish_rect_.w, finish_rect_.h, finish_label, ButtonStyle::PRIMARY, focused);
     }
-    const char* hint = "A: Edit  R: Next  L: Back";
-    if (current_step_==0) hint = "A: Edit  R: Next";
-    draw_footer_hint(buf, hint);
+    static const WsAction first_acts[] = { WsAction::WizardEdit, WsAction::WizardNext };
+    static const WsAction rest_acts[]  = { WsAction::WizardEdit, WsAction::WizardNext, WsAction::WizardPrev };
+    std::string hint = (current_step_ == 0) ? ws_hint_bar(first_acts) : ws_hint_bar(rest_acts);
+    draw_footer_hint(buf, hint.c_str());
 }
 void Wizard::edit_field_at_cursor() {
     const WizardStepDef& step = steps_[current_step_];
@@ -89,12 +97,12 @@ int Wizard::handle_input(u32 kDown, touchPosition touch) {
     size_t count = interactive_count();
     if (kDown & KEY_DUP)   { if (count>0) cursor_=(cursor_==0)?count-1:cursor_-1; }
     if (kDown & KEY_DDOWN) { if (count>0) cursor_=(cursor_+1)%count; }
-    if (kDown & KEY_A) {
+    if (kDown & ws_key(WsAction::WizardEdit)) {
         if (cursor_ < step.fields.size()) { edit_field_at_cursor(); return 1; }
         else if (has_finish_) return 2;
     }
-    if (kDown & KEY_R) return 3;
-    if ((kDown & KEY_L) || (kDown & KEY_B)) return 4;
+    if (kDown & ws_key(WsAction::WizardNext)) return 3;
+    if (kDown & (ws_key(WsAction::WizardPrev) | ws_key(WsAction::WizardPrevAlt))) return 4;
     if (touch.px != 0 || touch.py != 0) {
         float tx=(float)touch.px, ty=(float)touch.py;
         for (size_t i=0;i<field_rects_.size();i++) if (field_rects_[i].contains(tx,ty)) { cursor_=i; edit_field_at_cursor(); return 1; }

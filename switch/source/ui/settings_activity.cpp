@@ -1,6 +1,8 @@
 #include "settings_activity.h"
 #include "swkbd_util.h"
 #include "session_store.h"
+#include "keymap_switch.h"
+#include <cstdio>
 
 extern "C" {
 struct Vault;
@@ -27,6 +29,7 @@ brls::View* SettingsActivity::createContentView()
 
     server_label_ = new brls::Label();
     server_label_->setFontSize(20.0f);
+    server_label_->setFocusable(true);
     server_label_->registerClickAction([this](brls::View*) {
         std::string val = swkbd_prompt("Server URL", session_->config.server_url, false);
         if (!val.empty()) {
@@ -41,6 +44,7 @@ brls::View* SettingsActivity::createContentView()
 
     user_label_ = new brls::Label();
     user_label_->setFontSize(20.0f);
+    user_label_->setFocusable(true);
     user_label_->registerClickAction([this](brls::View*) {
         std::string val = swkbd_prompt("Username", session_->config.username, false);
         if (!val.empty()) {
@@ -54,6 +58,7 @@ brls::View* SettingsActivity::createContentView()
 
     policy_label_ = new brls::Label();
     policy_label_->setFontSize(20.0f);
+    policy_label_->setFocusable(true);
     policy_label_->registerClickAction([this](brls::View*) {
         session_->config.conflict_policy =
             (session_->config.conflict_policy == WsConflictPolicy::NewestWins)
@@ -66,6 +71,7 @@ brls::View* SettingsActivity::createContentView()
 
     backup_label_ = new brls::Label();
     backup_label_->setFontSize(20.0f);
+    backup_label_->setFocusable(true);
     backup_label_->registerClickAction([this](brls::View*) {
         session_->config.safety_backup = !session_->config.safety_backup;
         refresh_labels();
@@ -77,11 +83,23 @@ brls::View* SettingsActivity::createContentView()
     device_label_->setFontSize(20.0f);
     col->addView(device_label_);
 
+    save_label_ = new brls::Label();
+    save_label_->setText("Save");
+    save_label_->setFontSize(20.0f);
+    save_label_->setFocusable(true);
+    save_label_->registerClickAction([this](brls::View*) {
+        save_settings();
+        return true;
+    });
+    col->addView(save_label_);
+
     logout_label_ = new brls::Label();
     logout_label_->setText("Log out");
     logout_label_->setFontSize(20.0f);
+    logout_label_->setFocusable(true);
     logout_label_->setTextColor(nvgRGB(220, 50, 50));
     logout_label_->registerClickAction([this](brls::View*) {
+        printf("[ui] settings: log out\n");
         session_store_clear();
         if (session_->vault) {
             ws_vault_free(session_->vault);
@@ -106,18 +124,23 @@ void SettingsActivity::onContentAvailable()
 {
     refresh_labels();
 
-    registerAction("Save", brls::BUTTON_A, [this](brls::View*) {
-        if (wsconfig_save(session_->config, session_->config_path.c_str()))
-            status_label_->setText("Settings saved");
-        else
-            status_label_->setText("Failed to save settings");
-        return true;
-    });
-
-    registerAction("Back", brls::BUTTON_B, [](brls::View*) {
+    registerAction(ws_label(WsAction::Back), ws_brls(WsAction::Back), [](brls::View*) {
+        printf("[ui] settings back\n");
         brls::Application::popActivity();
         return true;
     });
+}
+
+void SettingsActivity::save_settings()
+{
+    printf("[ui] settings save -> %s\n", session_->config_path.c_str());
+    if (wsconfig_save(session_->config, session_->config_path.c_str())) {
+        printf("[ui] settings save ok\n");
+        status_label_->setText("Settings saved");
+    } else {
+        printf("[ui] settings save FAILED\n");
+        status_label_->setText("Failed to save settings");
+    }
 }
 
 void SettingsActivity::refresh_labels()

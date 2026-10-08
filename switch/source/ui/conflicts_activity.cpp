@@ -1,5 +1,7 @@
 #include "conflicts_activity.h"
 #include "borealis_focus.h"
+#include "keymap_switch.h"
+#include "confirm_banner.h"
 #include <cstdio>
 
 // -----------------------------------------------------------------------
@@ -77,7 +79,7 @@ void ConflictsActivity::onContentAvailable() {
     // --- Activity-level actions ---
 
     // A = Keep Local (normal mode). During confirm, A confirms the resolve.
-    registerAction("Keep Local", brls::BUTTON_A, [this](brls::View*) {
+    registerAction(ws_label(WsAction::KeepLocal), ws_brls(WsAction::KeepLocal), [this](brls::View*) {
         if (confirm_remote_) {
             ctrl_->resolve_keep_remote(confirm_index_);
             confirm_remote_ = false;
@@ -94,7 +96,7 @@ void ConflictsActivity::onContentAvailable() {
     });
 
     // X = Keep Remote (enters confirm mode)
-    registerAction("Keep Remote", brls::BUTTON_X, [this](brls::View*) {
+    registerAction(ws_label(WsAction::KeepRemote), ws_brls(WsAction::KeepRemote), [this](brls::View*) {
         if (confirm_remote_) return true;  // already confirming, no-op
         auto items = ctrl_->conflicts();
         selected_index_ = focused_row_index();
@@ -107,7 +109,7 @@ void ConflictsActivity::onContentAvailable() {
     });
 
     // B = Back. During confirm, cancels the confirm instead.
-    registerAction("Back", brls::BUTTON_B, [this](brls::View*) {
+    registerAction(ws_label(WsAction::Back), ws_brls(WsAction::Back), [this](brls::View*) {
         if (confirm_remote_) {
             confirm_remote_ = false;
             schedule_refresh();
@@ -214,27 +216,7 @@ void ConflictsActivity::focus_selected_row() {
 // Build the confirm banner (non-focusable; actions are activity-level)
 // -----------------------------------------------------------------------
 brls::Box* ConflictsActivity::build_confirm_banner() {
-    auto* box = new brls::Box(brls::Axis::COLUMN);
-    box->setPadding(12.0f);
-    box->setMargins(12.0f, 0.0f, 12.0f, 0.0f);
-    // Warning background (amber/orange)
-    box->setBackgroundColor(nvgRGBA(0xFF, 0xAA, 0x00, 0xFF));
-
-    auto* line1 = new brls::Label();
-    line1->setText("Overwrite local with remote?");
-    line1->setFontSize(22.0f);
-    line1->setTextColor(nvgRGB(0x1A, 0x1A, 0x1A));
-    line1->setSingleLine(true);
-    box->addView(line1);
-
-    auto* line2 = new brls::Label();
-    line2->setText("A: Confirm   B: Cancel");
-    line2->setFontSize(18.0f);
-    line2->setTextColor(nvgRGB(0x33, 0x33, 0x33));
-    line2->setSingleLine(true);
-    box->addView(line2);
-
-    return box;
+    return make_confirm_banner("Overwrite local with remote?", "");
 }
 
 // -----------------------------------------------------------------------

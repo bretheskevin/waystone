@@ -1,6 +1,7 @@
 #include "loading_activity.h"
 #include "sync_controller.h"
 #include "title_list_activity.h"
+#include "keymap_switch.h"
 #include <cstdio>
 #include <cmath>
 
@@ -127,7 +128,8 @@ void LoadingActivity::show_error_ui(const std::string& error) {
     if (spinner_box_) spinner_box_->setVisibility(brls::Visibility::GONE);
 
     // B-button to go back (safe: action dispatch, not inside RepeatingTask)
-    registerAction("Back", brls::BUTTON_B, [](brls::View*) {
+    registerAction(ws_label(WsAction::Back), ws_brls(WsAction::Back), [](brls::View*) {
+        printf("[ui] loading error: back\n");
         brls::Application::popActivity();
         return true;
     });

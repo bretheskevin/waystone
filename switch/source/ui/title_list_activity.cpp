@@ -1,5 +1,6 @@
 #include "title_list_activity.h"
 #include "applet_footer_hint.h"
+#include "keymap_switch.h"
 #include "settings_activity.h"
 #include "conflicts_activity.h"
 #include "conflict_controller.h"
@@ -23,22 +24,9 @@ static const float ROW_PADDING   = 5.0f;   // top/bottom only; left/right use RO
 static const float ROW_H_PADDING = 10.0f;  // left/right padding for row
 static const float ROW_GAP       = 12.0f;  // space between icon and name
 
-// NintendoExt PUA button glyphs (same codepoints as wizard_activity.cpp):
-//   U+E0A0 "\xEE\x82\xA0" A button
-//   U+E0A2 "\xEE\x82\xA2" X button
-//   U+E0A3 "\xEE\x82\xA3" Y button
-//   U+E0A4 "\xEE\x82\xA4" L shoulder
-//   U+E0A5 "\xEE\x82\xA5" R shoulder
-static const char* DASHBOARD_HINT =
-    "\xEE\x82\xA0 Sync Game"
-    "   \xc2\xb7   "
-    "\xEE\x82\xA2 Conflicts"
-    "   \xc2\xb7   "
-    "\xEE\x82\xA3 Settings"
-    "   \xc2\xb7   "
-    "\xEE\x82\xA4 Snapshots"
-    "   \xc2\xb7   "
-    "\xEE\x82\xA5 History";
+static const WsAction DASHBOARD_ACTIONS[] = {
+    WsAction::SyncGame, WsAction::SyncAll, WsAction::OpenConflicts,
+    WsAction::OpenSettings, WsAction::OpenSnapshots, WsAction::OpenHistory };
 
 TitleListActivity::TitleListActivity(SyncController* ctrl, Session* session)
     : ctrl_(ctrl), session_(session) {}
@@ -78,7 +66,7 @@ brls::View* TitleListActivity::createContentView() {
     // Sync all button — primary style, d-pad focusable.
     auto* sync_btn = new brls::Button();
     sync_btn->setStyle(&brls::BUTTONSTYLE_PRIMARY);
-    sync_btn->setText("Sync all");
+    sync_btn->setText(ws_label(WsAction::SyncAll));
     sync_btn->setMarginLeft(32.0f);
     sync_btn->setMarginRight(32.0f);
     sync_btn->setMarginBottom(20.0f);
@@ -170,7 +158,7 @@ brls::View* TitleListActivity::createContentView() {
     frame->setContentView(col);
 
     // Clear AppletFrame debug-placeholder footer rectangles and install the hint bar.
-    set_footer_hint(frame, DASHBOARD_HINT);
+    set_footer_hint(frame, ws_hint_bar(DASHBOARD_ACTIONS));
 
     printf("[ui] dashboard createContentView: done (%zu rows)\n", titles.size());
     return frame;
@@ -211,8 +199,11 @@ void TitleListActivity::onContentAvailable() {
     });
     poll_timer_.start(200);
 
-    registerAction("Sync Game", brls::BUTTON_A, [this](brls::View*) { start_single_sync_or_gate(); return true; });
-    registerAction("Conflicts", brls::BUTTON_X, [this](brls::View*) {
+    registerAction(ws_label(WsAction::SyncGame), ws_brls(WsAction::SyncGame),
+                   [this](brls::View*) { start_single_sync_or_gate(); return true; });
+    registerAction(ws_label(WsAction::SyncAll), ws_brls(WsAction::SyncAll),
+                   [this](brls::View*) { start_sync_or_gate(); return true; });
+    registerAction(ws_label(WsAction::OpenConflicts), ws_brls(WsAction::OpenConflicts), [this](brls::View*) {
         auto titles = ctrl_->titles();
         auto* cc = new ConflictController(session_->vault, session_->uid, session_->device_id,
                                           session_->dav.as_cfg(), titles);
@@ -220,11 +211,11 @@ void TitleListActivity::onContentAvailable() {
         brls::Application::pushActivity(new ConflictsActivity(cc));
         return true;
     });
-    registerAction("Settings", brls::BUTTON_Y, [this](brls::View*) {
+    registerAction(ws_label(WsAction::OpenSettings), ws_brls(WsAction::OpenSettings), [this](brls::View*) {
         brls::Application::pushActivity(new SettingsActivity(session_));
         return true;
     });
-    registerAction("Snapshots", brls::BUTTON_LB, [this](brls::View*) {
+    registerAction(ws_label(WsAction::OpenSnapshots), ws_brls(WsAction::OpenSnapshots), [this](brls::View*) {
         auto titles = ctrl_->titles();
         size_t idx = focused_title_index();
         if (idx < titles.size()) {
@@ -234,7 +225,7 @@ void TitleListActivity::onContentAvailable() {
         }
         return true;
     });
-    registerAction("History", brls::BUTTON_RB, [this](brls::View*) {
+    registerAction(ws_label(WsAction::OpenHistory), ws_brls(WsAction::OpenHistory), [this](brls::View*) {
         auto titles = ctrl_->titles();
         size_t idx = focused_title_index();
         if (idx < titles.size()) {
@@ -247,6 +238,7 @@ void TitleListActivity::onContentAvailable() {
 }
 
 void TitleListActivity::start_sync_or_gate() {
+    printf("[ui] sync all triggered (%zu titles)\n", ctrl_->titles().size());
     if (single_ctrl_ && single_ctrl_->phase() == SyncPhase::Running) {
         printf("[sync] sync all: single-title sync in progress, skip\n");
         return;

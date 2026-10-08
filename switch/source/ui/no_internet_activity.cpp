@@ -1,5 +1,7 @@
 #include "no_internet_activity.h"
 #include "net_status.h"
+#include "keymap_switch.h"
+#include <cstdio>
 #include <string>
 
 static std::string reason_message(NoInternetReason r) {
@@ -32,7 +34,7 @@ brls::View* NoInternetActivity::createContentView() {
     col->addView(msg_label_);
 
     auto* retry_btn = new brls::Button();
-    retry_btn->setText("Retry");
+    retry_btn->setText(ws_label(WsAction::Retry));
     retry_btn->setStyle(&brls::BUTTONSTYLE_PRIMARY);
     retry_btn->setFocusable(true);
     retry_btn->registerClickAction([this](brls::View*) {
@@ -55,7 +57,8 @@ brls::View* NoInternetActivity::createContentView() {
 }
 
 void NoInternetActivity::onContentAvailable() {
-    registerAction("Exit", brls::BUTTON_B, [](brls::View*) {
+    registerAction(ws_label(WsAction::ExitApp), ws_brls(WsAction::ExitApp), [](brls::View*) {
+        printf("[ui] no-internet: exit app\n");
         brls::Application::quit();
         return true;
     });

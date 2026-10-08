@@ -9,6 +9,7 @@
 #include "saves.h"
 #include "version.h"
 #include "updater.h"
+#include "keymap_3ds.h"
 #include <cstdio>
 #include <cstdlib>
 
@@ -130,12 +131,10 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
     if (confirm_update_) {
         char line[128];
         snprintf(line, sizeof(line), "v%s available", pending_ver_.c_str());
-        draw_confirm_banner(buf, y, 150.0f,
-                            line,
-                            "A: Update now   B: Cancel",
-                            0,
-                            56.0f);
-        draw_footer_hint(buf, "A: Update now  B: Cancel");
+        static const WsAction update_acts[] = { WsAction::Update, WsAction::Cancel };
+        std::string update_hint = ws_hint_bar(update_acts);
+        draw_confirm_banner(buf, y, 150.0f, line, update_hint.c_str(), 0, 56.0f);
+        draw_footer_hint(buf, update_hint.c_str());
         return;
     }
 
@@ -178,7 +177,8 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
         y += row_h + SP_XS;
     }
 
-    draw_footer_hint(buf, "A: Select  B: Back  DPad: Nav");
+    static const WsAction row_acts[] = { WsAction::Select, WsAction::Back };
+    draw_footer_hint(buf, (ws_hint_bar(row_acts) + "  DPad: Nav").c_str());
 }
 
 void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
@@ -186,7 +186,7 @@ void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
 
     // ---- Confirm mode (update now?) ----
     if (confirm_update_) {
-        if (kDown & KEY_A) {
+        if (kDown & ws_key(WsAction::Update)) {
             printf("[update] confirmed: installing v%s\n", pending_ver_.c_str());
             confirm_update_ = false;
             update_cancelled_ = false;
@@ -194,7 +194,7 @@ void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
             status_text_ = "Downloading...";
             last_phase_ = UpdatePhase::Idle;  // re-arm transition detection
             worker_->start_install(pending_url_);
-        } else if (kDown & KEY_B) {
+        } else if (kDown & ws_key(WsAction::Cancel)) {
             printf("[update] update cancelled\n");
             confirm_update_ = false;
             update_cancelled_ = true;  // keep "Update cancelled" out of the success color
@@ -205,12 +205,13 @@ void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
 
     if (kDown & KEY_DUP)   { cursor_ = (cursor_ == 0) ? NUM_ROWS - 1 : cursor_ - 1; }
     if (kDown & KEY_DDOWN) { cursor_ = (cursor_ + 1) % NUM_ROWS; }
-    if (kDown & KEY_B) {
+    if (kDown & ws_key(WsAction::Back)) {
+        printf("[ui] settings back\n");
         reap_worker(worker_);  // instant pop: dtor never joins a live worker
         App::instance().pop_screen();
         return;
     }
-    if (kDown & KEY_A) {
+    if (kDown & ws_key(WsAction::Select)) {
         switch (cursor_) {
             case 0: {
                 std::string v = swkbd_prompt("Server URL", false, session_->config.server_url);
@@ -253,13 +254,18 @@ void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
                 break;
             }
             case 5: {
-                if (wsconfig_save(session_->config, session_->config_path.c_str()))
+                printf("[ui] settings save -> %s\n", session_->config_path.c_str());
+                if (wsconfig_save(session_->config, session_->config_path.c_str())) {
+                    printf("[ui] settings save ok\n");
                     status_text_ = "Settings saved";
-                else
+                } else {
+                    printf("[ui] settings save FAILED\n");
                     status_text_ = "Failed to save settings";
+                }
                 break;
             }
             case 6: {
+                printf("[ui] settings: log out\n");
                 // set_screen/pop_screen below delete this screen; detach first so
                 // ~SettingsScreen never joins a running worker on the render thread.
                 reap_worker(worker_);
