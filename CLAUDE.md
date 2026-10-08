@@ -3,6 +3,10 @@
 Cross-platform save-sync (Rust `core`/`ffi` + desktop, Switch, 3DS, Android/mobile shells).
 Per-shell specifics live in `switch/CLAUDE.md` and `3ds/CLAUDE.md`.
 
+## Git — work directly on `main`
+
+Never create branches (no feature branches, no worktrees). All work is committed directly on `main`.
+
 ## Logging — instrument liberally so debugging is easy
 
 Always add generous logging to the code. Debuggability beats terseness here: the console
