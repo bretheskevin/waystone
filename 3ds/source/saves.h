@@ -39,9 +39,6 @@ std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav);
 // No uid parameter -- 3DS savedata is per-title, not per-user.
 std::vector<uint8_t> extract_save_json(const TitleInfo& title);
 
-// Get current UTC time as ISO 8601 string.
-std::string current_utc_time();
-
 // Get or create a persistent device ID (stored at sdmc:/waystone/device_id.txt).
 std::string get_device_id();
 

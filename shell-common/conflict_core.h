@@ -349,7 +349,7 @@ public:
             v.remote_hash = c.remote_hash;
             v.remote_device_id = c.remote_device_id;
             v.remote_mtime = c.remote_mtime;
-            out.push_back(v);
+            out.push_back(std::move(v));
         }
         return out;
     }

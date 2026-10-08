@@ -218,6 +218,31 @@ static void test_failed_drain_unqueues_and_counts_error() {
     printf("test_failed_drain_unqueues_and_counts_error PASSED\n");
 }
 
+static void enqueue_id1_on_c(const std::string& name) {
+    if (name != "C") return;
+    assert(!g_core->begin_resolve(1, false));               // queued during the last title
+}
+
+static void test_close_loop_drains_resolve_queued_on_last_title() {
+    reset();
+    g_scan["A"].push_back(conflict("3ds/a/main", 8));
+    g_scan["C"].push_back(conflict("3ds/c/main", 8));
+    g_on_scan = enqueue_id1_on_c;
+    Core* c = make_core(abc(false));
+    assert(c->begin_scan());
+    c->run_scan();
+    int pull = find_event("pull:3ds/a/main:bp/3ds/a/main:R-3ds/a/main:2026-01-02T00:00:00Z:8");
+    assert(pull > find_event("scan:C") && pull < find_event("end"));
+    std::vector<ConflictView> v = c->views();
+    assert(v.size() == 1 && v[0].id == 2);
+    assert(c->status() == "Scan complete: 1 conflict(s) found");
+    assert(c->phase() == ConflictPhase::Ready && !c->is_running());
+    assert(c->begin_resolve(2, true));                      // queue closed -> resolve thread
+    c->run_resolve(2, true);
+    delete c;
+    printf("test_close_loop_drains_resolve_queued_on_last_title PASSED\n");
+}
+
 static void enqueue_then_cancel_on_b(const std::string& name) {
     if (name != "B") return;
     assert(!g_core->begin_resolve(1, true));
@@ -352,6 +377,7 @@ int main() {
     test_scan_collects_conflicts_with_stable_ids();
     test_queue_while_scanning_drains_between_titles();
     test_failed_drain_unqueues_and_counts_error();
+    test_close_loop_drains_resolve_queued_on_last_title();
     test_cancel_drops_queue_and_next_scan_resets_it();
     test_busy_status_and_keep_local_resolve();
     test_keep_remote_hands_tree_back_on_failure();

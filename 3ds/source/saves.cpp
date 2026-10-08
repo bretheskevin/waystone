@@ -836,15 +836,6 @@ std::vector<uint8_t> extract_save_json(const TitleInfo& title) {
     return tree;
 }
 
-std::string current_utc_time() {
-    time_t now = time(NULL);
-    struct tm t;
-    gmtime_r(&now, &t);
-    char buf[32];
-    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &t);
-    return buf;
-}
-
 std::string get_device_id() {
     const char* path = "sdmc:/waystone/device_id.txt";
     const char* dir = "sdmc:/waystone";
