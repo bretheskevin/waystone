@@ -21,7 +21,9 @@ std::vector<TitleInfo> list_titles();
 // Paths follow the JKSV convention "<game_name>/main/<relative_file_path>" so
 // ws_jksv_normalize can parse title_dir=<game_name>, slot="main".
 // Returns an empty vector on failure / no save.
-std::vector<uint8_t> extract_save_json(const TitleInfo& title, AccountUid uid);
+// local_mtime (optional): newest file mtime of the mounted save as ISO-8601 UTC, '' when unusable.
+std::vector<uint8_t> extract_save_json(const TitleInfo& title, AccountUid uid,
+                                       std::string* local_mtime = nullptr);
 
 // Get the current account UID. Initializes/exits account internally.
 // Returns true on success, false on failure.

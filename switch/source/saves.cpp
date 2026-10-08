@@ -1,5 +1,6 @@
 #include "saves.h"
 #include "file_tree.h"
+#include "sync_rules.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -110,7 +111,8 @@ std::vector<TitleInfo> list_titles() {
 
 // Recursively walk a directory and collect all files as (relative_path, content) pairs.
 static void walk_dir(const char* base, const char* rel,
-                     std::vector<std::pair<std::string, std::vector<uint8_t>>>* out) {
+                     std::vector<std::pair<std::string, std::vector<uint8_t>>>* out,
+                     long long* max_mtime) {
     std::string full = std::string(base);
     if (rel[0] != '\0') {
         full += "/";
@@ -138,7 +140,7 @@ static void walk_dir(const char* base, const char* rel,
         if (stat(child_full.c_str(), &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
-            walk_dir(base, child_rel.c_str(), out);
+            walk_dir(base, child_rel.c_str(), out, max_mtime);
         } else if (S_ISREG(st.st_mode)) {
             FILE* f = fopen(child_full.c_str(), "rb");
             if (!f) continue;
@@ -151,13 +153,14 @@ static void walk_dir(const char* base, const char* rel,
                 }
             }
             fclose(f);
+            if ((long long)st.st_mtime > *max_mtime) *max_mtime = (long long)st.st_mtime;
             out->push_back({child_rel, content});
         }
     }
     closedir(d);
 }
 
-std::vector<uint8_t> extract_save_json(const TitleInfo& title, AccountUid uid) {
+std::vector<uint8_t> extract_save_json(const TitleInfo& title, AccountUid uid, std::string* local_mtime) {
     // Mount save data
     Result rc = fsdevMountSaveData("save", title.title_id, uid);
     if (R_FAILED(rc)) {
@@ -168,9 +171,16 @@ std::vector<uint8_t> extract_save_json(const TitleInfo& title, AccountUid uid) {
 
     // Walk the mounted filesystem
     std::vector<std::pair<std::string, std::vector<uint8_t>>> files;
-    walk_dir("save:", "", &files);
+    long long max_mtime = 0;
+    walk_dir("save:", "", &files, &max_mtime);
 
     fsdevUnmountDevice("save");
+
+    if (local_mtime) {
+        *local_mtime = plausible_mtime_iso(max_mtime, (long long)time(nullptr));
+        printf("[saves] %s: newest file mtime=%lld -> '%s'\n", title.name.c_str(), max_mtime,
+               local_mtime->empty() ? "(unusable -> NewestWins treated as Prompt)" : local_mtime->c_str());
+    }
 
     if (files.empty()) return std::vector<uint8_t>();
 

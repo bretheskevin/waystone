@@ -206,7 +206,7 @@ void TitleListActivity::onContentAvailable() {
     registerAction(ws_label(WsAction::OpenConflicts), ws_brls(WsAction::OpenConflicts), [this](brls::View*) {
         auto titles = ctrl_->titles();
         auto* cc = new ConflictController(session_->vault, session_->uid, session_->device_id,
-                                          session_->dav.as_cfg(), titles);
+                                          session_->dav.as_cfg(), titles, session_->config);
         cc->start_scan();
         brls::Application::pushActivity(new ConflictsActivity(cc));
         return true;
@@ -282,7 +282,7 @@ void TitleListActivity::start_single_sync_or_gate() {
     single_ctrl_ = new SyncController(session_->vault, session_->uid,
                                       session_->device_id,
                                       session_->dav.as_cfg(),
-                                      { t });
+                                      { t }, &session_->config);
 
     if (!network_available()) {
         brls::Application::pushActivity(

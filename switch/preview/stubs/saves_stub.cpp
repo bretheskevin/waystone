@@ -13,7 +13,7 @@ std::vector<TitleInfo> list_titles()
     return {};
 }
 
-std::vector<uint8_t> extract_save_json(const TitleInfo& /*title*/, AccountUid /*uid*/)
+std::vector<uint8_t> extract_save_json(const TitleInfo& /*title*/, AccountUid /*uid*/, std::string* /*local_mtime*/)
 {
     return {};
 }

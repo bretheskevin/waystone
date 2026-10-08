@@ -53,11 +53,10 @@ void HistoryController::scan_worker() {
         return;
     }
     bool had_error = false;
-    std::vector<SaveDecision> decisions = scan_title(session_->vault, title_,
-                                                     session_->uid,
-                                                     session_->device_id.c_str(),
-                                                     0 /* NewestWins */, sess,
-                                                     &had_error);
+    SyncEngineCfg ecfg = sync_cfg_from(session_->config, session_->device_id.c_str());
+    std::vector<SaveDecision> decisions = sync_scan_title(
+        session_->vault, &title_, title_.name.c_str(), nx_shell_ops(&session_->uid), ecfg,
+        0 /* NewestWins */, sess, &had_error, nullptr);
     webdav_session_end(sess);
     if (had_error) {
         { std::lock_guard<std::mutex> lk(mu_); status_ = "Normalize failed."; }
@@ -143,9 +142,9 @@ void HistoryController::restore_worker(HistoryEntry entry, size_t index) {
         running_.store(false);
         return;
     }
-    int rc = restore_remote_save(session_->vault, hash,
-                                 base_path_, group_key_, raw_tree_,
-                                 title_.title_id, session_->uid, sess);
+    SyncEngineCfg ecfg = sync_cfg_from(session_->config, session_->device_id.c_str());
+    int rc = sync_restore_hash(session_->vault, &title_, nx_shell_ops(&session_->uid), ecfg,
+                               base_path_, group_key_, hash, raw_tree_, sess, nullptr);
     webdav_session_end(sess);
     if (rc != 0) {
         printf("[history] restore FAILED (rc=%d)\n", rc);
@@ -156,7 +155,7 @@ void HistoryController::restore_worker(HistoryEntry entry, size_t index) {
     }
 
     printf("[history] restore complete\n");
-    { std::lock_guard<std::mutex> lk(mu_); status_ = "Restored! Safety backup saved."; }
+    { std::lock_guard<std::mutex> lk(mu_); status_ = session_->config.safety_backup ? "Restored! Safety backup saved." : "Restored!"; }
     phase_.store(BrowsePhase::Done);
     running_.store(false);
 }

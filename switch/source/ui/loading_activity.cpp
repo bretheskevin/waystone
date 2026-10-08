@@ -144,6 +144,6 @@ void LoadingActivity::push_dashboard_deferred() {
     // and the dashboard stays at alpha=1.0f (Animatable default).
     if (auto* cv = getContentView()) cv->setInFadeAnimation(true);
     auto* ctrl = new SyncController(session_->vault, session_->uid, session_->device_id,
-                                    session_->dav.as_cfg(), std::move(result_.titles));
+                                    session_->dav.as_cfg(), std::move(result_.titles), &session_->config);
     brls::Application::pushActivity(new TitleListActivity(ctrl, session_));
 }

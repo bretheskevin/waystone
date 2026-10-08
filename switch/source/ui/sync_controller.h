@@ -6,6 +6,8 @@
 #include <vector>
 #include "net.h"
 #include "saves.h"
+#include "sync_summary.h"
+#include "wsconfig.h"
 
 // WsVault is an opaque Rust FFI type; only used as a pointer here.
 struct Vault;
@@ -15,8 +17,10 @@ enum class SyncPhase { Idle, Running, Done, Error };
 
 class SyncController {
 public:
+    // config: borrowed (Session-owned); conflict_policy/safety_backup are read at start().
     SyncController(WsVault* vault, AccountUid uid, std::string device_id,
-                   WebDavCfg dav, std::vector<TitleInfo> titles);
+                   WebDavCfg dav, std::vector<TitleInfo> titles,
+                   const WaystoneShellConfig* config);
     ~SyncController();
     SyncController(const SyncController&) = delete;
     SyncController& operator=(const SyncController&) = delete;
@@ -24,9 +28,8 @@ public:
     void start();                 // idempotent: no-op if already running
     void join();
     SyncPhase phase() const;      // atomic load
-    std::string status() const;   // mutex-guarded snapshot, thread-safe
-    int pushed_count() const;
-    int restored_count() const;
+    std::string status() const;   // "Syncing i/n: name" while running, headline when done
+    std::vector<TitleResult> results() const;  // one per title, mutex-guarded snapshot
     const std::vector<TitleInfo>& titles() const;  // immutable after construction
 
 private:
@@ -38,13 +41,16 @@ private:
     std::string dav_pass_;
     WebDavCfg dav_;
     std::vector<TitleInfo> titles_;
+    const WaystoneShellConfig* config_;
+    int policy_ = 0;
+    bool safety_backup_ = true;
     std::atomic<SyncPhase> phase_{SyncPhase::Idle};
     std::atomic<bool> running_{false};
-    std::atomic<int> pushed_{0};
-    std::atomic<int> restored_{0};
     mutable std::mutex mu_;
     std::string status_;
+    std::vector<TitleResult> results_;
     std::thread thread_;
 
     void worker();
+    void set_result(size_t i, TitleState s, const std::string& reason);
 };

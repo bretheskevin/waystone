@@ -173,14 +173,14 @@ int main(int argc, char** argv)
     } else if (strcmp(mode, "conflicts") == 0) {
         auto* ctrl = new ConflictController(
             nullptr, AccountUid{}, "",
-            WebDavCfg{nullptr, nullptr, nullptr}, {});
+            WebDavCfg{nullptr, nullptr, nullptr}, {}, session.config);
         ctrl->start_scan();
         brls::Application::pushActivity(new ConflictsActivity(ctrl));
 
     } else if (strcmp(mode, "conflicts-confirm") == 0) {
         auto* ctrl = new ConflictController(
             nullptr, AccountUid{}, "",
-            WebDavCfg{nullptr, nullptr, nullptr}, {});
+            WebDavCfg{nullptr, nullptr, nullptr}, {}, session.config);
         ctrl->start_scan();
         brls::Application::pushActivity(
             new PreviewConflictsConfirmActivity(ctrl));
@@ -197,7 +197,7 @@ int main(int argc, char** argv)
         // Dashboard mode: title list with fixture games from sync_controller_stub.
         // Exercises the AppletFrame header, icon+name rows, Sync button, and status line.
         auto* ctrl = new SyncController(nullptr, AccountUid{}, "",
-                                        WebDavCfg{nullptr, nullptr, nullptr}, {});
+                                        WebDavCfg{nullptr, nullptr, nullptr}, {}, &session.config);
         brls::Application::pushActivity(new TitleListActivity(ctrl, &session));
 
     } else {

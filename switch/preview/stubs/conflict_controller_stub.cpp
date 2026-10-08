@@ -8,8 +8,9 @@
 
 ConflictController::ConflictController(WsVault* /*vault*/, AccountUid /*uid*/,
                                        std::string /*device_id*/, WebDavCfg /*dav*/,
-                                       std::vector<TitleInfo> /*titles*/)
-    : vault_(nullptr), uid_({}), dav_({nullptr, nullptr, nullptr}) {}
+                                       std::vector<TitleInfo> /*titles*/,
+                                       WaystoneShellConfig config)
+    : vault_(nullptr), uid_({}), dav_({nullptr, nullptr, nullptr}), config_(config) {}
 
 ConflictController::~ConflictController() {}
 

@@ -7,6 +7,7 @@
 #include <vector>
 #include "net.h"
 #include "saves.h"
+#include "wsconfig.h"
 
 struct Vault;
 typedef Vault WsVault;
@@ -31,7 +32,8 @@ enum class ConflictPhase { Idle, Scanning, Ready, Resolving, Done, Error };
 class ConflictController {
 public:
     ConflictController(WsVault* vault, AccountUid uid, std::string device_id,
-                       WebDavCfg dav, std::vector<TitleInfo> titles);
+                       WebDavCfg dav, std::vector<TitleInfo> titles,
+                       WaystoneShellConfig config);
     ~ConflictController();
     ConflictController(const ConflictController&) = delete;
     ConflictController& operator=(const ConflictController&) = delete;
@@ -54,6 +56,7 @@ private:
     std::string dav_pass_;
     WebDavCfg dav_;
     std::vector<TitleInfo> titles_;
+    WaystoneShellConfig config_;
     std::atomic<ConflictPhase> phase_{ConflictPhase::Idle};
     std::atomic<bool> running_{false};
     mutable std::mutex mu_;

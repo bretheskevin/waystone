@@ -9,11 +9,12 @@ extern "C" {
 }
 
 ConflictController::ConflictController(WsVault* vault, AccountUid uid, std::string device_id,
-                                       WebDavCfg dav, std::vector<TitleInfo> titles)
+                                       WebDavCfg dav, std::vector<TitleInfo> titles,
+                                       WaystoneShellConfig config)
     : vault_(vault), uid_(uid), device_id_(std::move(device_id)),
       dav_url_(dav.base_url), dav_user_(dav.user), dav_pass_(dav.pass),
       dav_{dav_url_.c_str(), dav_user_.c_str(), dav_pass_.c_str()},
-      titles_(std::move(titles)) {}
+      titles_(std::move(titles)), config_(std::move(config)) {}
 
 ConflictController::~ConflictController() { join(); zeroize_string(dav_pass_); }
 
@@ -58,17 +59,21 @@ void ConflictController::resolve_worker(bool keep_local, ConflictItem item, size
         running_.store(false);
         return;
     }
+    SyncEngineCfg ecfg = sync_cfg_from(config_, device_id_.c_str());
+    ShellOps ops = nx_shell_ops(&uid_);
+    TitleInfo ti; ti.title_id = item.title_id; ti.name = item.title_name;
     int rc;
     if (keep_local) {
-        TitleInfo ti; ti.title_id = item.title_id; ti.name = item.title_name;
-        rc = push_title(vault_, ti, uid_, device_id_.c_str(), sess);
+        rc = sync_push_group(vault_, &ti, ti.name.c_str(), ops, ecfg, item.group_key, sess, nullptr);
     } else {
-        rc = restore_remote_save(vault_, item.remote_hash, item.base_path,
-                                 item.group_key, item.raw_tree, item.title_id, uid_, sess);
+        rc = sync_pull_hash(vault_, &ti, ops, ecfg, item.base_path, item.group_key,
+                            item.remote_hash, item.remote_mtime, item.raw_tree, sess, nullptr);
     }
+    printf("[conflict] resolve %s %s rc=%d\n", keep_local ? "keep-local" : "keep-remote",
+           item.group_key.c_str(), rc);
     webdav_session_end(sess);
     { std::lock_guard<std::mutex> lk(mu_);
-      bool ok = keep_local ? (rc >= 0) : (rc == 0);
+      bool ok = (rc == 0);
       if (ok) {
           if (index < conflicts_.size())
               conflicts_.erase(conflicts_.begin() + static_cast<long>(index));
@@ -92,12 +97,14 @@ void ConflictController::scan_worker() {
         running_.store(false);
         return;
     }
+    SyncEngineCfg ecfg = sync_cfg_from(config_, device_id_.c_str());
+    ShellOps ops = nx_shell_ops(&uid_);
     for (size_t i = 0; i < n; i++) {
         snprintf(buf, sizeof(buf), "Scanning %zu/%zu: %s", i + 1, n, titles_[i].name.c_str());
         { std::lock_guard<std::mutex> lk(mu_); status_ = buf; }
-        std::vector<SaveDecision> decisions = scan_title(vault_, titles_[i], uid_,
-                                                         device_id_.c_str(),
-                                                         1 /* Prompt */, sess);
+        std::vector<SaveDecision> decisions = sync_scan_title(
+            vault_, &titles_[i], titles_[i].name.c_str(), ops, ecfg, 1 /* Prompt */, sess,
+            nullptr, nullptr);
         for (const auto& d : decisions) {
             if (d.decision_type != "conflict_needs_input") continue;
             std::string remote_hash, remote_device_id, remote_mtime;

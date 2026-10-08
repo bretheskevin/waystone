@@ -34,8 +34,8 @@ static std::vector<TitleInfo> make_fixture_titles() {
 }
 
 SyncController::SyncController(WsVault*, AccountUid, std::string,
-                               WebDavCfg, std::vector<TitleInfo>)
-    : titles_(make_fixture_titles())
+                               WebDavCfg, std::vector<TitleInfo>, const WaystoneShellConfig*)
+    : titles_(make_fixture_titles()), config_(nullptr)
 {}
 
 SyncController::~SyncController()
@@ -54,8 +54,10 @@ std::string SyncController::status() const
     return "Idle";
 }
 
-int SyncController::pushed_count() const { return 0; }
-int SyncController::restored_count() const { return 0; }
+std::vector<TitleResult> SyncController::results() const
+{
+    return std::vector<TitleResult>(titles_.size());
+}
 
 const std::vector<TitleInfo>& SyncController::titles() const
 {

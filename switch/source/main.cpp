@@ -123,41 +123,26 @@ int main(int argc, char* argv[]) {
             std::vector<TitleInfo> titles = list_titles();
             printf("Found %zu titles\n\n", titles.size());
 
-            // -- Sync run: one WebDAV session wraps push + pull phases --
+            // -- Sync run: one WebDAV session, decide-first single pass --
             WebDavSession* sess = webdav_session_begin(dav);
             if (!sess) {
-                printf("FATAL: webdav_session_begin failed\n");
+                printf("[sync] FATAL: webdav_session_begin failed\n");
             } else {
-                // -- Push each title --
-                printf("--- Push phase ---\n");
-                int total_pushed = 0;
+                WaystoneShellConfig console_cfg;  // defaults: NewestWins + safety backup on
+                SyncEngineCfg ecfg = sync_cfg_from(console_cfg, device_id.c_str());
+                ShellOps ops = nx_shell_ops(&uid);
+                printf("--- Sync (decide-first, policy=%d) ---\n", ecfg.conflict_policy);
+                int ok_count = 0, failed_count = 0;
                 for (size_t i = 0; i < titles.size(); i++) {
-                    printf("[%zu/%zu] %s (TID %016lX)\n",
-                           i + 1, titles.size(),
+                    printf("[%zu/%zu] %s (TID %016lX)\n", i + 1, titles.size(),
                            titles[i].name.c_str(), titles[i].title_id);
-                    int rc = push_title(vault, titles[i], uid,
-                                        device_id.c_str(), sess);
-                    if (rc > 0) total_pushed += rc;
+                    TitleTally t = sync_title(vault, &titles[i], titles[i].name.c_str(), ops,
+                                              ecfg, sess, nullptr);
+                    TitleState fs = final_title_state(t);
+                    printf("[sync]   -> %s %s\n", title_state_label(fs), t.reason.c_str());
+                    if (fs == TitleState::Failed) failed_count++; else ok_count++;
                 }
-                printf("\n=== Push done: %d saves pushed ===\n", total_pushed);
-
-                // -- Pull first title (restore demo) --
-                // Pulls the first title only to keep this a thin console driver.
-                // A future UI pass will iterate all titles like push does.
-                printf("\n--- Pull phase (first title) ---\n");
-                if (!titles.empty()) {
-                    printf("[1/%zu] %s (TID %016lX)\n",
-                           titles.size(),
-                           titles[0].name.c_str(), titles[0].title_id);
-                    int prc = pull_title(vault, titles[0], uid,
-                                         device_id.c_str(), sess);
-                    if (prc >= 0)
-                        printf("Pull result: %d save(s) restored.\n", prc);
-                    else
-                        printf("Pull failed (see messages above).\n");
-                } else {
-                    printf("No titles found — nothing to pull.\n");
-                }
+                printf("\n=== Sync done: %d ok, %d failed ===\n", ok_count, failed_count);
                 webdav_session_end(sess);
             }
 
