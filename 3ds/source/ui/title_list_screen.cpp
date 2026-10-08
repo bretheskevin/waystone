@@ -10,6 +10,7 @@
 #include "widgets.h"
 #include "theme.h"
 #include "rom_parse.h"
+#include "version.h"
 #include <cstdio>
 
 static const float ICON_SZ = 40.0f;
@@ -66,6 +67,10 @@ static void draw_system_tile(C2D_TextBuf buf, const std::string& system, float x
 }
 
 // ---- ListScreen hooks ----
+
+const char* TitleListScreen::corner_label() {
+    return "v" WS_APP_VERSION;
+}
 
 void TitleListScreen::draw_row(C2D_TextBuf buf, size_t i,
                                 float x, float y, float w, float h, bool focused) {

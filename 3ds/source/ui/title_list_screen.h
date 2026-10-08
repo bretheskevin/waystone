@@ -15,6 +15,7 @@ public:
 protected:
     // ListScreen hooks
     const char* screen_title()          { return "Your Saves"; }
+    const char* corner_label();
     size_t      item_count()            { return titles_.size(); }
     float       row_height() const      { return 46.0f; }
     bool        fill_height() const     { return true; }

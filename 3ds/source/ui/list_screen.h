@@ -40,6 +40,8 @@ protected:
     // Title bar
     virtual const char* screen_title() = 0;             // "Your Saves"
     virtual std::string subtitle() { return ""; }        // "30 games"
+    // Optional dim label (e.g. app version) in the top screen's bottom-right corner, below the list.
+    virtual const char* corner_label() { return nullptr; }
 
     // Optional top-screen status area between the header and the list.
     // Draw status text, progress bars, etc. starting at (0, status_y).

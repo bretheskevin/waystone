@@ -163,6 +163,14 @@ void ListScreen::draw_top(C3D_RenderTarget* target) {
         draw_text_centered(buf, 0, counter_y, 0.5f, TEXT_SM, CLR_TEXT_HINT,
                            counter, (float)SCREEN_TOP_W);
     }
+
+    // Corner label: right-aligned with the list edge, on the counter's row.
+    const char* corner = corner_label();
+    if (corner && corner[0] != '\0') {
+        float corner_w = text_width(buf, TEXT_SM, corner);
+        draw_text(buf, list_x + list_w_full - corner_w, list_top + (float)vis * pitch,
+                  0.5f, TEXT_SM, CLR_TEXT_HINT, corner);
+    }
 }
 
 // ---- draw_bottom ----
