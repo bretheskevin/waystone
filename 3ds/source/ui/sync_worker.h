@@ -7,6 +7,8 @@
 #include "net.h"
 #include "saves.h"
 #include "sync_summary.h"
+#include "sync_engine.h"
+#include "wsconfig.h"
 
 struct Vault;
 typedef Vault WsVault;
@@ -16,7 +18,7 @@ enum class SyncPhase { Idle, Running, Done, Error };
 class SyncWorker {
 public:
     SyncWorker(WsVault* vault, const std::string& device_id, const WebDavCfg& dav,
-               std::vector<TitleInfo> titles);
+               std::vector<TitleInfo> titles, const WaystoneShellConfig& config);
     ~SyncWorker();
 
     void start();               // idempotent: no-op if already running
@@ -28,7 +30,7 @@ public:
     int current_index() const;  // active title index, -1 when none
     size_t bytes_got() const;
     size_t bytes_total() const;
-    float progress() const;     // combined 0..1 across both passes
+    float progress() const;     // single pass 0..1
     int total_count() const;
     const std::vector<TitleInfo>& titles() const;
 
@@ -39,9 +41,9 @@ private:
     std::string dav_user_;
     std::string dav_pass_;
     WebDavCfg dav_;
+    WaystoneShellConfig config_;
     std::vector<TitleInfo> titles_;
     std::atomic<int> phase_;
-    std::atomic<int> pass_;
     std::atomic<int> cur_index_;
     std::atomic<size_t> xfer_got_;
     std::atomic<size_t> xfer_total_;
@@ -56,7 +58,7 @@ private:
     static void on_step(void* ctx, const char* label);
     static bool on_bytes(size_t got, size_t total, void* ctx);
     void worker();
-    void begin_title(size_t i, const char* pass_name);
+    void begin_title(size_t i);
     void set_result(size_t i, TitleState state, const std::string& reason);
 
     SyncWorker(const SyncWorker&);

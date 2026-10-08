@@ -3,6 +3,7 @@
 
 #include "net.h"
 #include "saves.h"
+#include "sync_engine.h"
 
 #include <cstdint>
 #include <string>
@@ -33,19 +34,6 @@ int pull_title(const WsVault* vault,
                AccountUid uid,
                const char* device_id,
                WebDavSession* dav);
-
-// Result of scanning one save to determine the sync decision.
-struct SaveDecision {
-    std::string decision_type;  // "in_sync","push","pull","conflict_resolved","conflict_needs_input"
-    std::string pull_hash;      // hash to pull (empty if no pull needed)
-    std::string group_key;
-    std::string local_hash;
-    std::string base_path;      // obfuscated remote base path
-    std::string heads_array;    // raw JSON array of decrypted heads
-    std::vector<uint8_t> raw_tree; // raw extracted local WsFileTree (for snapshot)
-    std::string winner;         // "local" or "remote" for conflict_resolved
-    std::string mtime;          // UTC timestamp used when packaging this save
-};
 
 // Scan one normalized save entry to determine what sync action is needed.
 // save_meta: a single save's metadata JSON (mtime already injected).

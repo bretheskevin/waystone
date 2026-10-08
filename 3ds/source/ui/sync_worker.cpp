@@ -11,15 +11,15 @@ struct Vault;
 #include "sync.h"
 
 SyncWorker::SyncWorker(WsVault* vault, const std::string& device_id,
-                       const WebDavCfg& dav, std::vector<TitleInfo> titles)
+                       const WebDavCfg& dav, std::vector<TitleInfo> titles, const WaystoneShellConfig& config)
     : vault_(vault),
       device_id_(device_id),
       dav_url_(dav.base_url),
       dav_user_(dav.user),
       dav_pass_(dav.pass),
+      config_(config),
       titles_(titles),
       phase_((int)SyncPhase::Idle),
-      pass_(0),
       cur_index_(-1),
       xfer_got_(0),
       xfer_total_(0),
@@ -69,7 +69,6 @@ void SyncWorker::start() {
         thread_ = 0;
     }
     phase_.store((int)SyncPhase::Running);
-    pass_.store(0);
     cur_index_.store(-1);
     xfer_got_.store(0);
     xfer_total_.store(0);
@@ -132,24 +131,22 @@ int SyncWorker::total_count() const     { return (int)titles_.size(); }
 
 float SyncWorker::progress() const {
     if (phase() == SyncPhase::Done) return 1.0f;
-    return combined_progress(pass_.load(), cur_index_.load(), titles_.size(),
-                             xfer_got_.load(), xfer_total_.load());
+    return combined_progress(cur_index_.load(), titles_.size(), xfer_got_.load(), xfer_total_.load());
 }
 
 const std::vector<TitleInfo>& SyncWorker::titles() const { return titles_; }
 
-void SyncWorker::begin_title(size_t i, const char* pass_name) {
+void SyncWorker::begin_title(size_t i) {
     const size_t n = titles_.size();
     xfer_got_.store(0);
     xfer_total_.store(0);
     cur_index_.store((int)i);
     LightLock_Lock(&mu_);
-    snprintf(status_buf_, sizeof(status_buf_), "%s %zu/%zu: %s",
-             pass_name, i + 1, n, titles_[i].name.c_str());
+    snprintf(status_buf_, sizeof(status_buf_), "Syncing %zu/%zu: %s", i + 1, n, titles_[i].name.c_str());
     step_buf_[0] = '\0';
     results_[i].state = TitleState::Active;
     LightLock_Unlock(&mu_);
-    printf("[sync] %s %zu/%zu: %s\n", pass_name, i + 1, n, titles_[i].name.c_str());
+    printf("[sync] title %zu/%zu: %s\n", i + 1, n, titles_[i].name.c_str());
 }
 
 void SyncWorker::set_result(size_t i, TitleState state, const std::string& reason) {
@@ -161,14 +158,13 @@ void SyncWorker::set_result(size_t i, TitleState state, const std::string& reaso
 
 void SyncWorker::worker() {
     const size_t n = titles_.size();
-    std::vector<TitleTally> tally(n);
     SyncProgress prog;
     prog.step  = on_step;
     prog.bytes = on_bytes;
     prog.ctx   = this;
-    int total_pushed = 0;
-    int total_restored = 0;
-    printf("[sync] worker running: %zu title(s), push pass then pull pass\n", n);
+    SyncEngineCfg cfg = sync_cfg_from(config_, device_id_.c_str());
+    printf("[sync] worker running: %zu title(s), decide-first single pass (policy=%d safety_backup=%d)\n",
+           n, cfg.conflict_policy, (int)cfg.safety_backup);
 
     WebDavSession* sess = webdav_session_begin(dav_);
     if (!sess) {
@@ -181,53 +177,17 @@ void SyncWorker::worker() {
         return;
     }
 
-    pass_.store(0);
+    int failed = 0;
     for (size_t i = 0; i < n; i++) {
-        begin_title(i, "Push");
-        PushStats ps = {0, 0};
-        int rc = push_title(vault_, titles_[i], device_id_.c_str(), sess, &ps, &prog);
-        TitleTally& t = tally[i];
-        t.uploaded = ps.uploaded > 0;
-        if (rc < 0 || ps.failed > 0) {
-            t.push_failed = true;
-            t.reason = "Upload failed";
-            printf("[sync] push %s FAILED (rc=%d failed_saves=%d) -- continuing\n",
-                   titles_[i].name.c_str(), rc, ps.failed);
-        } else {
-            printf("[sync] push %s ok (rc=%d uploaded=%d)\n",
-                   titles_[i].name.c_str(), rc, ps.uploaded);
-        }
-        if (rc > 0) total_pushed += rc;
-        TitleState interim = t.push_failed ? TitleState::Failed
-                           : (t.uploaded ? TitleState::Uploaded : TitleState::Pending);
-        set_result(i, interim, t.reason);
-    }
-
-    pass_.store(1);
-    for (size_t i = 0; i < n; i++) {
-        begin_title(i, "Pull");
-        PullStats st = {0, 0, 0, 0};
-        int rc = pull_title(vault_, titles_[i], device_id_.c_str(), sess, &st, &prog);
-        TitleTally& t = tally[i];
-        const char* why = nullptr;
-        if (rc < 0)                       why = "Download failed";
-        else if (st.restore_failures > 0) why = "Restore failed";
-        else if (st.scan_failures > 0)    why = "Server check failed";
-        if (why) {
-            t.pull_failed = true;
-            if (t.reason.empty()) t.reason = why;
-            printf("[sync] pull %s FAILED (rc=%d restore_failures=%d scan_failures=%d)"
-                   " -- continuing\n", titles_[i].name.c_str(), rc,
-                   st.restore_failures, st.scan_failures);
-        }
-        t.conflict   = st.conflicts > 0;
-        t.downloaded = st.pulled > 0;
-        if (rc > 0) total_restored += rc;
+        begin_title(i);
+        TitleTally t = sync_title(vault_, &titles_[i], titles_[i].name.c_str(), ctr_shell_ops(),
+                                  cfg, sess, &prog);
         TitleState fs = final_title_state(t);
+        if (fs == TitleState::Failed) failed++;
         set_result(i, fs, fs == TitleState::Failed ? t.reason : std::string());
-        printf("[sync] title %zu/%zu %s -> %s %s\n", i + 1, n,
-               titles_[i].name.c_str(), title_state_label(fs),
-               fs == TitleState::Failed ? t.reason.c_str() : "");
+        printf("[sync] title %zu/%zu %s -> %s %s%s\n", i + 1, n, titles_[i].name.c_str(),
+               title_state_label(fs), fs == TitleState::Failed ? t.reason.c_str() : "",
+               fs == TitleState::Failed ? " -- continuing" : "");
     }
 
     webdav_session_end(sess);
@@ -239,8 +199,7 @@ void SyncWorker::worker() {
     snprintf(status_buf_, sizeof(status_buf_), "%s", headline.c_str());
     step_buf_[0] = '\0';
     LightLock_Unlock(&mu_);
-    printf("[sync] worker done: %s (pushed=%d restored=%d)\n",
-           headline.c_str(), total_pushed, total_restored);
+    printf("[sync] worker done: %s (%d title(s) failed)\n", headline.c_str(), failed);
     phase_.store((int)SyncPhase::Done);
     running_.store(false);
 }

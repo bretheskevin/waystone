@@ -6,6 +6,7 @@
 #include <3ds.h>
 #include "net.h"
 #include "saves.h"
+#include "wsconfig.h"
 
 struct Vault;
 typedef Vault WsVault;
@@ -43,7 +44,8 @@ enum class ConflictPhase { Idle, Scanning, Ready, Resolving, Done, Error };
 class ConflictWorker {
 public:
     ConflictWorker(WsVault* vault, const std::string& device_id,
-                   const WebDavCfg& dav, std::vector<TitleInfo> titles);
+                   const WebDavCfg& dav, std::vector<TitleInfo> titles,
+                   const WaystoneShellConfig& config);
     ~ConflictWorker();
 
     void start_scan();
@@ -83,6 +85,7 @@ private:
     std::string dav_user_;
     std::string dav_pass_;
     WebDavCfg dav_;
+    WaystoneShellConfig config_;
     std::vector<TitleInfo> titles_;
     std::atomic<int> phase_;
     std::atomic<bool> running_;

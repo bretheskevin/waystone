@@ -1,6 +1,6 @@
 #include "history_worker.h"
 #include "worker_thread.h"
-#include "sync.h"           // resolve_save_locations, restore_remote_save, SaveLocation
+#include "sync.h"           // resolve_save_locations, sync_restore_hash, SaveLocation
 #include "history_browse.h" // list_history
 #include "snapshot_browse.h" // human_timestamp
 #include <cstdio>
@@ -200,9 +200,9 @@ void HistoryWorker::restore_worker(const HistoryEntry& entry, size_t index) {
         running_.store(false);
         return;
     }
-    int rc = restore_remote_save(session_->vault, hash,
-                                 base_path_, group_key_, raw_tree_,
-                                 title_, sess);
+    SyncEngineCfg ecfg = sync_cfg_from(session_->config, session_->device_id.c_str());
+    int rc = sync_restore_hash(session_->vault, &title_, ctr_shell_ops(), ecfg,
+                               base_path_, group_key_, hash, raw_tree_, sess, 0);
     webdav_session_end(sess);
     if (rc != 0) {
         printf("[history] restore FAILED (rc=%d)\n", rc);
@@ -216,7 +216,8 @@ void HistoryWorker::restore_worker(const HistoryEntry& entry, size_t index) {
 
     printf("[history] restore complete\n");
     LightLock_Lock(&mu_);
-    snprintf(status_buf_, sizeof(status_buf_), "Restored! Safety backup saved.");
+    snprintf(status_buf_, sizeof(status_buf_), "%s",
+             session_->config.safety_backup ? "Restored! Safety backup saved." : "Restored!");
     LightLock_Unlock(&mu_);
     phase_.store((int)BrowsePhase::Done);
     running_.store(false);

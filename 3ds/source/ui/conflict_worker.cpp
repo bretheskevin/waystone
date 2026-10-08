@@ -1,7 +1,7 @@
 #include "conflict_worker.h"
 #include "session.h"         // zeroize_string
 #include "worker_thread.h"   // start_worker_thread
-#include "sync.h"            // scan_title, restore_remote_save, push_title, SaveDecision
+#include "sync.h"            // ctr_shell_ops, sync_scan_title, sync_push_group, sync_pull_hash
 #include "json.h"
 #include <cstdio>
 #include <cstring>
@@ -17,12 +17,14 @@ static unsigned long long ms_since(u64 t0) {
 }
 
 ConflictWorker::ConflictWorker(WsVault* vault, const std::string& device_id,
-                               const WebDavCfg& dav, std::vector<TitleInfo> titles)
+                               const WebDavCfg& dav, std::vector<TitleInfo> titles,
+                               const WaystoneShellConfig& config)
     : vault_(vault),
       device_id_(device_id),
       dav_url_(dav.base_url),
       dav_user_(dav.user),
       dav_pass_(dav.pass),
+      config_(config),
       titles_(titles),
       phase_((int)ConflictPhase::Idle),
       running_(false),
@@ -129,6 +131,7 @@ void ConflictWorker::scan_worker() {
     const size_t n = titles_.size();
     const u64 scan_t0 = osGetTime();
     printf("[conflict] scan begin: %zu title(s)\n", n);
+    SyncEngineCfg ecfg = sync_cfg_from(config_, device_id_.c_str());
     WebDavSession* sess = webdav_session_begin(dav_);
     if (!sess) {
         printf("[conflict] webdav_session_begin failed\n");
@@ -164,7 +167,7 @@ void ConflictWorker::scan_worker() {
 
         const u64 t0 = osGetTime();
         std::vector<SaveDecision> decisions =
-            scan_title(vault_, t, device_id_.c_str(), 1 /* Prompt */, sess);
+            sync_scan_title(vault_, &t, t.name.c_str(), ctr_shell_ops(), ecfg, 1 /* Prompt */, sess, 0, 0);
         scanned++;
 
         size_t title_conflicts = 0;
@@ -191,7 +194,7 @@ void ConflictWorker::scan_worker() {
             ci.title.icon.clear();
             ci.group_key = d.group_key;
             ci.local_hash = d.local_hash;
-            ci.local_mtime = d.raw_tree.empty() ? "" : current_utc_time();
+            ci.local_mtime = d.local_mtime;
             ci.remote_hash = remote_hash;
             ci.remote_device_id = remote_device_id;
             ci.remote_mtime = remote_mtime;
@@ -367,6 +370,7 @@ ConflictWorker::ResolveResult ConflictWorker::resolve_one(WebDavSession* sess, u
     item.title = p->title;
     item.group_key = p->group_key;
     item.remote_hash = p->remote_hash;
+    item.remote_mtime = p->remote_mtime;
     item.base_path = p->base_path;
     // Restore needs the tree (push re-extracts): borrow it instead of copying the whole save;
     // it is handed back below if the item stays in the list.
@@ -379,14 +383,15 @@ ConflictWorker::ResolveResult ConflictWorker::resolve_one(WebDavSession* sess, u
            keep_local ? "keep-local" : "keep-remote", item.group_key.c_str());
     const u64 t0 = osGetTime();
     const TitleInfo& ti = item.title;
+    SyncEngineCfg ecfg = sync_cfg_from(config_, device_id_.c_str());
     int rc;
     if (keep_local) {
-        rc = push_title(vault_, ti, device_id_.c_str(), sess);
+        rc = sync_push_group(vault_, &ti, ti.name.c_str(), ctr_shell_ops(), ecfg, item.group_key, sess, 0);
     } else {
-        rc = restore_remote_save(vault_, item.remote_hash, item.base_path,
-                                 item.group_key, item.raw_tree, ti, sess);
+        rc = sync_pull_hash(vault_, &ti, ctr_shell_ops(), ecfg, item.base_path, item.group_key,
+                            item.remote_hash, item.remote_mtime, item.raw_tree, sess, 0);
     }
-    const bool ok = keep_local ? (rc >= 0) : (rc == 0);
+    const bool ok = (rc == 0);
     printf("[conflict] resolve id=%lu %s (rc=%d, %llu ms)\n", (unsigned long)id,
            ok ? "done" : "failed", rc, ms_since(t0));
 

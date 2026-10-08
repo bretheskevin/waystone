@@ -30,7 +30,7 @@ static u32 state_color(TitleState s) {
 
 SyncScreen::SyncScreen(Session* session, std::vector<TitleInfo> titles)
     : session_(session),
-      worker_(session->vault, session->device_id, session->dav.as_cfg(), titles),
+      worker_(session->vault, session->device_id, session->dav.as_cfg(), titles, session->config),
       worker_started_(false), frame_ready_(false), spinner_angle_(0.0f),
       name_cache_(titles.size()), scroll_(0), finished_logged_(false)
 {

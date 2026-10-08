@@ -15,6 +15,7 @@ extern "C" {
 #include "net.h"
 #include "saves.h"
 #include "sync.h"
+#include "wsconfig.h"
 
 #ifndef WAYSTONE_WEBDAV_URL
 #define WAYSTONE_WEBDAV_URL "http://CHANGEME"
@@ -135,29 +136,20 @@ int main(int argc, char* argv[]) {
         if (!sess) {
             printf("FATAL: webdav_session_begin failed\n");
         } else {
-            printf("--- Push phase ---\n");
-            int total_pushed = 0;
+            WaystoneShellConfig console_cfg;  // defaults: NewestWins + safety backup on
+            SyncEngineCfg ecfg = sync_cfg_from(console_cfg, device_id.c_str());
+            printf("--- Sync (decide-first, policy=%d) ---\n", ecfg.conflict_policy);
+            int ok_count = 0, failed_count = 0;
             for (size_t i = 0; i < titles.size(); i++) {
-                printf("[%zu/%zu] %s (TID %016llX)\n",
-                       i + 1, titles.size(),
-                       titles[i].name.c_str(),
+                printf("[%zu/%zu] %s (TID %016llX)\n", i + 1, titles.size(), titles[i].name.c_str(),
                        static_cast<unsigned long long>(titles[i].title_id));
-                int rc = push_title(vault, titles[i], device_id.c_str(), sess);
-                if (rc > 0) total_pushed += rc;
+                TitleTally t = sync_title(vault, &titles[i], titles[i].name.c_str(), ctr_shell_ops(),
+                                          ecfg, sess, 0);
+                TitleState fs = final_title_state(t);
+                printf("  -> %s %s\n", title_state_label(fs), t.reason.c_str());
+                if (fs == TitleState::Failed) failed_count++; else ok_count++;
             }
-            printf("\n=== Push done: %d saves pushed ===\n\n", total_pushed);
-
-            printf("--- Pull phase ---\n");
-            int total_pulled = 0;
-            for (size_t i = 0; i < titles.size(); i++) {
-                printf("[%zu/%zu] %s (TID %016llX)\n",
-                       i + 1, titles.size(),
-                       titles[i].name.c_str(),
-                       static_cast<unsigned long long>(titles[i].title_id));
-                int rc = pull_title(vault, titles[i], device_id.c_str(), sess);
-                if (rc > 0) total_pulled += rc;
-            }
-            printf("\n=== Pull done: %d saves pulled ===\n", total_pulled);
+            printf("\n=== Sync done: %d ok, %d failed ===\n", ok_count, failed_count);
             webdav_session_end(sess);
         }
     }

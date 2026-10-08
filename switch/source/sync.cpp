@@ -51,7 +51,7 @@ SaveDecision scan_save_decision(const WsVault* vault, const char* save_meta,
                                 const uint8_t* files_ptr, size_t files_len) {
     SaveDecision d;
     d.raw_tree = raw_tree;
-    d.mtime    = mtime;
+    d.local_mtime = mtime;
 
     WsBuf zip = {nullptr, 0};
     char* entry_json = ws_package(save_meta, files_ptr, files_len, &zip);

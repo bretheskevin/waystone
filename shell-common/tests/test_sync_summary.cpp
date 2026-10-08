@@ -22,9 +22,9 @@ static void test_final_state_precedence() {
     assert(final_title_state(t) == TitleState::UpDown);
     t.conflict = true;
     assert(final_title_state(t) == TitleState::Conflict);
-    t.pull_failed = true;
+    t.failed = true;
     assert(final_title_state(t) == TitleState::Failed);
-    TitleTally p; p.push_failed = true; p.downloaded = true;
+    TitleTally p; p.failed = true; p.downloaded = true;
     assert(final_title_state(p) == TitleState::Failed);
     printf("test_final_state_precedence PASSED\n");
 }
@@ -59,13 +59,14 @@ static void test_headline() {
 }
 
 static void test_combined_progress() {
-    assert(feq(combined_progress(0, 0, 4, 0, 0), 0.0f));
-    assert(feq(combined_progress(0, 1, 2, 0, 0), 0.25f));
-    assert(feq(combined_progress(1, 3, 4, 50, 100), 0.9375f));
-    assert(feq(combined_progress(1, 0, 2, 200, 100), 0.75f));   // got > total clamps frac to 1
-    assert(feq(combined_progress(0, -1, 4, 0, 0), 0.0f));        // no active title yet
-    assert(feq(combined_progress(0, 0, 0, 0, 0), 0.0f));         // no titles
-    assert(feq(combined_progress(0, 2, 4, 10, 0), 0.25f));       // unknown total -> frac 0
+    assert(feq(combined_progress(0, 4, 0, 0), 0.0f));
+    assert(feq(combined_progress(1, 2, 0, 0), 0.5f));
+    assert(feq(combined_progress(3, 4, 50, 100), 0.875f));
+    assert(feq(combined_progress(0, 2, 200, 100), 0.5f));   // got > total clamps frac to 1
+    assert(feq(combined_progress(-1, 4, 0, 0), 0.0f));      // no active title yet
+    assert(feq(combined_progress(0, 0, 0, 0), 0.0f));       // no titles
+    assert(feq(combined_progress(2, 4, 10, 0), 0.5f));      // unknown total -> frac 0
+    assert(feq(combined_progress(9, 4, 0, 0), 1.0f));       // clamped
     printf("test_combined_progress PASSED\n");
 }
 

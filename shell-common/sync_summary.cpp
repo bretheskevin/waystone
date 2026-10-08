@@ -2,7 +2,7 @@
 #include <cstdio>
 
 TitleState final_title_state(const TitleTally& t) {
-    if (t.push_failed || t.pull_failed) return TitleState::Failed;
+    if (t.failed) return TitleState::Failed;
     if (t.conflict) return TitleState::Conflict;
     if (t.uploaded && t.downloaded) return TitleState::UpDown;
     if (t.downloaded) return TitleState::Downloaded;
@@ -56,17 +56,15 @@ std::string format_sync_headline(const std::vector<TitleResult>& results) {
     return out;
 }
 
-float combined_progress(int pass, int index, size_t n, size_t got, size_t total) {
+float combined_progress(int index, size_t n, size_t got, size_t total) {
     if (n == 0) return 0.0f;
-    if (pass < 0) pass = 0;
-    if (pass > 1) pass = 1;
     if (index < 0) index = 0;
     float frac = 0.0f;
     if (total > 0) {
         frac = (float)got / (float)total;
         if (frac > 1.0f) frac = 1.0f;
     }
-    float p = ((float)(pass * (int)n + index) + frac) / (float)(2 * n);
+    float p = ((float)index + frac) / (float)n;
     if (p < 0.0f) p = 0.0f;
     if (p > 1.0f) p = 1.0f;
     return p;

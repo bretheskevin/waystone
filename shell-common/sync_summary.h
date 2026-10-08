@@ -13,17 +13,15 @@ struct TitleResult {
     TitleResult() : state(TitleState::Pending) {}
 };
 
-// Per-title outcome accumulated across the push pass and the pull pass.
+// Per-title outcome of one decide-first pass (any per-save failure marks the title failed;
+// the run always continues).
 struct TitleTally {
-    bool push_failed;
-    bool pull_failed;
+    bool failed;
     bool uploaded;
     bool downloaded;
     bool conflict;
-    std::string reason;
-    TitleTally()
-        : push_failed(false), pull_failed(false), uploaded(false),
-          downloaded(false), conflict(false) {}
+    std::string reason;   // first failure reason, user-facing
+    TitleTally() : failed(false), uploaded(false), downloaded(false), conflict(false) {}
 };
 
 // Precedence: Failed > Conflict > UpDown > Downloaded > Uploaded > InSync.
@@ -36,8 +34,8 @@ const char* title_state_label(TitleState s);
 // UpDown counts toward both uploaded and downloaded. Empty input -> "Done — nothing to sync".
 std::string format_sync_headline(const std::vector<TitleResult>& results);
 
-// Combined 0..1 bar across both passes: (pass*n + index + got/total) / (2n). Clamped.
-float combined_progress(int pass, int index, size_t n, size_t got, size_t total);
+// Single-pass 0..1 bar: (index + got/total) / n. Clamped.
+float combined_progress(int index, size_t n, size_t got, size_t total);
 
 // curl reports total 0 until it knows the size (e.g. while connecting): keep the previous total then.
 size_t next_xfer_total(size_t prev, size_t reported);

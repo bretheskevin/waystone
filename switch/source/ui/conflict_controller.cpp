@@ -110,7 +110,7 @@ void ConflictController::scan_worker() {
             }
             ConflictItem ci;
             ci.title_name = titles_[i].name; ci.title_id = titles_[i].title_id; ci.uid = uid_;
-            ci.group_key = d.group_key; ci.local_hash = d.local_hash; ci.local_mtime = d.mtime;
+            ci.group_key = d.group_key; ci.local_hash = d.local_hash; ci.local_mtime = d.local_mtime;
             ci.remote_hash = remote_hash; ci.remote_device_id = remote_device_id; ci.remote_mtime = remote_mtime;
             ci.base_path = d.base_path; ci.heads_array = d.heads_array; ci.raw_tree = d.raw_tree;
             { std::lock_guard<std::mutex> lk(mu_); conflicts_.push_back(std::move(ci)); }

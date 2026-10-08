@@ -13,7 +13,7 @@ ConflictScreen::ConflictScreen(Session* session, std::vector<TitleInfo> titles)
       seen_version_(0)
 {
     worker_ = new ConflictWorker(session_->vault, session_->device_id,
-                                 session_->dav.as_cfg(), titles);
+                                 session_->dav.as_cfg(), titles, session_->config);
     worker_->start_scan();
     printf("[conflict] scan started for %zu titles\n", titles.size());
 }
