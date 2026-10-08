@@ -1,5 +1,5 @@
-#ifndef WAYSTONE_3DS_SYNC_SUMMARY_H
-#define WAYSTONE_3DS_SYNC_SUMMARY_H
+#ifndef WAYSTONE_SYNC_SUMMARY_H
+#define WAYSTONE_SYNC_SUMMARY_H
 
 #include <cstddef>
 #include <string>

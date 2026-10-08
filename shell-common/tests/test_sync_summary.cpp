@@ -1,7 +1,8 @@
 // Host-only test for the sync progress/summary rules.
 // Build (from repo root):
-//   g++ -std=c++11 -fno-exceptions -fno-rtti -Wall -Wextra -I 3ds/source \
-//     3ds/tests/test_sync_summary.cpp 3ds/source/sync_summary.cpp -o /tmp/test_sync_summary
+//   g++ -std=c++11 -fno-exceptions -fno-rtti -Wall -Wextra -I shell-common \
+//     shell-common/tests/test_sync_summary.cpp shell-common/sync_summary.cpp \
+//     -o /tmp/test_sync_summary && /tmp/test_sync_summary
 #include "sync_summary.h"
 #include <cassert>
 #include <cmath>
