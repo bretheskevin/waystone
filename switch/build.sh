@@ -21,7 +21,7 @@ MAKE_B="make -C switch WAYSTONE_TARGET=aarch64-none-elf"
 echo ""
 echo "--- Attempt A: built-in aarch64-nintendo-switch-freestanding ---"
 if run_docker "$CARGO_A && $MAKE_A"; then
-    NRO="$SCRIPT_DIR/waystone-spike.nro"
+    NRO="$SCRIPT_DIR/waystone.nro"
     echo ""
     echo "SUCCESS (built-in target)"
     ls -lh "$NRO"
@@ -35,7 +35,7 @@ run_docker "make -C switch clean" || true
 echo ""
 echo "--- Attempt B: custom aarch64-none-elf.json ---"
 if run_docker "$CARGO_B && $MAKE_B"; then
-    NRO="$SCRIPT_DIR/waystone-spike.nro"
+    NRO="$SCRIPT_DIR/waystone.nro"
     echo ""
     echo "SUCCESS (custom target)"
     ls -lh "$NRO"

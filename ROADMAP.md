@@ -52,7 +52,7 @@ saves (mGBA, TWiLight++) and native installed-game saves (Switch, 3DS). See
   resolve at the C++ libnx link step.
 - **libnx link spike verified (compile+link)**: `libwaystone_ffi.a` (release,
   `aarch64-nintendo-switch-freestanding`, no custom-target fallback needed) links cleanly
-  into a devkitPro/libnx C++ homebrew. Output: `switch/waystone-spike.nro` (~215 KB), built
+  into a devkitPro/libnx C++ homebrew. Output: `switch/waystone.nro` (~215 KB), built
   via `switch/build.sh` inside the `waystone-switch` Docker image (devkitpro/devkita64 +
   rustup nightly + rust-src). The demo drives a full C-ABI round-trip (`ws_vault_init` →
   `ws_canonical_zip`/`ws_content_hash` → `ws_vault_encrypt_blob` → `ws_vault_decrypt_blob`

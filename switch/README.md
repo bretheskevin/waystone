@@ -18,7 +18,7 @@ spikes once the foundation is confirmed.
 
 ## Verified result
 
-`waystone-spike.nro` links both `libwaystone_ffi.a` and `libcurl` (switch-curl).
+`waystone.nro` links both `libwaystone_ffi.a` and `libcurl` (switch-curl).
 
 - FFI: `ws_vault_init` -> `ws_canonical_zip` / `ws_content_hash` ->
   `ws_vault_encrypt_blob` -> `ws_vault_decrypt_blob` -> `ws_unzip`
@@ -71,7 +71,7 @@ docker run --rm -v "$PWD":/work -w /work waystone-switch bash -c "
   make -C switch"
 ```
 
-Output is `switch/waystone-spike.nro`.
+Output is `switch/waystone.nro`.
 
 ### Setting the WebDAV server URL and credentials
 

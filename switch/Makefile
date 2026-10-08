@@ -10,7 +10,11 @@ TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
 #---------------------------------------------------------------------------------
-TARGET		:=	waystone-spike
+APP_TITLE	:=	Waystone
+APP_AUTHOR	:=	kandid
+APP_VERSION	:=	$(shell sed -n 's/.*WS_APP_VERSION "\([^"]*\)".*/\1/p' $(TOPDIR)/source/version.h)
+
+TARGET		:=	waystone
 BUILD		:=	build
 DATA		:=	data
 INCLUDES	:=	../ffi/include source ../shell-common

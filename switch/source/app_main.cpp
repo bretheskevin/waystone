@@ -24,6 +24,7 @@ extern "C" {
 #include "ui/no_internet_activity.h"
 #include "ui/loading_activity.h"
 #include "session_store.h"
+#include "updater.h"
 
 // Task 3: Switch hardware device key (SPL service — always available on Switch).
 static bool switch_device_key(uint8_t* out_key, size_t* out_len) {
@@ -44,6 +45,7 @@ static bool switch_device_key(uint8_t* out_key, size_t* out_len) {
 
 int main(int argc, char* argv[])
 {
+    updater_set_self_candidates(argc > 0 ? argv[0] : nullptr, "sdmc:/switch/waystone.nro");
     socketInitializeDefault();
     nxlinkStdio();                    // redirect stdout to nxlink host (no-op if not netloaded)
     setvbuf(stdout, NULL, _IONBF, 0); // unbuffered: every printf reaches nxlink immediately

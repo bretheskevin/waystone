@@ -32,7 +32,7 @@ carry **only relative relocations**.
 
 **Verify every build** (matches libnx's supported set — no hardware needed):
 ```sh
-aarch64-none-elf-readelf -r switch/waystone-spike.elf \
+aarch64-none-elf-readelf -r switch/waystone.elf \
   | grep -oE 'R_AARCH64_[A-Z0-9_]+' | sort | uniq -c
 # MUST be R_AARCH64_RELATIVE / R_AARCH64_NONE only. Any GLOB_DAT/JUMP_SLOT = will crash on boot.
 ```
@@ -60,4 +60,4 @@ after input dispatch unwinds. Two safe patterns: (1) mutate views in place (`set
   and assembles romfs from the vendored borealis tree at build time.
 - On-hardware: launch in **full application mode** (hold **R** over a game) for save-mount + enough
   heap; Atmosphère dumps crash logs to `sdmc:/atmosphere/crash_reports/*.log` — symbolize with
-  `aarch64-none-elf-addr2line -f -C -i -e switch/waystone-spike.elf <module-offset…>`.
+  `aarch64-none-elf-addr2line -f -C -i -e switch/waystone.elf <module-offset…>`.

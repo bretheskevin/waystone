@@ -5,6 +5,9 @@
 #include "keys_file.h"
 #include "unlock_activity.h"
 #include "worker_reaper.h"
+#include "confirm_banner.h"
+#include "version.h"
+#include "updater.h"
 #include <cstdio>
 
 extern "C" {
@@ -12,8 +15,12 @@ struct Vault;
 #include "waystone.h"
 }
 
-SettingsActivity::SettingsActivity(Session* session) : session_(session) {}
-SettingsActivity::~SettingsActivity() { pump_.stop(); }
+SettingsActivity::SettingsActivity(Session* session) : session_(session), updater_(new UpdateController()) {}
+SettingsActivity::~SettingsActivity()
+{
+    pump_.stop();
+    reap_worker(updater_);
+}
 
 brls::View* SettingsActivity::createContentView()
 {
@@ -29,11 +36,20 @@ brls::View* SettingsActivity::createContentView()
     title->setFontSize(28.0f);
     title->setSingleLine(true);
     col->addView(title);
+    col_ = col;
+
+    version_label_ = new brls::Label();
+    version_label_->setText(std::string("Waystone v") + WS_APP_VERSION);
+    version_label_->setFontSize(18.0f);
+    version_label_->setSingleLine(true);
+    version_label_->setTextColor(nvgRGB(150, 150, 150));
+    col->addView(version_label_);
 
     server_label_ = new brls::Label();
     server_label_->setFontSize(20.0f);
     server_label_->setFocusable(true);
     server_label_->registerClickAction([this](brls::View*) {
+        if (consume_confirm()) return true;
         std::string val = swkbd_prompt("Server URL", session_->config.server_url, false);
         if (!val.empty()) {
             session_->config.server_url = val;
@@ -49,6 +65,7 @@ brls::View* SettingsActivity::createContentView()
     user_label_->setFontSize(20.0f);
     user_label_->setFocusable(true);
     user_label_->registerClickAction([this](brls::View*) {
+        if (consume_confirm()) return true;
         std::string val = swkbd_prompt("Username", session_->config.username, false);
         if (!val.empty()) {
             session_->config.username = val;
@@ -63,6 +80,7 @@ brls::View* SettingsActivity::createContentView()
     policy_label_->setFontSize(20.0f);
     policy_label_->setFocusable(true);
     policy_label_->registerClickAction([this](brls::View*) {
+        if (consume_confirm()) return true;
         session_->config.conflict_policy =
             (session_->config.conflict_policy == WsConflictPolicy::NewestWins)
                 ? WsConflictPolicy::Prompt
@@ -76,11 +94,27 @@ brls::View* SettingsActivity::createContentView()
     backup_label_->setFontSize(20.0f);
     backup_label_->setFocusable(true);
     backup_label_->registerClickAction([this](brls::View*) {
+        if (consume_confirm()) return true;
         session_->config.safety_backup = !session_->config.safety_backup;
         refresh_labels();
         return true;
     });
     col->addView(backup_label_);
+
+    update_label_ = new brls::Label();
+    update_label_->setText("Check for updates");
+    update_label_->setFontSize(20.0f);
+    update_label_->setFocusable(true);
+    update_label_->registerClickAction([this](brls::View*) {
+        if (consume_confirm()) return true;
+        if (updater_->is_running()) return true;
+        printf("[update] check requested from settings\n");
+        install_started_ = false;
+        updater_->start_check();
+        status_label_->setText("Checking for updates\xe2\x80\xa6");
+        return true;
+    });
+    col->addView(update_label_);
 
     device_label_ = new brls::Label();
     device_label_->setFontSize(20.0f);
@@ -91,6 +125,7 @@ brls::View* SettingsActivity::createContentView()
     save_label_->setFontSize(20.0f);
     save_label_->setFocusable(true);
     save_label_->registerClickAction([this](brls::View*) {
+        if (consume_confirm()) return true;
         save_settings();
         return true;
     });
@@ -102,6 +137,7 @@ brls::View* SettingsActivity::createContentView()
     logout_label_->setFocusable(true);
     logout_label_->setTextColor(nvgRGB(220, 50, 50));
     logout_label_->registerClickAction([this](brls::View*) {
+        if (consume_confirm()) return true;
         if (session_->sync_busy && session_->sync_busy()) {
             printf("[ui] settings: log out refused -- sync in progress\n");
             status_label_->setText("Sync in progress \xe2\x80\x94 wait for it to finish");
@@ -134,7 +170,14 @@ void SettingsActivity::onContentAvailable()
     pump_.start();
     refresh_labels();
 
-    registerAction(ws_label(WsAction::Back), ws_brls(WsAction::Back), [](brls::View*) {
+    registerAction(ws_label(WsAction::Back), ws_brls(WsAction::Back), [this](brls::View*) {
+        if (confirm_update_) {
+            printf("[update] confirm declined (back)\n");
+            confirm_update_ = false;
+            status_label_->setText("Update postponed");
+            pump_.schedule();
+            return true;
+        }
         printf("[ui] settings back\n");
         brls::Application::popActivity();
         return true;
@@ -190,4 +233,75 @@ void SettingsActivity::do_logout()
     // kbuf intentionally never freed: UnlockActivity borrows it for the app lifetime (3DS does the same).
     printf("[ui] logout -> push UnlockActivity (activities below stay; not popped)\n");
     brls::Application::pushActivity(new UnlockActivity(session_, kbuf, static_cast<size_t>(klen)));
+}
+
+bool SettingsActivity::consume_confirm()
+{
+    if (!confirm_update_) return false;
+    std::string url = updater_->asset_url();
+    printf("[update] confirm -> install v%s\n", pending_ver_.c_str());
+    confirm_update_ = false;
+    install_started_ = true;
+    updater_->start_install(url);
+    status_label_->setText("Downloading\xe2\x80\xa6");
+    pump_.schedule();
+    return true;
+}
+
+void SettingsActivity::refresh_banner()
+{
+    if (confirm_update_ && !banner_) {
+        banner_ = make_confirm_banner("Waystone v" + pending_ver_ + " available", "Download and install now?");
+        col_->addView(banner_, 2);
+    } else if (!confirm_update_ && banner_) {
+        col_->removeView(banner_);
+        banner_ = nullptr;
+    }
+}
+
+void SettingsActivity::poll_update()
+{
+    if (!updater_) return;
+    UpdatePhase phase = updater_->phase();
+
+    if (phase == UpdatePhase::Downloading)
+        status_label_->setText("Downloading\xe2\x80\xa6 " + std::to_string(updater_->progress_percent()) + "%");
+
+    if (last_phase_ == UpdatePhase::Checking && (phase == UpdatePhase::Done || phase == UpdatePhase::Error)) {
+        int rc = updater_->check_rc();
+        if (rc == UP_OK) {
+            std::string ver = updater_->latest_version();
+            if (version_newer(ver.c_str(), WS_APP_VERSION)) {
+                pending_ver_ = ver;
+                confirm_update_ = true;
+                status_label_->setText("Update available: v" + ver);
+                printf("[update] newer version available: v%s\n", ver.c_str());
+                pump_.schedule();
+            } else {
+                status_label_->setText("Up to date (v" + ver + ")");
+                printf("[update] up to date (latest v%s)\n", ver.c_str());
+            }
+        } else {
+            status_label_->setText(updater_check_message(rc, ".nro"));
+            printf("[update] check failed rc=%d\n", rc);
+        }
+    }
+
+    if (install_started_ && last_phase_ == UpdatePhase::Downloading &&
+        (phase == UpdatePhase::Done || phase == UpdatePhase::Error)) {
+        int rc = updater_->install_rc();
+        if (updater_->cancelled()) {
+            status_label_->setText("Update cancelled");
+            printf("[update] install cancelled\n");
+        } else if (rc == UP_OK) {
+            status_label_->setText("Updated to v" + pending_ver_ + ". Restart to apply.");
+            printf("[update] install succeeded\n");
+        } else {
+            status_label_->setText(updater_install_message(rc));
+            printf("[update] install failed rc=%d\n", rc);
+        }
+        install_started_ = false;
+    }
+
+    last_phase_ = phase;
 }
