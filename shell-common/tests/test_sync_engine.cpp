@@ -3,6 +3,7 @@
 //   g++ -std=c++11 -fno-exceptions -fno-rtti -Wall -Wextra -I shell-common -I ffi/include \
 //     shell-common/tests/test_sync_engine.cpp shell-common/sync_engine.cpp \
 //     shell-common/sync_rules.cpp shell-common/sync_summary.cpp shell-common/json.cpp \
+//     shell-common/file_tree.cpp \
 //     -o /tmp/test_sync_engine && /tmp/test_sync_engine
 #include "sync_engine.h"
 #include "json.h"
@@ -78,12 +79,16 @@ char* ws_package(const char* meta, const uint8_t* files, uintptr_t n, WsBuf* out
 char* ws_fold_heads(const char* heads) {
     std::vector<std::string> v = json_split_array(heads);
     if (v.empty()) return 0;
-    std::string best_h, best_m;
+    std::string best_h, best_m, best_d;
     for (size_t i = 0; i < v.size(); i++) {
         std::string m = json_get_string(v[i].c_str(), "mtime");
-        if (best_m.empty() || m >= best_m) { best_m = m; best_h = json_get_string(v[i].c_str(), "hash"); }
+        if (best_m.empty() || m >= best_m) {
+            best_m = m;
+            best_h = json_get_string(v[i].c_str(), "hash");
+            best_d = json_get_string(v[i].c_str(), "device_id");
+        }
     }
-    return dup_c("{\"hash\":\"" + best_h + "\",\"mtime\":\"" + best_m + "\"}");
+    return dup_c("{\"device_id\":\"" + best_d + "\",\"hash\":\"" + best_h + "\",\"mtime\":\"" + best_m + "\"}");
 }
 char* ws_decide_pull(const char*, const char*, const char*, const char*, int policy) {
     g_events.push_back("decide");
@@ -364,12 +369,42 @@ static void test_scan_title_copies_raw_tree() {
     assert(d[0].decision_type == "conflict_needs_input");
     assert(d[0].raw_tree == t.raw);
     assert(d[0].head_mtime == "2026-01-02T00:00:00Z");
+    assert(d[0].head_hash == "h2" && d[0].head_device_id == "other");
     assert(first_event("put") == -1);
     assert(g_live == 0);
     printf("test_scan_title_copies_raw_tree PASSED\n");
 }
 
+static void test_adopt_normalized_owns_or_frees_buffer() {
+    reset();
+    const uint8_t junk[3] = {1, 2, 3};
+    WsBuf bad = dup_buf(junk, sizeof(junk));
+    std::vector<uint8_t> raw(5, 9);
+    {
+        LocalSaveSet set;
+        assert(!set.adopt_normalized(bad.ptr, bad.len, raw, "2026-01-01T00:00:00Z"));
+        assert(set.saves.empty() && set.raw_tree.empty());
+    }
+    assert(raw.size() == 5);                             // caller keeps raw on failure
+    assert(g_live == 0);                                 // freed exactly once on failure
+
+    const uint8_t empty_list[4] = {0, 0, 0, 0};
+    WsBuf ok = dup_buf(empty_list, sizeof(empty_list));
+    WsBuf again = dup_buf(empty_list, sizeof(empty_list));
+    {
+        LocalSaveSet set;
+        assert(set.adopt_normalized(ok.ptr, ok.len, raw, ""));
+        assert(set.raw_tree.size() == 5 && raw.empty() && set.saves.empty());
+        std::vector<uint8_t> raw2(2, 1);
+        assert(!set.adopt_normalized(again.ptr, again.len, raw2, ""));  // second adopt refused + freed
+        assert(g_live == 1);                             // first buffer still owned by the set
+    }
+    assert(g_live == 0);                                 // destructor freed it
+    printf("test_adopt_normalized_owns_or_frees_buffer PASSED\n");
+}
+
 int main() {
+    test_adopt_normalized_owns_or_frees_buffer();
     test_first_upload_pushes();
     test_remote_newer_pulls_and_updates_base();
     test_safety_backup_off_skips_snapshot();

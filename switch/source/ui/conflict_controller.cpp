@@ -1,13 +1,8 @@
 #include "conflict_controller.h"
 #include "session.h"
 #include "sync.h"
-#include "json.h"
 #include <chrono>
 #include <cstdio>
-
-extern "C" {
-#include "waystone.h"
-}
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -125,17 +120,6 @@ void ConflictController::scan_worker() {
         size_t title_conflicts = 0;
         for (SaveDecision& d : decisions) {
             if (d.decision_type != "conflict_needs_input") continue;
-            std::string remote_hash, remote_device_id, remote_mtime;
-            char* folded = ws_fold_heads(d.heads_array.c_str());
-            if (folded) {
-                remote_hash = json_get_string(folded, "hash");
-                remote_device_id = json_get_string(folded, "device_id");
-                remote_mtime = json_get_string(folded, "mtime");
-                ws_string_free(folded);
-            } else {
-                printf("[conflict] ws_fold_heads failed for %s\n", d.group_key.c_str());
-            }
-
             ConflictItem ci;
             ci.id = next_id_++;
             ci.title_name = t.name;
@@ -143,9 +127,9 @@ void ConflictController::scan_worker() {
             ci.group_key = d.group_key;
             ci.local_hash = d.local_hash;
             ci.local_mtime = d.local_mtime;
-            ci.remote_hash = remote_hash;
-            ci.remote_device_id = remote_device_id;
-            ci.remote_mtime = remote_mtime;
+            ci.remote_hash = d.head_hash;
+            ci.remote_device_id = d.head_device_id;
+            ci.remote_mtime = d.head_mtime;
             ci.base_path = d.base_path;
             ci.raw_tree = std::move(d.raw_tree);
             const uint32_t id = ci.id;
@@ -242,6 +226,8 @@ void ConflictController::start_resolve(uint32_t id, bool keep_local) {
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true)) {
         printf("[conflict] resolve id=%u ignored: worker busy\n", id);
+        std::lock_guard<std::mutex> lk(mu_);
+        status_ = "Busy finishing the scan \xe2\x80\x94 try again";
         return;
     }
     join();

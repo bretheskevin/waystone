@@ -1,6 +1,7 @@
 #include "sync_engine.h"
 #include "sync_rules.h"
 #include "json.h"
+#include "file_tree.h"  // save_list_decode
 #include "snapshot.h"
 #include "snapshot_browse.h"  // history_timestamp
 
@@ -59,16 +60,57 @@ LocalSaveSet::~LocalSaveSet() {
     }
 }
 
-void LocalSaveSet::adopt_savelist(uint8_t* ptr, size_t len) {
-    if (savelist_ptr_) {
-        printf("[sync] BUG: adopt_savelist called twice -- freeing the previous buffer\n");
+bool LocalSaveSet::adopt_normalized(uint8_t* ptr, size_t len, std::vector<uint8_t>& raw,
+                                    const std::string& local_mtime) {
+    std::vector<SaveListEntry> entries;
+    if (savelist_ptr_ || !save_list_decode(ptr, len, &entries)) {
+        printf("[sync] adopt_normalized: %s (%zu bytes) -- buffer freed\n",
+               savelist_ptr_ ? "BUG: called twice" : "save_list_decode failed", len);
         WsBuf b;
-        b.ptr = savelist_ptr_;
-        b.len = savelist_len_;
+        b.ptr = ptr;
+        b.len = len;
         ws_buf_free(b);
+        return false;
     }
     savelist_ptr_ = ptr;
     savelist_len_ = len;
+    raw_tree.swap(raw);
+    for (size_t i = 0; i < entries.size(); i++) {
+        LocalSave s;
+        s.meta_json = entries[i].meta_json;
+        s.files_ptr = entries[i].files_ptr;
+        s.files_len = entries[i].files_len;
+        s.local_mtime = local_mtime;
+        saves.push_back(s);
+    }
+    printf("[sync] adopt_normalized: %zu save(s), raw tree %zu bytes, local mtime '%s'\n",
+           saves.size(), raw_tree.size(), local_mtime.empty() ? "(unknown)" : local_mtime.c_str());
+    return true;
+}
+
+// json_set_mtime + ws_package for one local save. The zip is handed to zip_out (caller frees)
+// or freed here when zip_out is null. false = package/parse failed; nothing left to free.
+static bool package_local(const LocalSave& s, std::string& mtime, std::string& hash,
+                          std::string& group_key, WsBuf* zip_out) {
+    mtime = s.local_mtime.empty() ? utc_now() : s.local_mtime;
+    std::string meta = json_set_mtime(s.meta_json, mtime.c_str());
+    WsBuf zip = {0, 0};
+    char* entry = ws_package(meta.c_str(), s.files_ptr, s.files_len, &zip);
+    if (!entry) {
+        printf("[sync] ws_package failed: %s\n", ffi_err());
+        return false;  // zip is not allocated when ws_package fails
+    }
+    hash = json_get_nested_string(entry, "content", "hash");
+    group_key = json_get_string(entry, "group_key");
+    ws_string_free(entry);
+    if (hash.empty() || group_key.empty()) {
+        printf("[sync] could not parse SaveEntry (group_key='%s')\n", group_key.c_str());
+        ws_buf_free(zip);
+        return false;
+    }
+    if (zip_out) *zip_out = zip;
+    else ws_buf_free(zip);
+    return true;
 }
 
 std::string sync_base_path(const WsVault* vault, const std::string& group_key) {
@@ -225,10 +267,10 @@ static void decide_from_heads(const WsVault* vault, SaveDecision& d, int policy,
 
     d.heads_array = arr;
     d.own_head_hash = own_head_hash(arr, device_id);
-    std::string folded_hash;
     char* folded = ws_fold_heads(arr.c_str());
     if (folded) {
-        folded_hash = json_get_string(folded, "hash");
+        d.head_hash = json_get_string(folded, "hash");
+        d.head_device_id = json_get_string(folded, "device_id");
         d.head_mtime = json_get_string(folded, "mtime");
         ws_string_free(folded);
     } else {
@@ -247,7 +289,7 @@ static void decide_from_heads(const WsVault* vault, SaveDecision& d, int policy,
         d.pull_hash = json_get_string(dj, "head_hash");
     } else if (d.decision_type == "conflict_resolved") {
         d.winner = json_get_string(dj, "winner");
-        if (d.winner == "remote") d.pull_hash = folded_hash;
+        if (d.winner == "remote") d.pull_hash = d.head_hash;
     }
     ws_string_free(dj);
     printf("[sync] decide %s -> %s%s%s (policy=%d local=%.12s mtime=%s own=%.12s head_mtime=%s)\n",
@@ -263,20 +305,9 @@ static SaveDecision decide_local_save(const WsVault* vault, const LocalSave& s, 
     SaveDecision d;
     d.save_index = index;
     d.local_mtime = s.local_mtime;
-    std::string meta_mtime = s.local_mtime.empty() ? utc_now() : s.local_mtime;
-    std::string meta = json_set_mtime(s.meta_json, meta_mtime.c_str());
-    WsBuf zip = {0, 0};
-    char* entry = ws_package(meta.c_str(), s.files_ptr, s.files_len, &zip);
-    if (!entry) {
-        printf("[sync] decide save %d: ws_package failed: %s\n", index, ffi_err());
-        return d;  // zip is not allocated when ws_package fails
-    }
-    d.local_hash = json_get_nested_string(entry, "content", "hash");
-    d.group_key = json_get_string(entry, "group_key");
-    ws_string_free(entry);
-    ws_buf_free(zip);
-    if (d.group_key.empty() || d.local_hash.empty()) {
-        printf("[sync] decide save %d: could not parse SaveEntry (group_key='%s')\n", index,
+    std::string meta_mtime;
+    if (!package_local(s, meta_mtime, d.local_hash, d.group_key, 0)) {
+        printf("[sync] decide save %d: packaging failed (group_key='%s')\n", index,
                d.group_key.c_str());
         d.local_hash.clear();
         return d;
@@ -335,21 +366,11 @@ static int decide_title(const WsVault* vault, const void* title, const char* nam
 static int push_save(const WsVault* vault, const LocalSave& s, const SyncEngineCfg& cfg,
                      WebDavSession* dav, const SyncProgress* prog) {
     report_step(prog, "Encrypting");
-    std::string mtime = s.local_mtime.empty() ? utc_now() : s.local_mtime;
-    std::string meta = json_set_mtime(s.meta_json, mtime.c_str());
+    std::string mtime, hash, group_key;
     WsBuf zip = {0, 0};
     unsigned long long t0 = now_ms();
-    char* entry = ws_package(meta.c_str(), s.files_ptr, s.files_len, &zip);
-    if (!entry) {
-        printf("[sync] push: ws_package failed: %s\n", ffi_err());
-        return -1;
-    }
-    std::string hash = json_get_nested_string(entry, "content", "hash");
-    std::string group_key = json_get_string(entry, "group_key");
-    ws_string_free(entry);
-    if (hash.empty() || group_key.empty()) {
-        printf("[sync] push: could not parse SaveEntry\n");
-        ws_buf_free(zip);
+    if (!package_local(s, mtime, hash, group_key, &zip)) {
+        printf("[sync] push: packaging failed\n");
         return -1;
     }
     printf("[sync] push %s hash=%.12s mtime=%s zip=%zu bytes in %llu ms\n", group_key.c_str(),
@@ -603,17 +624,11 @@ int sync_push_group(const WsVault* vault, const void* title, const char* title_n
     }
     for (size_t i = 0; i < set.saves.size(); i++) {
         const LocalSave& s = set.saves[i];
-        std::string mtime = s.local_mtime.empty() ? utc_now() : s.local_mtime;
-        std::string meta = json_set_mtime(s.meta_json, mtime.c_str());
-        WsBuf zip = {0, 0};
-        char* entry = ws_package(meta.c_str(), s.files_ptr, s.files_len, &zip);
-        if (!entry) {
-            printf("[sync] keep-local save %zu: ws_package failed: %s\n", i, ffi_err());
+        std::string mtime, hash, gk;
+        if (!package_local(s, mtime, hash, gk, 0)) {
+            printf("[sync] keep-local save %zu: packaging failed -- skipped\n", i);
             continue;
         }
-        std::string gk = json_get_string(entry, "group_key");
-        ws_string_free(entry);
-        ws_buf_free(zip);
         if (gk != group_key) continue;
         int rc = push_save(vault, s, cfg, dav, prog);
         printf("[sync] keep-local %s %s\n", group_key.c_str(), rc == 0 ? "done" : "FAILED");

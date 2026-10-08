@@ -2,15 +2,9 @@
 #include "session.h"         // zeroize_string
 #include "worker_thread.h"   // start_worker_thread
 #include "sync.h"            // ctr_shell_ops, sync_scan_title, sync_push_group, sync_pull_hash
-#include "json.h"
 #include <cstdio>
 #include <cstring>
 #include <utility>
-
-extern "C" {
-struct Vault;
-#include "waystone.h"
-}
 
 static unsigned long long ms_since(u64 t0) {
     return (unsigned long long)(osGetTime() - t0);
@@ -175,17 +169,6 @@ void ConflictWorker::scan_worker() {
             SaveDecision& d = decisions[si];
             if (d.decision_type != "conflict_needs_input") continue;
 
-            std::string remote_hash, remote_device_id, remote_mtime;
-            char* folded = ws_fold_heads(d.heads_array.c_str());
-            if (folded) {
-                remote_hash = json_get_string(folded, "hash");
-                remote_device_id = json_get_string(folded, "device_id");
-                remote_mtime = json_get_string(folded, "mtime");
-                ws_string_free(folded);
-            } else {
-                printf("[conflict] ws_fold_heads failed for %s\n", d.group_key.c_str());
-            }
-
             ConflictItem ci;
             ci.id = next_id_++;
             ci.queued = false;
@@ -195,9 +178,9 @@ void ConflictWorker::scan_worker() {
             ci.group_key = d.group_key;
             ci.local_hash = d.local_hash;
             ci.local_mtime = d.local_mtime;
-            ci.remote_hash = remote_hash;
-            ci.remote_device_id = remote_device_id;
-            ci.remote_mtime = remote_mtime;
+            ci.remote_hash = d.head_hash;
+            ci.remote_device_id = d.head_device_id;
+            ci.remote_mtime = d.head_mtime;
             ci.base_path = d.base_path;
             ci.heads_array = std::move(d.heads_array);
             ci.raw_tree = std::move(d.raw_tree);

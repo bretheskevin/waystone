@@ -1,5 +1,4 @@
 #include "sync.h"
-#include "file_tree.h"
 
 #include <cstdio>
 
@@ -19,30 +18,16 @@ static int nx_list_saves(void* ctx, const void* tp, LocalSaveSet& out) {
         printf("[saves] %s: no local save for this user\n", title.name.c_str());
         return 0;
     }
-    size_t raw_len = raw.size();
     WsBuf sl = ws_jksv_normalize("switch", raw.data(), raw.size());
     if (!sl.ptr) {
         printf("[sync] %s: ws_jksv_normalize failed: %s\n", title.name.c_str(), ffi_err());
         return -1;
     }
-    std::vector<SaveListEntry> entries;
-    if (!save_list_decode(sl.ptr, sl.len, &entries)) {
-        printf("[sync] %s: save_list_decode failed (%zu bytes)\n", title.name.c_str(), (size_t)sl.len);
-        ws_buf_free(sl);
+    if (!out.adopt_normalized(sl.ptr, sl.len, raw, mtime)) {
+        printf("[sync] %s: save list decode failed\n", title.name.c_str());
         return -1;
     }
-    out.adopt_savelist(sl.ptr, sl.len);
-    out.raw_tree.swap(raw);
-    for (size_t i = 0; i < entries.size(); i++) {
-        LocalSave s;
-        s.meta_json = entries[i].meta_json;
-        s.files_ptr = entries[i].files_ptr;
-        s.files_len = entries[i].files_len;
-        s.local_mtime = mtime;
-        out.saves.push_back(s);
-    }
-    printf("[sync] %s: normalized %zu save(s) (raw %zu bytes, local mtime '%s')\n",
-           title.name.c_str(), entries.size(), raw_len, mtime.c_str());
+    printf("[sync] %s: normalized %zu save(s)\n", title.name.c_str(), out.saves.size());
     return 0;
 }
 

@@ -63,25 +63,13 @@ static int ctr_list_saves(void*, const void* tp, LocalSaveSet& out) {
         printf("[sync] %s: normalize failed (%s)\n", title.name.c_str(), ffi_err());
         return -1;
     }
-    std::vector<SaveListEntry> entries;
-    if (!save_list_decode(sl.ptr, sl.len, &entries)) {
-        printf("[sync] %s: save_list_decode failed (%zu bytes)\n", title.name.c_str(), (size_t)sl.len);
-        ws_buf_free(sl);
+    size_t sl_len = sl.len;
+    if (!out.adopt_normalized(sl.ptr, sl.len, raw, ctr_local_mtime(title))) {
+        printf("[sync] %s: save list decode failed (%zu bytes)\n", title.name.c_str(), sl_len);
         return -1;
     }
-    out.adopt_savelist(sl.ptr, sl.len);
-    std::string mtime = ctr_local_mtime(title);
-    out.raw_tree.swap(raw);
-    for (size_t i = 0; i < entries.size(); i++) {
-        LocalSave s;
-        s.meta_json = entries[i].meta_json;
-        s.files_ptr = entries[i].files_ptr;
-        s.files_len = entries[i].files_len;
-        s.local_mtime = mtime;
-        out.saves.push_back(s);
-    }
     printf("[sync] %s: normalize ok (raw %zu -> %zu bytes, %zu saves)\n", title.name.c_str(),
-           raw_len, (size_t)sl.len, entries.size());
+           raw_len, sl_len, out.saves.size());
     return 0;
 }
 

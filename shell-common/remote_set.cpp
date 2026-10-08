@@ -48,8 +48,12 @@ bool fetch_remote_game_set(const WsVault* vault, const WebDavCfg& dav, const cha
 bool is_key_in_remote_set(const WsVault* vault, const std::string& game_key,
                           const std::set<std::string>& remote_games) {
     char* gseg = ws_vault_path_segment(vault, game_key.c_str());
-    bool found = gseg && remote_games.count(std::string(gseg)) > 0;
-    if (gseg) ws_string_free(gseg);
+    if (!gseg) {
+        printf("[net] is_key_in_remote_set: ws_vault_path_segment('%s') failed\n", game_key.c_str());
+        return false;
+    }
+    bool found = remote_games.count(std::string(gseg)) > 0;
+    ws_string_free(gseg);
     return found;
 }
 

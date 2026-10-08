@@ -43,8 +43,11 @@ public:
     std::vector<LocalSave> saves;
     LocalSaveSet();
     ~LocalSaveSet();
-    // Take ownership of a WsBuf returned by a ws_*_normalize call. Call at most once.
-    void adopt_savelist(uint8_t* ptr, size_t len);
+    // Take ownership of a ws_*_normalize save list (ptr/len of its WsBuf), decode it into
+    // `saves` (each stamped with `local_mtime`) and move `raw` into raw_tree. Call at most once.
+    // false = decode failed: the buffer is freed here and the set is left empty.
+    bool adopt_normalized(uint8_t* ptr, size_t len, std::vector<uint8_t>& raw,
+                          const std::string& local_mtime);
 private:
     uint8_t* savelist_ptr_;
     size_t savelist_len_;
@@ -70,6 +73,8 @@ struct ShellOps {
 struct SaveDecision {
     std::string decision_type;  // in_sync|push|pull|conflict_resolved|conflict_needs_input|"" (failed)
     std::string pull_hash;      // hash to restore (pull / conflict_resolved remote)
+    std::string head_hash;      // merged (newest) head hash (ws_fold_heads); "" when no heads
+    std::string head_device_id; // device that wrote the merged head
     std::string head_mtime;     // merged (newest) head mtime; becomes our base mtime after a pull
     std::string own_head_hash;  // this device's head hash on the server ("" = none)
     std::string group_key;
