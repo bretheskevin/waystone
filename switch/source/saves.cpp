@@ -1,11 +1,13 @@
 #include "saves.h"
 #include "file_tree.h"
 #include "sync_rules.h"
+#include "remote_set.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <set>
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -43,8 +45,46 @@ static std::string cache_icon(uint64_t title_id, const uint8_t* icon, size_t ico
     return path;
 }
 
-std::vector<TitleInfo> list_titles() {
+static bool collect_local_save_app_ids(AccountUid uid, std::set<u64>& out) {
+    out.clear();
+    FsSaveDataInfoReader reader;
+    Result rc = fsOpenSaveDataInfoReader(&reader, FsSaveDataSpaceId_User);
+    if (R_FAILED(rc)) {
+        printf("[titles] fsOpenSaveDataInfoReader failed: 0x%X -- local filter disabled (fail-open)\n", rc);
+        return false;
+    }
+    FsSaveDataInfo infos[32];
+    size_t scanned = 0;
+    for (;;) {
+        s64 got = 0;
+        rc = fsSaveDataInfoReaderRead(&reader, infos, 32, &got);
+        if (R_FAILED(rc)) {
+            printf("[titles] fsSaveDataInfoReaderRead failed: 0x%X -- local filter disabled\n", rc);
+            fsSaveDataInfoReaderClose(&reader);
+            return false;
+        }
+        if (got <= 0) break;
+        for (s64 i = 0; i < got; i++) {
+            scanned++;
+            if (infos[i].save_data_type != FsSaveDataType_Account) continue;
+            if (memcmp(&infos[i].uid, &uid, sizeof(uid)) != 0) continue;
+            out.insert(infos[i].application_id);
+        }
+    }
+    fsSaveDataInfoReaderClose(&reader);
+    printf("[titles] local account saves: %zu title(s) for this user (%zu entries scanned)\n",
+           out.size(), scanned);
+    return true;
+}
+
+std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav, AccountUid uid) {
     std::vector<TitleInfo> titles;
+
+    std::set<std::string> remote_games;
+    bool filter_active = fetch_remote_game_set(vault, dav, "switch", remote_games);
+    std::set<u64> local_ids;
+    bool local_ok = collect_local_save_app_ids(uid, local_ids);
+    int hidden = 0, via_remote = 0;
 
     if (R_FAILED(nsInitialize())) {
         printf("nsInitialize failed\n");
@@ -98,6 +138,16 @@ std::vector<TitleInfo> list_titles() {
                 info.name = hex;
             }
 
+            if (filter_active) info.has_remote = is_in_remote_set(vault, info.name, remote_games);
+            bool has_local = !local_ok || local_ids.count(info.title_id) > 0;
+            if (filter_active && !info.has_remote && !has_local) {
+                printf("[titles] hiding %s (tid=%016lX) -- no local save, no remote backup\n",
+                       info.name.c_str(), info.title_id);
+                hidden++;
+                continue;
+            }
+            if (filter_active && info.has_remote) via_remote++;
+
             titles.push_back(info);
         }
 
@@ -105,7 +155,9 @@ std::vector<TitleInfo> list_titles() {
     }
 
     nsExit();
-    printf("[titles] extracted %zu titles (%d with icons)\n", titles.size(), icons_found);
+    printf("[titles] extracted %zu titles (%d with icons, %d hidden, %d with remote backup%s)\n",
+           titles.size(), icons_found, hidden, via_remote,
+           filter_active ? "" : ", remote set unavailable: fail-open");
     return titles;
 }
 

@@ -67,7 +67,7 @@ VaultCreateResult create_vault(const std::string& passphrase, Session* session) 
 // Task 5: push LoadingActivity; the worker runs list_titles() off the render thread.
 void push_dashboard(Session* session) {
     auto worker = [session]() -> LoadingActivity::LoadResult {
-        auto titles = list_titles();
+        auto titles = list_titles(session->vault, session->dav.as_cfg(), session->uid);
         return {true, "", std::move(titles)};
     };
 

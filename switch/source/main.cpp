@@ -120,7 +120,7 @@ int main(int argc, char* argv[]) {
 
             // -- List titles --
             printf("--- Enumerating titles ---\n");
-            std::vector<TitleInfo> titles = list_titles();
+            std::vector<TitleInfo> titles = list_titles(vault, dav, uid);
             printf("Found %zu titles\n\n", titles.size());
 
             // -- Sync run: one WebDAV session, decide-first single pass --

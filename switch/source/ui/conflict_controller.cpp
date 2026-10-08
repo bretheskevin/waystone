@@ -100,6 +100,11 @@ void ConflictController::scan_worker() {
     SyncEngineCfg ecfg = sync_cfg_from(config_, device_id_.c_str());
     ShellOps ops = nx_shell_ops(&uid_);
     for (size_t i = 0; i < n; i++) {
+        if (!titles_[i].has_remote) {
+            printf("[conflict] skip %zu/%zu '%s' (tid=%016lX): no remote backup\n", i + 1, n,
+                   titles_[i].name.c_str(), titles_[i].title_id);
+            continue;
+        }
         snprintf(buf, sizeof(buf), "Scanning %zu/%zu: %s", i + 1, n, titles_[i].name.c_str());
         { std::lock_guard<std::mutex> lk(mu_); status_ = buf; }
         std::vector<SaveDecision> decisions = sync_scan_title(

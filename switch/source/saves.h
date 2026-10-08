@@ -6,16 +6,22 @@
 #include <utility>
 #include <vector>
 #include <switch.h>
+#include "net.h"
+
+struct Vault;
+typedef Vault WsVault;
 
 struct TitleInfo {
     uint64_t title_id;
     std::string name;      // display name from NACP, or hex TID fallback
     std::string icon_path; // path to cached icon JPEG on sdmc (empty if none)
+    bool has_remote = true; // game dir present on the server; true when unknown (fail-open)
 };
 
-// Enumerate installed titles. Initializes/exits ns internally.
-// Returns empty vector on failure (prints error to console).
-std::vector<TitleInfo> list_titles();
+// Installed titles that have a local save for `uid` OR a remote backup. Hidden only when the
+// remote PROPFIND succeeded AND the save reader succeeded AND neither exists (fail-open).
+// Initializes/exits ns internally. Returns empty vector on failure.
+std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav, AccountUid uid);
 
 // Extract save data for a title+user as a WsFileTree buffer (binary file-tree).
 // Paths follow the JKSV convention "<game_name>/main/<relative_file_path>" so

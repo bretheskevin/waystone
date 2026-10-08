@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-std::vector<TitleInfo> list_titles()
+std::vector<TitleInfo> list_titles(const WsVault*, const WebDavCfg&, AccountUid)
 {
     return {};
 }

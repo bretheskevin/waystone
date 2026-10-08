@@ -95,7 +95,7 @@ void UnlockActivity::do_unlock() {
 
         persist_session(session->vault, session->dav.pass);
 
-        auto titles = list_titles();
+        auto titles = list_titles(session->vault, session->dav.as_cfg(), session->uid);
         return {true, "", std::move(titles)};
     };
 

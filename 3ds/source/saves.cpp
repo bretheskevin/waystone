@@ -6,6 +6,7 @@
 #include "rom_saves.h"
 #include "rom_parse.h"
 #include "sync_summary.h"
+#include "remote_set.h"
 #include <algorithm>
 #include <map>
 #include <set>
@@ -291,62 +292,6 @@ static bool has_local_save(const TitleInfo& title) {
         }
     }
     return false;
-}
-
-// Fetch the set of obfuscated {game} directory names that have remote backups.
-// Issues a single PROPFIND on the obfuscated 3ds/ collection at depth 1.
-// Returns true if the PROPFIND completed (even if empty — 404 is legitimate).
-// Returns false on transport/server error: caller must fail-open (show all titles).
-static bool fetch_remote_game_set(const WsVault* vault, const WebDavCfg& dav,
-                                   const char* system_name,
-                                   std::set<std::string>& out_game_set) {
-    out_game_set.clear();
-    if (!vault) return false;
-
-    char* sys_raw = ws_vault_path_segment(vault, system_name);
-    if (!sys_raw) {
-        printf("[net] fetch_remote_game_set: ws_vault_path_segment('%s') failed\n", system_name);
-        return false;
-    }
-    std::string sys_str(sys_raw);
-    ws_string_free(sys_raw);
-
-    std::vector<std::string> hrefs;
-    int rc = webdav_propfind(dav, sys_str.c_str(), &hrefs);
-    if (rc != 0) {
-        // Transport or server error; 404 returns rc=0 per net.cpp.
-        printf("[net] PROPFIND %s (%s) failed rc=%d — remote filter disabled (fail-open)\n",
-               sys_str.c_str(), system_name, rc);
-        return false;
-    }
-
-    // hrefs includes the parent collection itself; keep only child (game) segments.
-    int game_count = 0;
-    for (size_t i = 0; i < hrefs.size(); i++) {
-        std::string seg = href_last_segment(hrefs[i]);
-        if (seg.empty() || seg == sys_str) continue;
-        out_game_set.insert(seg);
-        game_count++;
-    }
-    printf("[net] PROPFIND %s (%s) -> %d remote game dir(s)%s\n", sys_str.c_str(), system_name,
-           game_count, hrefs.empty() ? " (404/empty)" : "");
-    return true;
-}
-
-// Check whether a title's obfuscated game segment is present in the remote set.
-// Derives the key the same way the Rust normalizer does: normalize the display
-// name, obfuscate via the vault, then look up in the PROPFIND-collected set.
-static bool is_key_in_remote_set(const WsVault* vault, const std::string& game_key,
-                                 const std::set<std::string>& remote_games) {
-    char* gseg = ws_vault_path_segment(vault, game_key.c_str());
-    bool found = gseg && remote_games.count(std::string(gseg)) > 0;
-    if (gseg) ws_string_free(gseg);
-    return found;
-}
-
-static bool is_in_remote_set(const WsVault* vault, const std::string& display_name,
-                             const std::set<std::string>& remote_games) {
-    return is_key_in_remote_set(vault, normalize_game_name(display_name), remote_games);
 }
 
 // Collapse per-game duplicates. The SD title list holds the base app

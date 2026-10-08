@@ -108,7 +108,7 @@ int main(int argc, char* argv[])
                         session.dav.pass       = std::move(webdav_pass);
                         zeroize_string(webdav_pass);
 
-                        auto titles = list_titles();
+                        auto titles = list_titles(session.vault, session.dav.as_cfg(), session.uid);
                         return {true, "", std::move(titles)};
                     };
 
