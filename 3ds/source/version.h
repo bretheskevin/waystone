@@ -3,6 +3,6 @@
 
 // Single source of truth for the app version. Bump per release; the release tag
 // on GitHub must match ("v" + WS_APP_VERSION) for the in-app updater to see updates.
-#define WS_APP_VERSION "0.5.0"
+#define WS_APP_VERSION "0.5.1"
 
 #endif
