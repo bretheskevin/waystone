@@ -1,6 +1,4 @@
 #include "sync.h"
-#include "json.h"
-#include "file_tree.h"
 #include "sync_rules.h"
 #include "sync_summary.h"  // href_last_segment
 #include "rom_parse.h"
@@ -164,34 +162,19 @@ std::vector<SaveLocation> resolve_save_locations(const WsVault* vault,
                                                  bool* error) {
     std::vector<SaveLocation> results;
     if (error) *error = false;
-
     printf("[history] resolve_save_locations: title=%s\n", title.name.c_str());
 
-    std::vector<uint8_t> raw_tree = extract_save_json(title);
-    if (raw_tree.empty()) {
-        printf("[history] resolve_save_locations: no local save data for %s\n",
+    std::vector<LocalSaveKey> keys;
+    std::vector<uint8_t> raw_tree;
+    int n = sync_local_keys(vault, &title, ctr_shell_ops(), keys, &raw_tree);
+    if (n < 0) {
+        printf("[history] resolve_save_locations: reading local saves failed for %s\n",
                title.name.c_str());
-        return results;
-    }
-
-    WsBuf savelist = normalize_title(title, raw_tree);
-    if (!savelist.ptr) {
-        printf("[history] resolve_save_locations: normalize failed (%s)\n", ffi_err());
         if (error) *error = true;
         return results;
     }
-
-    std::vector<SaveListEntry> saves;
-    if (!save_list_decode(savelist.ptr, savelist.len, &saves)) {
-        printf("[history] resolve_save_locations: save_list_decode failed (%zu bytes)\n",
-               (size_t)savelist.len);
-        ws_buf_free(savelist);
-        if (error) *error = true;
-        return results;
-    }
-    if (saves.empty()) {
-        ws_buf_free(savelist);
-        if (title.source == SourceRom) {
+    if (n == 0) {
+        if (title.source == SourceRom && !raw_tree.empty()) {
             SaveLocation loc;
             loc.raw_tree = raw_tree;
             loc.group_key = rom_group_key(title.system, title.rom_id, "battery");
@@ -201,45 +184,16 @@ std::vector<SaveLocation> resolve_save_locations(const WsVault* vault,
             results.push_back(loc);
             return results;
         }
-        printf("[history] resolve_save_locations: no saves after normalize for %s\n",
-               title.name.c_str());
+        printf("[history] resolve_save_locations: no local save for %s\n", title.name.c_str());
         return results;
     }
-
-    std::string mtime = current_utc_time();
-    for (size_t si = 0; si < saves.size(); si++) {
-        std::string save_meta = json_set_mtime(saves[si].meta_json, mtime.c_str());
-
-        WsBuf zip = {nullptr, 0};
-        char* entry_json = ws_package(save_meta.c_str(), saves[si].files_ptr,
-                                      saves[si].files_len, &zip);
-        if (!entry_json) {
-            printf("[history] resolve_save_locations: ws_package failed save %zu: %s\n",
-                   si, ws_last_error() ? ws_last_error() : "unknown");
-            // zip not allocated when ws_package fails — do not free (mirrors scan_save_decision)
-            continue;
-        }
-
+    for (size_t i = 0; i < keys.size(); i++) {
         SaveLocation loc;
-        loc.raw_tree  = raw_tree;
-        loc.group_key = json_get_string(entry_json, "group_key");
-        ws_string_free(entry_json);
-        ws_buf_free(zip);
-
-        if (loc.group_key.empty()) {
-            printf("[history] resolve_save_locations: empty group_key for save %zu\n", si);
-            continue;
-        }
-
-        loc.base_path = sync_base_path(vault, loc.group_key);
-        printf("[history] resolve_save_locations: save %zu group_key=%s base_path=%s\n",
-               si, loc.group_key.c_str(),
-               loc.base_path.empty() ? "(empty)" : loc.base_path.c_str());
-
+        loc.raw_tree = raw_tree;
+        loc.group_key = keys[i].group_key;
+        loc.base_path = keys[i].base_path;
         results.push_back(loc);
     }
-
-    ws_buf_free(savelist);
     printf("[history] resolve_save_locations: resolved %zu location(s) for %s\n",
            results.size(), title.name.c_str());
     return results;

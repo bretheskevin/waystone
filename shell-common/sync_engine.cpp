@@ -637,3 +637,34 @@ int sync_push_group(const WsVault* vault, const void* title, const char* title_n
     printf("[sync] keep-local %s: no local save matches (deleted since scan?)\n", group_key.c_str());
     return -1;
 }
+
+int sync_local_keys(const WsVault* vault, const void* title, const ShellOps& ops,
+                    std::vector<LocalSaveKey>& out, std::vector<uint8_t>* raw_tree) {
+    out.clear();
+    if (raw_tree) raw_tree->clear();
+    unsigned long long t0 = now_ms();
+    LocalSaveSet set;
+    int lrc = ops.list_saves(ops.ctx, title, set);
+    if (lrc != 0) {
+        printf("[sync] local keys: list_saves failed (err=%d)\n", lrc);
+        return -1;
+    }
+    for (size_t i = 0; i < set.saves.size(); i++) {
+        std::string mtime, hash, gk;
+        if (!package_local(set.saves[i], mtime, hash, gk, 0)) {
+            printf("[sync] local keys: save %zu packaging failed -- skipped\n", i);
+            continue;
+        }
+        LocalSaveKey k;
+        k.group_key = gk;
+        k.base_path = sync_base_path(vault, gk);
+        printf("[sync] local keys: save %zu group_key=%s base_path=%s\n", i, gk.c_str(),
+               k.base_path.empty() ? "(empty)" : k.base_path.c_str());
+        out.push_back(k);
+    }
+    const size_t raw_len = set.raw_tree.size();
+    if (raw_tree) raw_tree->swap(set.raw_tree);
+    printf("[sync] local keys: %zu key(s) from %zu save(s), raw tree %zu bytes in %llu ms\n",
+           out.size(), set.saves.size(), raw_len, since_ms(t0));
+    return (int)set.saves.size();
+}

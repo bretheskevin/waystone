@@ -108,6 +108,17 @@ int sync_push_group(const WsVault* vault, const void* title, const char* title_n
                     const ShellOps& ops, const SyncEngineCfg& cfg,
                     const std::string& group_key, WebDavSession* dav, const SyncProgress* prog);
 
+struct LocalSaveKey {
+    std::string group_key;
+    std::string base_path;  // "" when the vault could not derive it
+};
+
+// Local-only (no network): package every local save of `title` to learn its group_key/base_path.
+// Saves whose packaging fails are skipped. `raw_tree` (optional) receives the extracted local tree.
+// Returns the number of local saves listed (>= 0; 0 = no local save), or -1 if list_saves failed.
+int sync_local_keys(const WsVault* vault, const void* title, const ShellOps& ops,
+                    std::vector<LocalSaveKey>& out, std::vector<uint8_t>* raw_tree);
+
 // Restore `hash` WITHOUT touching this device's head (history restore). 0 = ok.
 int sync_restore_hash(const WsVault* vault, const void* title, const ShellOps& ops,
                       const SyncEngineCfg& cfg, const std::string& base_path,

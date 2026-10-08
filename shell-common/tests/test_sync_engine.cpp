@@ -30,10 +30,11 @@ static std::vector<std::string> g_decisions;   // scripted ws_decide_pull result
 static std::vector<int> g_policy_args;
 static std::set<std::string> g_propfind_fail;
 static int g_live = 0;                          // outstanding fake FFI allocations
+static int g_net_calls = 0;                     // every fake webdav_*_s call
 
 static void reset() {
     g_files.clear(); g_dirs.clear(); g_events.clear(); g_decisions.clear();
-    g_policy_args.clear(); g_propfind_fail.clear();
+    g_policy_args.clear(); g_propfind_fail.clear(); g_net_calls = 0;
 }
 static char* dup_c(const std::string& s) {
     char* p = (char*)malloc(s.size() + 1);
@@ -102,6 +103,7 @@ char* ws_decide_pull(const char*, const char*, const char*, const char*, int pol
 
 int webdav_put_s(WebDavSession*, const char* path, const uint8_t* d, size_t n,
                  bool (*)(size_t, size_t, void*), void*) {
+    g_net_calls++;
     std::string p(path);
     if (!g_dirs.count(parent_of(p))) { g_events.push_back("put409:" + p); return 409; }
     g_files[p] = std::vector<uint8_t>(d, d + n);
@@ -110,19 +112,22 @@ int webdav_put_s(WebDavSession*, const char* path, const uint8_t* d, size_t n,
 }
 int webdav_get_s(WebDavSession*, const char* path, std::vector<uint8_t>* out,
                  bool (*)(size_t, size_t, void*), void*) {
+    g_net_calls++;
     std::map<std::string, std::vector<uint8_t> >::iterator it = g_files.find(path);
     if (it == g_files.end()) return 1;
     *out = it->second;
     return 0;
 }
-int webdav_exists_s(WebDavSession*, const char* path) { return g_files.count(path) ? 1 : 0; }
+int webdav_exists_s(WebDavSession*, const char* path) { g_net_calls++; return g_files.count(path) ? 1 : 0; }
 int webdav_mkdir_p_s(WebDavSession*, const char* path) {
+    g_net_calls++;
     std::string p(path);
     while (!p.empty()) { g_dirs.insert(p); p = parent_of(p); }
     g_events.push_back(std::string("mkdir:") + path);
     return 0;
 }
 int webdav_propfind_s(WebDavSession*, const char* path, std::vector<std::string>* out) {
+    g_net_calls++;
     std::string p(path);
     if (g_propfind_fail.count(p)) return -1;
     out->clear();
@@ -421,6 +426,70 @@ static void test_adopt_normalized_owns_or_frees_buffer() {
     printf("test_adopt_normalized_owns_or_frees_buffer PASSED\n");
 }
 
+static int fake_remote_only(void*, const WsVault*, WebDavSession*, const void*,
+                            const std::vector<std::string>&, std::vector<std::string>&) {
+    g_events.push_back("remote_only");
+    return 0;
+}
+
+static void test_local_keys_packages_every_save_offline() {
+    reset();
+    FakeTitle t;
+    t.saves.push_back(save("sw/a/main", "hA", "2026-01-03T00:00:00Z"));
+    t.saves.push_back(save("sw/b/extdata", "hB", ""));
+    ShellOps ops = fake_ops();
+    ops.list_remote_only = fake_remote_only;
+    std::vector<LocalSaveKey> keys;
+    std::vector<uint8_t> raw;
+    int n = sync_local_keys(0, &t, ops, keys, &raw);
+    assert(n == 2 && keys.size() == 2);
+    assert(keys[0].group_key == "sw/a/main" && keys[0].base_path == "sw/a/main");
+    assert(keys[1].group_key == "sw/b/extdata" && keys[1].base_path == "sw/b/extdata");
+    assert(raw == t.raw);
+    assert(g_events.empty() && g_net_calls == 0);
+    assert(g_live == 0);
+    printf("test_local_keys_packages_every_save_offline PASSED\n");
+}
+
+static void test_local_keys_skips_unpackageable_save() {
+    reset();
+    FakeTitle t;
+    t.saves.push_back(save("sw/bad/main", "", "2026-01-03T00:00:00Z"));
+    t.saves.push_back(save("sw/ok/main", "hOK", "2026-01-03T00:00:00Z"));
+    std::vector<LocalSaveKey> keys;
+    int n = sync_local_keys(0, &t, fake_ops(), keys, 0);
+    assert(n == 2);
+    assert(keys.size() == 1 && keys[0].group_key == "sw/ok/main");
+    assert(g_net_calls == 0);
+    assert(g_live == 0);
+    printf("test_local_keys_skips_unpackageable_save PASSED\n");
+}
+
+static void test_local_keys_no_local_save() {
+    reset();
+    FakeTitle t;
+    std::vector<LocalSaveKey> keys;
+    keys.push_back(LocalSaveKey());
+    std::vector<uint8_t> raw(3, 9);
+    int n = sync_local_keys(0, &t, fake_ops(), keys, &raw);
+    assert(n == 0 && keys.empty());
+    assert(raw == t.raw);
+    assert(g_net_calls == 0 && g_live == 0);
+    printf("test_local_keys_no_local_save PASSED\n");
+}
+
+static void test_local_keys_list_error() {
+    reset();
+    FakeTitle t; t.list_rc = -1;
+    t.saves.push_back(save("sw/a/main", "hA", ""));
+    std::vector<LocalSaveKey> keys;
+    std::vector<uint8_t> raw(3, 9);
+    int n = sync_local_keys(0, &t, fake_ops(), keys, &raw);
+    assert(n < 0 && keys.empty() && raw.empty());
+    assert(g_net_calls == 0 && g_live == 0);
+    printf("test_local_keys_list_error PASSED\n");
+}
+
 int main() {
     test_adopt_normalized_owns_or_frees_buffer();
     test_first_upload_pushes();
@@ -435,6 +504,10 @@ int main() {
     test_list_failure_marks_title_failed();
     test_push_group_pushes_only_that_save();
     test_scan_title_copies_raw_tree();
+    test_local_keys_packages_every_save_offline();
+    test_local_keys_skips_unpackageable_save();
+    test_local_keys_no_local_save();
+    test_local_keys_list_error();
     printf("ALL PASSED\n");
     return 0;
 }
