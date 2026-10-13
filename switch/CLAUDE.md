@@ -58,8 +58,12 @@ after input dispatch unwinds. Two safe patterns: (1) mutate views in place (`set
   `… make CONSOLE=1` (console variant). Incremental `make` (no `clean`) only recompiles changed
   files — skip `make clean` while iterating. The Makefile applies the borealis theme-tint patch
   and assembles romfs from the vendored borealis tree at build time.
-- On-hardware: launch in **full application mode** (hold **R** over a game) for save-mount + enough
-  heap; Atmosphère dumps crash logs to `sdmc:/atmosphere/crash_reports/*.log` — symbolize with
+- On-hardware: the app requires **full application mode** (hold **R** over a game) for save-mount +
+  enough heap; launched as an applet it shows AppletModeActivity with the hold-R tutorial and only
+  offers Exit (`appletGetAppletType()` gate in `app_main.cpp`). Without nxlink, stdout/stderr go to
+  `sdmc:/waystone/log.txt` (append; rotated to `log.txt.old` past `WS_LOG_MAX_BYTES` in
+  `shell-common/log_rotate.h`). Atmosphère dumps crash logs to
+  `sdmc:/atmosphere/crash_reports/*.log` — symbolize with
   `aarch64-none-elf-addr2line -f -C -i -e switch/waystone.elf <module-offset…>`.
 
 ## Releasing
@@ -70,7 +74,8 @@ in `.github/workflows/release.yml` builds `switch/waystone.nro` and `publish` at
 
 - The in-app updater (Settings -> Check for updates) downloads the release asset ending in `.nro` to
   `<self>.tmp` and renames it over `argv[0]` (or `sdmc:/switch/waystone.nro`). netload runs report
-  "Relaunch from SD card". Never rename the asset.
+  "Relaunch from SD card". After a successful install a banner offers **Restart now**
+  (`envSetNextLoad` + quit) or Later. Never rename the asset.
 - CI has a relocation guard: the release fails if `waystone.elf` has a non-empty RELA/PLT table or any
   relocation other than `R_AARCH64_RELATIVE`/`NONE`. The RELATIVE relocs live in `.relr.dyn` (DT_RELR) and are
   invisible to `readelf -r`, so also check `aarch64-none-elf-readelf -d switch/waystone.elf`: `RELASZ` must be 0

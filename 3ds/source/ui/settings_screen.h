@@ -2,6 +2,7 @@
 #include "screen.h"
 #include "session.h"
 #include "update_worker.h"
+#include "widgets.h"
 #include <string>
 
 class SettingsScreen : public Screen {
@@ -26,6 +27,8 @@ private:
     std::string pending_ver_;
     std::string pending_url_;
     static const size_t NUM_ROWS = 7;
+    Rect row_rects_[NUM_ROWS];  // bottom-screen hit boxes, refreshed every draw
+    void activate_row(size_t row);  // may delete this screen (log out); caller must return
     SettingsScreen(const SettingsScreen&);
     SettingsScreen& operator=(const SettingsScreen&);
 };

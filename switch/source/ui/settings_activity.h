@@ -29,11 +29,14 @@ class SettingsActivity : public brls::Activity {
     bool logout_pending_ = false;
     void poll_update();
     void refresh_banner();
-    bool consume_confirm();
+    void start_install();   // confirm banner accepted: download + install pending_ver_
+    void restart_now();     // restart banner accepted: envSetNextLoad + quit
     UpdateController* updater_ = nullptr;
     brls::Box* col_    = nullptr;
     brls::Box* banner_ = nullptr;
-    bool confirm_update_ = false;
+    bool confirm_update_ = false;  // banner: "update available, install now?"
+    bool restart_prompt_ = false;  // banner: "installed, restart now?"
+    bool banner_active() const { return confirm_update_ || restart_prompt_; }
     bool install_started_ = false;
     UpdatePhase last_phase_ = UpdatePhase::Idle;
     std::string pending_ver_;

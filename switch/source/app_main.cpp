@@ -1,5 +1,8 @@
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
+#include <fcntl.h>
+#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <switch.h>
@@ -25,6 +28,39 @@ extern "C" {
 #include "ui/loading_activity.h"
 #include "session_store.h"
 #include "updater.h"
+#include "log_rotate.h"
+#include "ui/applet_mode_activity.h"
+
+static const char* const LOG_DIR  = "sdmc:/waystone";
+static const char* const LOG_PATH = "sdmc:/waystone/log.txt";
+
+// stdout/stderr go to nxlink when netloaded; otherwise to a size-capped file on
+// the SD card so crashes on real hardware leave a post-mortem behind.
+static void redirect_logs() {
+    int link_fd = nxlinkStdio();
+    if (link_fd >= 0) {
+        setvbuf(stdout, NULL, _IONBF, 0);  // unbuffered: every printf reaches nxlink immediately
+        printf("[net] nxlink stdio fd=%d\n", link_fd);
+        return;
+    }
+
+    mkdir(LOG_DIR, 0755);
+    log_cap_rotate(LOG_PATH, WS_LOG_MAX_BYTES);
+    int fd = open(LOG_PATH, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0) {
+        printf("[sys] log file open failed path=%s errno=%d\n", LOG_PATH, errno);
+        return;
+    }
+    fflush(stdout);
+    fflush(stderr);
+    // Both streams share one handle (and so one file offset) so interleaved writes append.
+    int out_rc = dup2(fd, STDOUT_FILENO);
+    int err_rc = dup2(fd, STDERR_FILENO);
+    close(fd);
+    setvbuf(stdout, NULL, _IOLBF, BUFSIZ);
+    setvbuf(stderr, NULL, _IOLBF, BUFSIZ);
+    printf("[sys] logging to %s (dup2 out=%d err=%d)\n", LOG_PATH, out_rc, err_rc);
+}
 
 // Task 3: Switch hardware device key (SPL service — always available on Switch).
 static bool switch_device_key(uint8_t* out_key, size_t* out_len) {
@@ -47,8 +83,7 @@ int main(int argc, char* argv[])
 {
     updater_set_self_candidates(argc > 0 ? argv[0] : nullptr, "sdmc:/switch/waystone.nro");
     socketInitializeDefault();
-    nxlinkStdio();                    // redirect stdout to nxlink host (no-op if not netloaded)
-    setvbuf(stdout, NULL, _IONBF, 0); // unbuffered: every printf reaches nxlink immediately
+    redirect_logs();            // nxlink when netloaded, else size-capped sdmc:/waystone/log.txt
     printf("[boot] socket init done\n");
     Result romfs_rc = romfsInit();
     printf("[boot] romfs init rc=%d\n", (int)romfs_rc);
@@ -138,7 +173,13 @@ int main(int argc, char* argv[])
             }
         };
 
-        if (!network_available()) {
+        AppletType applet_type = appletGetAppletType();
+        if (applet_type != AppletType_Application) {
+            // Launched from the album/applet: not enough memory to mount saves.
+            printf("[boot] applet type %d != Application -> AppletModeActivity\n",
+                   (int)applet_type);
+            brls::Application::pushActivity(new AppletModeActivity());
+        } else if (!network_available()) {
             printf("[boot] no network -> NoInternetActivity\n");
             brls::Application::pushActivity(
                 new NoInternetActivity(NoInternetReason::NoNetwork,

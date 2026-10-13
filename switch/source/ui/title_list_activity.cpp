@@ -11,6 +11,7 @@
 #include "history_controller.h"
 #include "history_activity.h"
 #include "borealis_focus.h"
+#include "version.h"
 #include <cstdio>
 
 // Muted color for status line (matches wizard footer hints).
@@ -54,15 +55,29 @@ brls::View* TitleListActivity::createContentView() {
     col->setGrow(1.0f);
     col->setPadding(24.0f, 0.0f, 16.0f, 0.0f);
 
-    // Status line — muted, smaller font; updated by poll timer.
+    // Status row — muted status line (grow) + version label pinned to the right,
+    // mirroring the 3DS title list's corner version label.
+    auto* status_row = new brls::Box(brls::Axis::ROW);
+    status_row->setMarginLeft(32.0f);
+    status_row->setMarginRight(32.0f);
+    status_row->setMarginBottom(12.0f);
+
     status_label_ = new brls::Label();
     status_label_->setText("Idle \xc2\xb7 0 games");
     status_label_->setFontSize(18.0f);
     status_label_->setTextColor(muted_color());
     status_label_->setSingleLine(true);
-    status_label_->setMarginLeft(32.0f);
-    status_label_->setMarginBottom(12.0f);
-    col->addView(status_label_);
+    status_label_->setGrow(1.0f);
+    status_row->addView(status_label_);
+
+    auto* version_label = new brls::Label();
+    version_label->setText(std::string("v") + WS_APP_VERSION);
+    version_label->setFontSize(18.0f);
+    version_label->setTextColor(muted_color());
+    version_label->setSingleLine(true);
+    status_row->addView(version_label);
+
+    col->addView(status_row);
 
     // Sync all button — primary style, d-pad focusable.
     auto* sync_btn = new brls::Button();

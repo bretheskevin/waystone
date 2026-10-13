@@ -8,6 +8,7 @@
 #include "confirm_banner.h"
 #include "version.h"
 #include "updater.h"
+#include <switch.h>
 #include <cstdio>
 
 extern "C" {
@@ -49,7 +50,7 @@ brls::View* SettingsActivity::createContentView()
     server_label_->setFontSize(20.0f);
     server_label_->setFocusable(true);
     server_label_->registerClickAction([this](brls::View*) {
-        if (consume_confirm()) return true;
+        if (banner_active()) return false;  // banner owns A while it is up
         std::string val = swkbd_prompt("Server URL", session_->config.server_url, false);
         if (!val.empty()) {
             session_->config.server_url = val;
@@ -65,7 +66,7 @@ brls::View* SettingsActivity::createContentView()
     user_label_->setFontSize(20.0f);
     user_label_->setFocusable(true);
     user_label_->registerClickAction([this](brls::View*) {
-        if (consume_confirm()) return true;
+        if (banner_active()) return false;
         std::string val = swkbd_prompt("Username", session_->config.username, false);
         if (!val.empty()) {
             session_->config.username = val;
@@ -80,7 +81,7 @@ brls::View* SettingsActivity::createContentView()
     policy_label_->setFontSize(20.0f);
     policy_label_->setFocusable(true);
     policy_label_->registerClickAction([this](brls::View*) {
-        if (consume_confirm()) return true;
+        if (banner_active()) return false;
         session_->config.conflict_policy =
             (session_->config.conflict_policy == WsConflictPolicy::NewestWins)
                 ? WsConflictPolicy::Prompt
@@ -94,7 +95,7 @@ brls::View* SettingsActivity::createContentView()
     backup_label_->setFontSize(20.0f);
     backup_label_->setFocusable(true);
     backup_label_->registerClickAction([this](brls::View*) {
-        if (consume_confirm()) return true;
+        if (banner_active()) return false;
         session_->config.safety_backup = !session_->config.safety_backup;
         refresh_labels();
         return true;
@@ -106,7 +107,7 @@ brls::View* SettingsActivity::createContentView()
     update_label_->setFontSize(20.0f);
     update_label_->setFocusable(true);
     update_label_->registerClickAction([this](brls::View*) {
-        if (consume_confirm()) return true;
+        if (banner_active()) return false;
         if (updater_->is_running()) return true;
         printf("[update] check requested from settings\n");
         install_started_ = false;
@@ -126,7 +127,7 @@ brls::View* SettingsActivity::createContentView()
     save_label_->setFontSize(20.0f);
     save_label_->setFocusable(true);
     save_label_->registerClickAction([this](brls::View*) {
-        if (consume_confirm()) return true;
+        if (banner_active()) return false;
         save_settings();
         return true;
     });
@@ -138,7 +139,7 @@ brls::View* SettingsActivity::createContentView()
     logout_label_->setFocusable(true);
     logout_label_->setTextColor(nvgRGB(220, 50, 50));
     logout_label_->registerClickAction([this](brls::View*) {
-        if (consume_confirm()) return true;
+        if (banner_active()) return false;
         if (session_->sync_busy && session_->sync_busy()) {
             printf("[ui] settings: log out refused -- sync in progress\n");
             status_label_->setText("Sync in progress \xe2\x80\x94 wait for it to finish");
@@ -171,7 +172,29 @@ void SettingsActivity::onContentAvailable()
     pump_.start();
     refresh_labels();
 
+    // A: confirm whatever banner is up (install the update / restart into it).
+    // Rows return false while a banner is up so the press propagates here.
+    registerAction(ws_label(WsAction::Update), ws_brls(WsAction::Update), [this](brls::View*) {
+        if (restart_prompt_) {
+            restart_now();
+            return true;
+        }
+        if (confirm_update_) {
+            start_install();
+            return true;
+        }
+        return false;
+    });
+
+    // B: decline the banner if one is up, else leave Settings.
     registerAction(ws_label(WsAction::Back), ws_brls(WsAction::Back), [this](brls::View*) {
+        if (restart_prompt_) {
+            printf("[update] restart later (v%s installed)\n", pending_ver_.c_str());
+            restart_prompt_ = false;
+            status_label_->setText("Updated to v" + pending_ver_ + " \xe2\x80\x94 restart to apply");
+            pump_.schedule();
+            return true;
+        }
         if (confirm_update_) {
             printf("[update] confirm declined (back)\n");
             confirm_update_ = false;
@@ -236,9 +259,8 @@ void SettingsActivity::do_logout()
     brls::Application::pushActivity(new UnlockActivity(session_, kbuf, static_cast<size_t>(klen)));
 }
 
-bool SettingsActivity::consume_confirm()
+void SettingsActivity::start_install()
 {
-    if (!confirm_update_) return false;
     std::string url = updater_->asset_url();
     printf("[update] confirm -> install v%s\n", pending_ver_.c_str());
     confirm_update_ = false;
@@ -247,15 +269,38 @@ bool SettingsActivity::consume_confirm()
     last_phase_ = UpdatePhase::Downloading;  // e.g. UP_NO_SELF returns before the next poll
     status_label_->setText("Downloading\xe2\x80\xa6");
     pump_.schedule();
-    return true;
+}
+
+void SettingsActivity::restart_now()
+{
+    char self_path[512] = {0};
+    int rc = updater_self_path(self_path, sizeof(self_path));
+    if (rc == UP_OK && envHasNextLoad()) {
+        Result nrc = envSetNextLoad(self_path, nullptr);
+        if (R_SUCCEEDED(nrc)) {
+            printf("[update] restart now: envSetNextLoad(%s) + quit\n", self_path);
+            status_label_->setText("Restarting\xe2\x80\xa6");
+            brls::Application::quit();  // normal teardown; the hbloader relaunches us
+            return;
+        }
+        printf("[update] envSetNextLoad FAILED rc=%d\n", (int)nrc);
+    } else {
+        printf("[update] restart unavailable (self rc=%d, hasNextLoad=%d)\n",
+               rc, (int)envHasNextLoad());
+    }
+    restart_prompt_ = false;
+    status_label_->setText("Updated to v" + pending_ver_ + ". Restart to apply.");
+    pump_.schedule();
 }
 
 void SettingsActivity::refresh_banner()
 {
-    if (confirm_update_ && !banner_) {
-        banner_ = make_confirm_banner("Waystone v" + pending_ver_ + " available", "Download and install now?");
+    if (banner_active() && !banner_) {
+        banner_ = restart_prompt_
+            ? make_confirm_banner("Waystone v" + pending_ver_ + " installed", "Restart now to apply?")
+            : make_confirm_banner("Waystone v" + pending_ver_ + " available", "Download and install now?");
         col_->addView(banner_, 2);
-    } else if (!confirm_update_ && banner_) {
+    } else if (!banner_active() && banner_) {
         col_->removeView(banner_);
         banner_ = nullptr;
     }
@@ -296,8 +341,10 @@ void SettingsActivity::poll_update()
             status_label_->setText("Update cancelled");
             printf("[update] install cancelled\n");
         } else if (rc == UP_OK) {
-            status_label_->setText("Updated to v" + pending_ver_ + ". Restart to apply.");
-            printf("[update] install succeeded\n");
+            restart_prompt_ = true;
+            status_label_->setText("Updated to v" + pending_ver_);
+            printf("[update] install succeeded -> restart prompt\n");
+            pump_.schedule();
         } else {
             status_label_->setText(updater_install_message(rc));
             printf("[update] install failed rc=%d\n", rc);

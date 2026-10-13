@@ -24,6 +24,7 @@ extern "C" {
 #include "session_store.h"
 #include "secure_clear.h"
 #include "updater.h"
+#include "log_rotate.h"
 #include "ui/app.h"
 #include "ui/session.h"
 #include "ui/setup_screen.h"
@@ -52,7 +53,8 @@ static void redirect_logs() {
     }
 
     mkdir(LOG_DIR, 0755);
-    int fd = open(LOG_PATH, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    log_cap_rotate(LOG_PATH, WS_LOG_MAX_BYTES);
+    int fd = open(LOG_PATH, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd < 0) {
         printf("[sys] log file open failed path=%s errno=%d (link3dsStdio fd=%d)\n",
                LOG_PATH, errno, link_fd);

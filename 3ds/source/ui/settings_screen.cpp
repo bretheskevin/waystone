@@ -28,7 +28,9 @@ SettingsScreen::SettingsScreen(Session* session)
       confirm_update_(false),
       update_cancelled_(false),
       install_started_(false),
-      restart_prompt_(false) {}
+      restart_prompt_(false) {
+    for (size_t i = 0; i < NUM_ROWS; i++) row_rects_[i] = Rect();
+}
 
 SettingsScreen::~SettingsScreen() {
     // Only join if we still own the worker (not detached by handle_input B).
@@ -123,6 +125,9 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
     float row_h = 28.0f;
     float y = (float)SP_MD;
 
+    // Cleared each frame: while a banner replaces the row list there is nothing to tap.
+    for (size_t i = 0; i < NUM_ROWS; i++) row_rects_[i] = Rect();
+
     // ---- CIA installed: restart now or later ----
     if (restart_prompt_) {
         char line[128];
@@ -158,6 +163,7 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
     snprintf(row_labels[6], sizeof(row_labels[6]), "Log out");
 
     for (size_t i = 0; i < 4; i++) {
+        row_rects_[i] = { x, y, w, row_h };
         bool focused = (cursor_ == i);
         u32 bg = focused ? CLR_PRIMARY_50 : CLR_CARD_BG;
         if (focused) {
@@ -174,6 +180,7 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
     y += 20.0f;
 
     for (size_t i = 4; i < NUM_ROWS; i++) {
+        row_rects_[i] = { x, y, w, row_h };
         bool focused = (cursor_ == i);
         u32 bg = focused ? CLR_PRIMARY_50 : CLR_CARD_BG;
         u32 text_color = (i == 6) ? CLR_ERROR : CLR_TEXT;
@@ -190,7 +197,6 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
 }
 
 void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
-    (void)touch;
 
     // ---- Restart prompt (CIA installed) ----
     if (restart_prompt_) {
@@ -236,84 +242,100 @@ void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
         App::instance().pop_screen();
         return;
     }
-    if (kDown & ws_key(WsAction::Select)) {
-        switch (cursor_) {
-            case 0: {
-                std::string v = swkbd_prompt("Server URL", false, session_->config.server_url);
-                if (!v.empty()) {
-                    session_->config.server_url = v;
-                    session_->dav.server_url = v;
-                    zeroize_string(session_->dav.pass);
-                }
-                break;
-            }
-            case 1: {
-                std::string v = swkbd_prompt("Username", false, session_->config.username);
-                if (!v.empty()) {
-                    session_->config.username = v;
-                    session_->dav.user = v;
-                }
-                break;
-            }
-            case 2: {
-                session_->config.conflict_policy =
-                    (session_->config.conflict_policy == WsConflictPolicy::NewestWins)
-                        ? WsConflictPolicy::Prompt : WsConflictPolicy::NewestWins;
-                break;
-            }
-            case 3: {
-                session_->config.safety_backup = !session_->config.safety_backup;
-                break;
-            }
-            case 4: {
-                if (worker_->is_running()) {
-                    printf("[update] check ignored -- update worker busy\n");
-                    break;
-                }
-                printf("[update] check requested from settings (mode=%s)\n",
-                       worker_->cia_mode() ? "cia" : "3dsx");
-                install_started_ = false;
-                confirm_update_ = false;
-                restart_prompt_ = false;
-                update_cancelled_ = false;
-                pending_ver_.clear();
-                pending_url_.clear();
-                status_text_ = "Checking for updates...";
-                phase_ = UpdatePhase::Checking;
-                worker_->start_check();
-                last_phase_ = UpdatePhase::Checking;  // a check that fails before the next poll still reports
-                break;
-            }
-            case 5: {
-                printf("[ui] settings save -> %s\n", session_->config_path.c_str());
-                if (wsconfig_save(session_->config, session_->config_path.c_str())) {
-                    printf("[ui] settings save ok\n");
-                    status_text_ = "Settings saved";
-                } else {
-                    printf("[ui] settings save FAILED\n");
-                    status_text_ = "Failed to save settings";
-                }
-                break;
-            }
-            case 6: {
-                printf("[ui] settings: log out\n");
-                // set_screen/pop_screen below delete this screen; detach first so
-                // ~SettingsScreen never joins a running worker on the render thread.
-                reap_worker(worker_);
-                session_store_clear();
-                if (session_->vault) { ws_vault_free(session_->vault); session_->vault = 0; }
-                zeroize_string(session_->dav.pass);
-                zeroize_string(session_->dav.user);
-                long klen = 0;
-                uint8_t* kbuf = read_keys_file("sdmc:/waystone/keys.json", &klen);
-                if (kbuf && klen > 0) {
-                    // kbuf intentionally not freed: UnlockScreen borrows it for app lifetime
-                    App::instance().set_screen(new UnlockScreen(session_, kbuf, static_cast<size_t>(klen)));
-                    return;
-                }
-                App::instance().pop_screen();
+    // ---- Touch: tap a row to focus + activate it (banners stay key-driven) ----
+    if (touch.px != 0 || touch.py != 0) {
+        for (size_t i = 0; i < NUM_ROWS; i++) {
+            if (row_rects_[i].contains((float)touch.px, (float)touch.py)) {
+                printf("[ui] settings touch row=%zu\n", i);
+                cursor_ = i;
+                activate_row(i);  // may delete this screen (log out) -- do not touch members after
                 return;
             }
+        }
+    }
+
+    if (kDown & ws_key(WsAction::Select)) {
+        activate_row(cursor_);  // may delete this screen (log out) -- do not touch members after
+    }
+}
+
+void SettingsScreen::activate_row(size_t row) {
+    switch (row) {
+        case 0: {
+            std::string v = swkbd_prompt("Server URL", false, session_->config.server_url);
+            if (!v.empty()) {
+                session_->config.server_url = v;
+                session_->dav.server_url = v;
+                zeroize_string(session_->dav.pass);
+            }
+            break;
+        }
+        case 1: {
+            std::string v = swkbd_prompt("Username", false, session_->config.username);
+            if (!v.empty()) {
+                session_->config.username = v;
+                session_->dav.user = v;
+            }
+            break;
+        }
+        case 2: {
+            session_->config.conflict_policy =
+                (session_->config.conflict_policy == WsConflictPolicy::NewestWins)
+                    ? WsConflictPolicy::Prompt : WsConflictPolicy::NewestWins;
+            break;
+        }
+        case 3: {
+            session_->config.safety_backup = !session_->config.safety_backup;
+            break;
+        }
+        case 4: {
+            if (worker_->is_running()) {
+                printf("[update] check ignored -- update worker busy\n");
+                break;
+            }
+            printf("[update] check requested from settings (mode=%s)\n",
+                   worker_->cia_mode() ? "cia" : "3dsx");
+            install_started_ = false;
+            confirm_update_ = false;
+            restart_prompt_ = false;
+            update_cancelled_ = false;
+            pending_ver_.clear();
+            pending_url_.clear();
+            status_text_ = "Checking for updates...";
+            phase_ = UpdatePhase::Checking;
+            worker_->start_check();
+            last_phase_ = UpdatePhase::Checking;  // a check that fails before the next poll still reports
+            break;
+        }
+        case 5: {
+            printf("[ui] settings save -> %s\n", session_->config_path.c_str());
+            if (wsconfig_save(session_->config, session_->config_path.c_str())) {
+                printf("[ui] settings save ok\n");
+                status_text_ = "Settings saved";
+            } else {
+                printf("[ui] settings save FAILED\n");
+                status_text_ = "Failed to save settings";
+            }
+            break;
+        }
+        case 6: {
+            printf("[ui] settings: log out\n");
+            // set_screen/pop_screen below delete this screen; detach first so
+            // ~SettingsScreen never joins a running worker on the render thread.
+            reap_worker(worker_);
+            session_store_clear();
+            if (session_->vault) { ws_vault_free(session_->vault); session_->vault = 0; }
+            zeroize_string(session_->dav.pass);
+            zeroize_string(session_->dav.user);
+            long klen = 0;
+            uint8_t* kbuf = read_keys_file("sdmc:/waystone/keys.json", &klen);
+            if (kbuf && klen > 0) {
+                // kbuf intentionally not freed: UnlockScreen borrows it for app lifetime
+                App::instance().set_screen(new UnlockScreen(session_, kbuf, static_cast<size_t>(klen)));
+                return;
+            }
+            App::instance().pop_screen();
+            return;
         }
     }
 }
