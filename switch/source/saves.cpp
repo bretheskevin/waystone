@@ -2,11 +2,15 @@
 #include "file_tree.h"
 #include "sync_rules.h"
 #include "remote_set.h"
+#include "rom_saves.h"
+#include "rom_parse.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <map>
 #include <set>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -155,6 +159,44 @@ std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav, A
     }
 
     nsExit();
+
+    // -- Source 2: RetroArch/mGBA ROM saves (ROM-driven; one PROPFIND per system with ROMs) --
+    {
+        std::vector<TitleInfo> roms = scan_rom_titles();
+        std::map<std::string, std::set<std::string> > rom_remote;
+        std::map<std::string, bool> rom_remote_ok;
+        int rom_hidden = 0, rom_kept = 0;
+        for (size_t i = 0; i < roms.size(); i++) {
+            TitleInfo& r = roms[i];
+            bool active = false;
+            if (vault) {
+                if (!rom_remote_ok.count(r.system))
+                    rom_remote_ok[r.system] =
+                        fetch_remote_game_set(vault, dav, r.system.c_str(), rom_remote[r.system]);
+                active = rom_remote_ok[r.system];
+            }
+            if (active) {
+                r.has_remote = is_key_in_remote_set(vault, r.rom_id, rom_remote[r.system]);
+                if (!r.has_remote && r.save_paths.empty()) {
+                    printf("[titles] hiding ROM %s -- no local save, no remote backup\n",
+                           r.rom_file_name.c_str());
+                    rom_hidden++;
+                    continue;
+                }
+            }
+            titles.push_back(r);
+            rom_kept++;
+        }
+        printf("[titles] ROM source: %d kept, %d hidden (of %zu scanned)\n",
+               rom_kept, rom_hidden, roms.size());
+    }
+
+    // 3DS parity: ns titles are now name-sorted too (previously ns record order).
+    std::stable_sort(titles.begin(), titles.end(),
+                     [](const TitleInfo& a, const TitleInfo& b) {
+                         return title_name_less(a.name, b.name);
+                     });
+
     printf("[titles] extracted %zu titles (%d with icons, %d hidden, %d with remote backup%s)\n",
            titles.size(), icons_found, hidden, via_remote,
            filter_active ? "" : ", remote set unavailable: fail-open");

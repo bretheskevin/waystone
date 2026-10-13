@@ -11,11 +11,21 @@
 struct Vault;
 typedef Vault WsVault;
 
+enum TitleSource { SourceInstalled, SourceRom };
+
 struct TitleInfo {
     uint64_t title_id;
-    std::string name;      // display name from NACP, or hex TID fallback
-    std::string icon_path; // path to cached icon JPEG on sdmc (empty if none)
+    std::string name;      // display name from NACP, or hex TID fallback; ROMs: ROM file stem
+    std::string icon_path; // path to cached icon JPEG on sdmc (empty if none; always empty for ROMs)
     bool has_remote = true; // game dir present on the server; true when unknown (fail-open)
+    TitleSource source = SourceInstalled;
+    // ROM-only fields (source == SourceRom):
+    std::string system;                  // "nds","gba",...,"n64","psx"
+    std::string rom_id;                  // core ROM identity (group_key game segment)
+    std::string rom_path;                // absolute "sdmc:/..." ROM path
+    std::string rom_file_name;           // ROM file name, drives native save names on restore
+    std::string save_dir;                // absolute save dir; restore target when no save exists
+    std::vector<std::string> save_paths; // absolute paths of the ROM's existing saves
 };
 
 // Installed titles that have a local save for `uid` OR a remote backup. Hidden only when the

@@ -10,6 +10,7 @@
 #include "widgets.h"
 #include "theme.h"
 #include "rom_parse.h"
+#include "rom_icons.h"
 #include "version.h"
 #include <cstdio>
 

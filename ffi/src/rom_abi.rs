@@ -4,8 +4,9 @@ use crate::error::{catch_and_set_error, set_last_error};
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
-use core::ffi::c_char;
+use core::ffi::{c_char, c_void};
 use waystone_core::crc32::crc32_update;
+use waystone_core::iso9660::{cue_first_data_file, psx_boot_serial, psx_fallback_id};
 use waystone_core::model::SystemId;
 use waystone_core::rom_id::{display_name, needs_full_hash, rom_identity};
 use waystone_core::rom_pair::pair_roms;
@@ -131,4 +132,59 @@ pub unsafe extern "C" fn ws_rom_keyed_slots(system: *const c_char) -> *mut c_cha
         return core::ptr::null_mut();
     };
     owned_c_string(slot_names(sys).join("\n"))
+}
+
+/// Random-access reader for PSX images: read up to `len` bytes at `offset` into
+/// `buf`, return bytes actually read (0 = EOF/error). `user` is the shell's ctx.
+/// NULL when the shell cannot serve the image (identity falls back to sampled).
+pub type WsReadAtFn =
+    Option<unsafe extern "C" fn(user: *mut c_void, offset: u64, buf: *mut u8, len: usize) -> usize>;
+
+/// Parse a .cue sheet, return the first data-track FILE name. Caller frees with
+/// ws_string_free. NULL on parse failure (ws_last_error set).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_rom_psx_cue_data_file(
+    cue_text: *const u8,
+    cue_text_len: usize,
+) -> *mut c_char {
+    if cue_text.is_null() || cue_text_len == 0 {
+        set_last_error("empty cue sheet");
+        return core::ptr::null_mut();
+    }
+    let text = match core::str::from_utf8(unsafe { bytes_arg(cue_text, cue_text_len) }) {
+        Ok(t) => t,
+        Err(_) => {
+            set_last_error("cue sheet is not UTF-8");
+            return core::ptr::null_mut();
+        }
+    };
+    match cue_first_data_file(text) {
+        Some(name) => owned_c_string(name),
+        None => {
+            set_last_error("cue sheet has no FILE line");
+            core::ptr::null_mut()
+        }
+    }
+}
+
+/// PSX identity: ISO9660 SYSTEM.CNF boot serial when `read_cb` can serve a
+/// parseable image; otherwise the sampled fallback `size-crc32`. Caller frees
+/// with ws_string_free. Never returns NULL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_rom_psx_identity(
+    read_cb: WsReadAtFn,
+    user: *mut c_void,
+    file_size: u64,
+    sample_crc32: u32,
+) -> *mut c_char {
+    if let Some(cb) = read_cb {
+        let mut read = |off: u64, buf: &mut [u8]| -> usize {
+            // SAFETY: the shell guarantees `user`/`buf` valid for the call duration.
+            unsafe { cb(user, off, buf.as_mut_ptr(), buf.len()) }
+        };
+        if let Some(serial) = psx_boot_serial(&mut read) {
+            return owned_c_string(serial);
+        }
+    }
+    owned_c_string(psx_fallback_id(file_size, sample_crc32))
 }

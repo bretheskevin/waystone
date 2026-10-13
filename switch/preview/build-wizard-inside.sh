@@ -197,6 +197,8 @@ OBJS+=( $(cxx "$SHELL_COMMON/snapshot_browse.cpp" sc_snapshot_browse) )
 OBJS+=( $(cxx "$SHELL_COMMON/snapshot.cpp"        sc_snapshot) )
 OBJS+=( $(cxx "$SHELL_COMMON/file_tree.cpp"       sc_file_tree) )
 OBJS+=( $(cxx "$SHELL_COMMON/sync_summary.cpp"    sc_sync_summary) )
+# rom_system_badge is called by title_list_activity.cpp for ROM rows.
+OBJS+=( $(cxx "$SHELL_COMMON/rom_parse.cpp"       sc_rom_parse) )
 
 # ---------------------------------------------------------------------------
 # Preview stubs (replace Switch-only or complex real implementations)

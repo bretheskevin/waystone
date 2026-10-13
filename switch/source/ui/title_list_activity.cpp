@@ -12,6 +12,7 @@
 #include "history_activity.h"
 #include "borealis_focus.h"
 #include "version.h"
+#include "rom_parse.h"
 #include <cstdio>
 
 // Muted color for status line (matches wizard footer hints).
@@ -19,6 +20,11 @@ static NVGcolor muted_color() { return nvgRGB(0x71, 0x71, 0x7A); }
 
 // Placeholder icon color when a title has no icon JPEG cached.
 static NVGcolor placeholder_icon_color() { return nvgRGB(0x38, 0x38, 0x40); }
+
+// Deterministic per-system tint for ROM placeholder tiles (no box art on Switch v1).
+static NVGcolor rom_placeholder_color(const std::string& system) {
+    return nvgHSL((float)(rom_fnv1a(system) % 360) / 360.0f, 0.45f, 0.42f);
+}
 
 static const float ICON_SIZE     = 48.0f;
 static const float ROW_PADDING   = 5.0f;   // top/bottom only; left/right use ROW_H_PADDING
@@ -132,7 +138,13 @@ brls::View* TitleListActivity::createContentView() {
         row->addView(icon_box);  // parent in tree first
 
         bool icon_loaded = false;
-        if (!t.icon_path.empty()) {
+        if (t.source == SourceRom) {
+            // ROM rows never call setImageFromFile: per-system tinted placeholder tile.
+            auto* placeholder = new brls::Rectangle(rom_placeholder_color(t.system));
+            placeholder->setWidth(ICON_SIZE);
+            placeholder->setHeight(ICON_SIZE);
+            icon_box->addView(placeholder);
+        } else if (!t.icon_path.empty()) {
             auto* img = new brls::Image();
             // FIX 1: STRETCH fills the icon_box 48×48 exactly (imageX=0,imageY=0,
             // imageWidth=getWidth(),imageHeight=getHeight()). FIT on a square source
@@ -149,7 +161,7 @@ brls::View* TitleListActivity::createContentView() {
                 icon_box->removeView(img);  // img deleted by removeView
             }
         }
-        if (!icon_loaded) {
+        if (!icon_loaded && t.source != SourceRom) {
             // No icon or load failed: solid-color placeholder fills the slot.
             auto* placeholder = new brls::Rectangle(placeholder_icon_color());
             placeholder->setWidth(ICON_SIZE);
@@ -164,6 +176,16 @@ brls::View* TitleListActivity::createContentView() {
         name_label->setSingleLine(true);
         name_label->setGrow(1.0f);
         row->addView(name_label);
+
+        if (t.source == SourceRom) {
+            auto* badge = new brls::Label();
+            badge->setText(rom_system_badge(t.system));
+            badge->setFontSize(14.0f);
+            badge->setTextColor(muted_color());
+            badge->setSingleLine(true);
+            badge->setMarginLeft(ROW_GAP);
+            row->addView(badge);
+        }
 
         title_list_box_->addView(row);
     }

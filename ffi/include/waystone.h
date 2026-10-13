@@ -15,6 +15,13 @@ typedef struct WsBuf {
 
 typedef Vault WsVault;
 
+/**
+ * Random-access reader for PSX images: read up to `len` bytes at `offset` into
+ * `buf`, return bytes actually read (0 = EOF/error). `user` is the shell's ctx.
+ * NULL when the shell cannot serve the image (identity falls back to sampled).
+ */
+typedef uintptr_t (*WsReadAtFn)(void *user, uint64_t offset, uint8_t *buf, uintptr_t len);
+
 
 struct WsBuf ws_checkpoint_normalize(const char *system,
                                      const uint8_t *raw_files,
@@ -162,5 +169,22 @@ char *ws_rom_display_name(const char *system,
  struct WsBuf ws_rom_pair(const uint8_t *paths, uintptr_t paths_len);
 
  char *ws_rom_keyed_slots(const char *system);
+
+/**
+ * Parse a .cue sheet, return the first data-track FILE name. Caller frees with
+ * ws_string_free. NULL on parse failure (ws_last_error set).
+ */
+ char *ws_rom_psx_cue_data_file(const uint8_t *cue_text, uintptr_t cue_text_len);
+
+/**
+ * PSX identity: ISO9660 SYSTEM.CNF boot serial when `read_cb` can serve a
+ * parseable image; otherwise the sampled fallback `size-crc32`. Caller frees
+ * with ws_string_free. Never returns NULL.
+ */
+
+char *ws_rom_psx_identity(WsReadAtFn read_cb,
+                          void *user,
+                          uint64_t file_size,
+                          uint32_t sample_crc32);
 
 #endif  /* WAYSTONE_H */

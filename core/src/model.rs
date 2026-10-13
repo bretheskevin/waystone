@@ -18,10 +18,12 @@ pub enum SystemId {
     Sms,
     Gg,
     Ngp,
+    N64,
+    Psx,
 }
 
 impl SystemId {
-    pub const ALL: [SystemId; 12] = [
+    pub const ALL: [SystemId; 14] = [
         Self::Switch,
         Self::ThreeDS,
         Self::Nds,
@@ -34,6 +36,8 @@ impl SystemId {
         Self::Sms,
         Self::Gg,
         Self::Ngp,
+        Self::N64,
+        Self::Psx,
     ];
 
     pub fn parse(s: &str) -> Option<SystemId> {
@@ -54,6 +58,8 @@ impl SystemId {
             Self::Sms => "sms",
             Self::Gg => "gg",
             Self::Ngp => "ngp",
+            Self::N64 => "n64",
+            Self::Psx => "psx",
         }
     }
 }

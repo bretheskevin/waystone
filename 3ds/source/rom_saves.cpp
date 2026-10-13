@@ -1,5 +1,6 @@
 #include "rom_saves.h"
 #include "rom_parse.h"
+#include "rom_icons.h"
 #include "snapshot.h"  // fs_mkdir_p
 
 #include <3ds.h>

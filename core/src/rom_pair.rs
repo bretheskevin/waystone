@@ -280,4 +280,19 @@ mod tests {
         assert_eq!(r[0].rom_path, "roms/a.gb");
         assert_eq!(r[1].rom_path, "roms/b.gb");
     }
+
+    #[test]
+    fn retroarch_global_saves_mode() {
+        // Under --features switch the global dir is retroarch/saves; otherwise TWiLight.
+        let r = p(&["roms/psx/Crash.cue", "retroarch/saves/Crash.srm"]);
+        #[cfg(feature = "switch")]
+        {
+            assert_eq!(r[0].save_dir, "retroarch/saves");
+            assert_eq!(r[0].save_paths, vec!["retroarch/saves/Crash.srm"]);
+        }
+        #[cfg(not(feature = "switch"))]
+        {
+            assert!(r[0].save_paths.is_empty());
+        }
+    }
 }

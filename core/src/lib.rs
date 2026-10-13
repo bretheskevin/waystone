@@ -7,6 +7,7 @@ pub mod adapters;
 pub mod conflict;
 pub mod crc32;
 pub mod crypto;
+pub mod iso9660;
 pub mod model;
 pub mod packaging;
 pub mod rom_id;

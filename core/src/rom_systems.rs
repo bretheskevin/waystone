@@ -8,6 +8,8 @@ pub enum IdScheme {
     NdsHeader,
     GbaHeader,
     Crc32,
+    N64Header,
+    PsxSerial,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +27,10 @@ pub struct RomSystem {
     pub id_scheme: IdScheme,
 }
 
+// Platform-specific central save dir: RetroArch on Switch, TWiLight Menu++ elsewhere.
+#[cfg(feature = "switch")]
+pub const GLOBAL_SAVE_DIR: &str = "retroarch/saves";
+#[cfg(not(feature = "switch"))]
 pub const GLOBAL_SAVE_DIR: &str = "_nds/TWiLightMenu/saves";
 pub const NGP_SAVE_DIR: &str = "data/ngpds";
 
@@ -92,6 +98,20 @@ pub static ROM_SYSTEMS: &[RomSystem] = &[
         battery: SaveName::RomNamePlus(".fla"),
         fixed_save_dir: Some(NGP_SAVE_DIR),
         id_scheme: IdScheme::Crc32,
+    },
+    RomSystem {
+        system: SystemId::N64,
+        rom_exts: &["z64", "n64", "v64"],
+        battery: SaveName::StemPlus(".srm"),
+        fixed_save_dir: None,
+        id_scheme: IdScheme::N64Header,
+    },
+    RomSystem {
+        system: SystemId::Psx,
+        rom_exts: &["cue", "iso", "img", "bin", "chd"],
+        battery: SaveName::StemPlus(".srm"),
+        fixed_save_dir: None,
+        id_scheme: IdScheme::PsxSerial,
     },
 ];
 
@@ -500,5 +520,31 @@ mod tests {
                 && nds.contains(&"dsiware-9".into())
         );
         assert_eq!(slot_names(SystemId::Gba), vec![String::from("battery")]);
+    }
+
+    #[test]
+    fn n64_psx_systems_pair_stem_srm_saves() {
+        assert_eq!(
+            rom_system_for_file("roms/n64/Mario 64.z64").unwrap().system,
+            SystemId::N64
+        );
+        assert_eq!(
+            rom_system_for_file("roms/psx/Crash.cue").unwrap().system,
+            SystemId::Psx
+        );
+        let b = SaveFileKind::Battery;
+        assert_eq!(
+            native_save_name(SystemId::N64, "Mario 64.v64", &b).unwrap(),
+            "Mario 64.srm"
+        );
+        assert_eq!(
+            native_save_name(SystemId::Psx, "Crash Bandicoot.cue", &b).unwrap(),
+            "Crash Bandicoot.srm"
+        );
+        assert_eq!(
+            classify_save(SystemId::Psx, "Crash.cue", "Crash.srm"),
+            Some(SaveFileKind::Battery)
+        );
+        assert_eq!(slot_names(SystemId::Psx), vec![String::from("battery")]);
     }
 }

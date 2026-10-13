@@ -251,7 +251,7 @@ DEPENDS	:=	$(OFILES:.o=.d)
 # it must NOT have -fno-rtti; it inherits global CXXFLAGS (RTTI enabled).
 # CONSOLE=1: flags are already in global CXXFLAGS; this block is skipped.
 ifneq ($(CONSOLE),1)
-OUR_ENGINE_OBJS := saves.o sync.o net.o json.o base64.o snapshot.o wsconfig.o sync_summary.o sync_rules.o sync_engine.o keys_file.o remote_set.o updater.o log_rotate.o
+OUR_ENGINE_OBJS := saves.o sync.o net.o json.o base64.o snapshot.o wsconfig.o sync_summary.o sync_rules.o sync_engine.o keys_file.o remote_set.o updater.o rom_parse.o rom_saves.o log_rotate.o
 $(OUR_ENGINE_OBJS): CXXFLAGS += -fno-rtti -fno-exceptions
 endif
 
