@@ -1,5 +1,6 @@
 package dev.waystone.data.roms
 
+import dev.waystone.data.config.NATIVE_FLAVOR
 import java.io.InputStream
 import java.util.logging.Level
 import java.util.logging.Logger
@@ -28,17 +29,18 @@ data class LocalRom(
     val displayName: String,
     val saveDir: String,
     val savePaths: List<String>,
+    val flavor: String = NATIVE_FLAVOR,
 )
 
-class RomScanner(private val source: RomFileSource) {
+class RomScanner(private val source: RomFileSource, private val externalFlavor: String? = null) {
 
     private val log = Logger.getLogger(RomScanner::class.java.name)
 
     fun scan(): List<LocalRom> {
         val started = System.currentTimeMillis()
         val paths = source.listPaths(MAX_DEPTH)
-        val pairings = romPair(paths)
-        log.info("[roms] ${paths.size} file(s) -> ${pairings.size} ROM(s)")
+        val pairings = romPair(paths, externalFlavor)
+        log.info("[roms] ${paths.size} file(s) -> ${pairings.size} ROM(s) (external=${externalFlavor ?: "none"})")
         val roms = pairings.mapNotNull { p ->
             runCatching { identify(p) }
                 .onFailure { log.log(Level.WARNING, "[roms] identity failed for ${p.romPath}", it) }
@@ -49,18 +51,21 @@ class RomScanner(private val source: RomFileSource) {
     }
 
     // A ROM whose saves cannot all be read is skipped: a partial set (e.g. .pub without .prv) would push a bogus save.
-    fun loadSaves(roms: List<LocalRom>): List<NormalizedSave> = roms.filter { it.savePaths.isNotEmpty() }.flatMap { rom ->
-        val files = rom.savePaths.map { path ->
-            val bytes = runCatching { source.open(path)?.use { it.readBytes() } }
-                .onFailure { log.log(Level.WARNING, "[roms] read failed for save $path", it) }
-                .getOrNull()
-            if (bytes == null) {
-                log.warning("[roms] cannot read save $path; skipping ${rom.romPath}")
-                return@flatMap emptyList()
-            }
-            RawFileEntry(path.substringAfterLast('/'), bytes)
+    fun readSaveFiles(rom: LocalRom): List<RawFileEntry> = rom.savePaths.map { path ->
+        val bytes = runCatching { source.open(path)?.use { it.readBytes() } }
+            .onFailure { log.log(Level.WARNING, "[roms] read failed for save $path", it) }
+            .getOrNull()
+        if (bytes == null) {
+            log.warning("[roms] cannot read save $path; skipping ${rom.romPath}")
+            return emptyList()
         }
-        romKeyedNormalize(rom.system, rom.romId, rom.displayName, rom.romFileName, RawTree(files))
+        RawFileEntry(path.substringAfterLast('/'), bytes)
+    }
+
+    fun loadSaves(roms: List<LocalRom>): List<NormalizedSave> = roms.filter { it.savePaths.isNotEmpty() }.flatMap { rom ->
+        val files = readSaveFiles(rom)
+        if (files.isEmpty()) return@flatMap emptyList()
+        romKeyedNormalize(rom.system, rom.romId, rom.displayName, rom.romFileName, rom.flavor, RawTree(files))
             .also { log.info("[roms] ${rom.romPath}: ${it.size} save(s) from ${files.size} file(s)") }
     }
 
@@ -85,7 +90,7 @@ class RomScanner(private val source: RomFileSource) {
         } else null
         val id = romIdentity(p.system, header, crc) ?: error("no identity for ${p.romPath}")
         val name = p.romPath.substringAfterLast('/')
-        return LocalRom(p.system, p.romPath, name, id, romDisplayName(p.system, header, name), p.saveDir, p.savePaths)
+        return LocalRom(p.system, p.romPath, name, id, romDisplayName(p.system, header, name), p.saveDir, p.savePaths, p.flavor)
     }
 
     companion object {

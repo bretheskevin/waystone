@@ -24,3 +24,22 @@ cd android
 ./gradlew :app:testDebugUnitTest     # compile all modules + run unit tests
 ./gradlew :engine:cargoNdkBuild :app:assembleDebug   # build Rust jniLibs + APK
 ```
+
+## Version
+
+`versionName`/`versionCode` come from the repo-root `VERSION` (`X.Y.Z`; code = X*10000 + Y*100 + Z).
+Bump `VERSION` once per release — it also feeds the 3DS/Switch builds.
+
+## Release & signing
+
+Release APKs are signed only when these env vars are set (CI sets them from repo secrets):
+`WAYSTONE_KEYSTORE_PATH`, `WAYSTONE_KEYSTORE_PASSWORD`, `WAYSTONE_KEY_ALIAS`, `WAYSTONE_KEY_PASSWORD`.
+Without them `assembleRelease` produces `app-release-unsigned.apk`; debug builds and unit tests never need them.
+The release keystore lives at `~/.waystone/android-release.jks` (+ `android-release.properties`, chmod 600) on the
+maintainer's machine — never commit it; losing it means users must uninstall to update.
+CI (`.github/workflows/release.yml` `build-android`) publishes `waystone.apk` — the in-app updater matches the `.apk`
+suffix, never rename the asset.
+
+## Smoke test (no device)
+
+`bash android/scripts/smoke.sh` boots a headless emulator, installs the debug APK and asserts the Setup screen.

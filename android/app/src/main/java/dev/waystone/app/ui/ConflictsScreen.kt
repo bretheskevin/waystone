@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -21,27 +22,35 @@ import androidx.compose.ui.Modifier
 import dev.waystone.app.ui.theme.LocalWaystoneColors
 import dev.waystone.app.ui.theme.LocalWaystoneSpacing
 import dev.waystone.app.ui.theme.LocalWaystoneTypography
-import dev.waystone.app.vm.ConflictsReady
-import dev.waystone.app.vm.UiState
+import dev.waystone.app.vm.ConflictInboxState
 import dev.waystone.data.sync.ConflictEntry
 
 @Composable
 fun ConflictsScreen(
-    state: UiState<ConflictsReady>,
-    conflicts: List<ConflictEntry>,
+    state: ConflictInboxState,
     onKeepLocal: (String) -> Unit,
     onKeepRemote: (String) -> Unit,
 ) {
     var pendingRemote by remember { mutableStateOf<ConflictEntry?>(null) }
 
-    when (state) {
-        is UiState.Loading -> LoadingView()
-        is UiState.Error -> ErrorView(state.message)
-        is UiState.Ready -> LazyColumn(
-            modifier = Modifier.fillMaxSize().padding(LocalWaystoneSpacing.current.Md),
-            verticalArrangement = Arrangement.spacedBy(LocalWaystoneSpacing.current.Md),
-        ) {
-            items(conflicts, key = { it.save.groupKey }) { entry ->
+    Column(
+        modifier = Modifier.fillMaxSize().padding(LocalWaystoneSpacing.current.Md),
+        verticalArrangement = Arrangement.spacedBy(LocalWaystoneSpacing.current.Md),
+    ) {
+        if (state.scanning) {
+            LinearProgressIndicator(
+                progress = { if (state.total == 0) 0f else state.scanned.toFloat() / state.total },
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Text("Scanning ${state.scanned}/${state.total}…", style = LocalWaystoneTypography.current.sm)
+        }
+        state.error?.let { ErrorBanner(it) }
+        if (!state.scanning && state.entries.isEmpty()) {
+            Text("No conflicts", style = LocalWaystoneTypography.current.base)
+        }
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(LocalWaystoneSpacing.current.Md)) {
+            items(state.entries, key = { it.save.groupKey }) { entry ->
+                val busy = entry.save.groupKey in state.busy
                 Card(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(LocalWaystoneSpacing.current.Md),
@@ -50,9 +59,10 @@ fun ConflictsScreen(
                         Text(entry.save.displayName, style = LocalWaystoneTypography.current.lg)
                         Text("Changed on ${entry.remoteDeviceId} at ${entry.remoteMtime}", style = LocalWaystoneTypography.current.sm)
                         Text("local ${entry.localHash.take(12)}…  remote ${entry.remoteHash.take(12)}…", style = LocalWaystoneTypography.current.monoSm)
+                        if (busy) Text("Resolving…", style = LocalWaystoneTypography.current.sm)
                         Row(horizontalArrangement = Arrangement.spacedBy(LocalWaystoneSpacing.current.Sm)) {
-                            TextButton(onClick = { onKeepLocal(entry.save.groupKey) }) { Text("Keep local") }
-                            TextButton(onClick = { pendingRemote = entry }) {
+                            TextButton(onClick = { onKeepLocal(entry.save.groupKey) }, enabled = !busy) { Text("Keep local") }
+                            TextButton(onClick = { pendingRemote = entry }, enabled = !busy) {
                                 Text("Keep remote", color = LocalWaystoneColors.current.warning)
                             }
                         }

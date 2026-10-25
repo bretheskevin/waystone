@@ -2,6 +2,7 @@ package dev.waystone.app.vm
 
 import dev.waystone.data.config.Settings
 import dev.waystone.data.config.SourceFolder
+import dev.waystone.data.roms.RemoteOnlyProbe
 import dev.waystone.data.sync.SyncRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -41,7 +42,8 @@ data class SourceScan(
 )
 
 interface SaveSourceProvider {
-    suspend fun scanSources(settings: Settings): List<SourceScan>
+    /** With [probe], rom_keyed sources also return remote-only slots (files empty, see isRemoteOnly). */
+    suspend fun scanSources(settings: Settings, probe: RemoteOnlyProbe? = null): List<SourceScan>
     suspend fun findSave(settings: Settings, groupKey: String): Pair<SourceFolder, NormalizedSave>?
 
     // Blocking SAF write; callers invoke on an IO dispatcher (guardedRestore's write lambda is not suspend).

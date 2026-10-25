@@ -25,6 +25,9 @@ val cargoNdkBuild = tasks.register<Exec>("cargoNdkBuild") {
         "-o", jniLibs.asFile.absolutePath,
         "build", "-p", "waystone-mobile", "--release")
     outputs.dir(jniLibs)
+    // Rust sources are not declared inputs; cargo does its own change tracking, so never skip it
+    // (otherwise a stale .so lacking newer UniFFI symbols ships in the APK).
+    outputs.upToDateWhen { false }
 }
 tasks.matching { it.name == "mergeDebugJniLibFolders" || it.name == "mergeReleaseJniLibFolders" }
     .configureEach { dependsOn(cargoNdkBuild) }

@@ -19,7 +19,6 @@ import uniffi.waystone_mobile.NormalizedSave
 import uniffi.waystone_mobile.PushOutcome
 import uniffi.waystone_mobile.SyncDecision
 import uniffi.waystone_mobile.Vault
-import uniffi.waystone_mobile.WebDav
 import uniffi.waystone_mobile.decidePull
 import uniffi.waystone_mobile.localHash
 import uniffi.waystone_mobile.pushOne
@@ -30,30 +29,6 @@ class SyncRepositoryTest {
 
     @get:Rule
     val tmp = TemporaryFolder()
-
-    /** Mirrors mobile/tests/mock_sync.rs::MockWebDav over an in-memory map. */
-    class FakeWebDav : WebDav {
-        private val store = mutableMapOf<String, ByteArray>()
-
-        fun keys(): Set<String> = store.keys.toSet()
-
-        override fun `get`(path: String): ByteArray? = store[path]?.copyOf()
-
-        override fun `put`(path: String, body: ByteArray) {
-            store[path] = body.copyOf()
-        }
-
-        override fun `exists`(path: String): Boolean = store.containsKey(path)
-
-        override fun `propfind`(path: String): List<String> {
-            val prefix = if (path.endsWith("/")) path else "$path/"
-            return store.keys
-                .filter { it.startsWith(prefix) && it.substring(prefix.length).indexOf('/') < 0 }
-                .sorted()
-        }
-
-        override fun `mkdirP`(path: String) = Unit
-    }
 
     private fun makeSave(content: ByteArray, mtime: String) = NormalizedSave(
         source = "jksv",
@@ -81,7 +56,7 @@ class SyncRepositoryTest {
 
         assertEquals(PushOutcome.PUSHED, repo.pushOne(save))
         assertEquals(localHash(save), repo.hashOf(save))
-        assertEquals(SourceStatus.InSync, repo.statusOf(save))
+        assertEquals(SourceStatus.InSync, repo.planOne(save, ConflictPolicy.PROMPT).status)
     }
 
     @Test
@@ -110,7 +85,7 @@ class SyncRepositoryTest {
         val base = listOf("switch", "TEST_GAME", "main").joinToString("/") { vault.pathSegment(it) }
         dav.put("$base/heads/other.json", vault.encryptHeads(headJson.toByteArray()))
 
-        assertEquals(SourceStatus.Conflict, repo.statusOf(save))
+        assertEquals(SourceStatus.Conflict, repo.planOne(save, ConflictPolicy.PROMPT).status)
 
         val decision = decidePull(
             localHash(save), save.mtime, readRemoteHeads(vault, save, dav), "dev1",
@@ -128,53 +103,11 @@ class SyncRepositoryTest {
     }
 
     @Test
-    fun `syncAll pushes when ahead`() = runBlocking {
-        val vault = newVault("t4")
-        val dav = FakeWebDav()
-        val repo = SyncRepository(vault, dav, "dev1")
-        val save = makeSave("ahead-content".toByteArray(), "2026-01-01T00:00:00Z")
-
-        val results = repo.syncAll(listOf(save), ConflictPolicy.PROMPT)
-
-        assertEquals(1, results.size)
-        assertEquals(SyncDecision.Push, results[0].decision)
-        val heads = readRemoteHeads(vault, save, dav)
-        assertEquals(1, heads.size)
-        assertEquals("dev1", heads[0].deviceId)
-        assertEquals(localHash(save), heads[0].hash)
-    }
-
-    @Test
-    fun `syncAll pulls remote files when behind`() = runBlocking {
-        val vault = newVault("t9")
-        val dav = FakeWebDav()
-        val dev1 = SyncRepository(vault, dav, "dev1")
-        val saveA = makeSave("content-a".toByteArray(), "2026-01-02T00:00:00Z")
-        dev1.pushOne(saveA)
-        // Another device pushes a newer save; dev1's local copy is now behind.
-        val dev2 = SyncRepository(vault, dav, "dev2")
-        val saveB = saveA.copy(
-            files = listOf(FileEntry("save.dat", "content-b".toByteArray())),
-            mtime = "2026-01-03T00:00:00Z",
-        )
-        dev2.pushOne(saveB)
-
-        val results = dev1.syncAll(listOf(saveA), ConflictPolicy.PROMPT)
-
-        assertEquals(1, results.size)
-        assertTrue(results[0].decision is SyncDecision.Pull)
-        val files = results[0].files
-        assertNotNull(files)
-        assertEquals("save.dat", files!![0].path)
-        assertArrayEquals("content-b".toByteArray(), files[0].content)
-    }
-
-    @Test
     fun `status reports Error when hashing fails`() = runBlocking {
         val repo = SyncRepository(newVault("t5"), FakeWebDav(), "dev1")
         val bad = makeSave("x".toByteArray(), "2026-01-01T00:00:00Z").copy(system = "megadrive")
 
-        assertEquals(SourceStatus.Error, repo.statusOf(bad))
+        assertEquals(PlanAction.Error, repo.planOne(bad, ConflictPolicy.PROMPT).action)
     }
 
     @Test
@@ -241,6 +174,20 @@ class SyncRepositoryTest {
 
         assertTrue(ok)
         assertEquals(10, store.list("switch/TEST_GAME/main").size)
+    }
+
+    @Test
+    fun `guardedRestore skips the snapshot when there is no local save`() = runBlocking {
+        val repo = SyncRepository(newVault("t10"), FakeWebDav(), "dev1")
+        val save = makeSave("x".toByteArray(), "2026-01-01T00:00:00Z")
+        var snapshots = 0
+        val ok = repo.guardedRestore(
+            save, listOf(FileEntry("save.dat", "new".toByteArray())),
+            write = { it.size }, currentLocalFiles = { emptyList() },
+            takeSnapshot = { _, _ -> snapshots++; false }, prune = {}, safetyBackup = true,
+        )
+        assertTrue(ok)
+        assertEquals(0, snapshots)
     }
 
     @Test

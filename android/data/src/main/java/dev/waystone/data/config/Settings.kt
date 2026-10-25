@@ -12,7 +12,14 @@ data class SourceFolder(
     val uri: String,
     val adapter: String,
     val system: String,
-)
+    /** External save tree (SAF) for emulator presets whose saves live outside the ROM folder. */
+    val saveUri: String? = null,
+    /** EmulatorPreset.id, or null for a manual source. */
+    val preset: String? = null,
+) {
+    /** Identity of a configured source: one ROM folder can back several presets. Not serialized. */
+    val key: String get() = listOf(uri, adapter, system, saveUri.orEmpty(), preset.orEmpty()).joinToString("|")
+}
 
 @Serializable
 data class Settings(

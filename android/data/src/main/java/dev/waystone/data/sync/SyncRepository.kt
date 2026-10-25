@@ -2,15 +2,17 @@ package dev.waystone.data.sync
 
 import java.util.logging.Level
 import java.util.logging.Logger
+import dev.waystone.data.roms.RemoteOnlyProbe
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import uniffi.waystone_mobile.ConflictPolicy
 import uniffi.waystone_mobile.DeviceHead
 import uniffi.waystone_mobile.FileEntry
 import uniffi.waystone_mobile.HistoryEntry
 import uniffi.waystone_mobile.NormalizedSave
-import uniffi.waystone_mobile.PullOutcome
 import uniffi.waystone_mobile.PushOutcome
 import uniffi.waystone_mobile.SyncDecision
 import uniffi.waystone_mobile.Vault
@@ -18,9 +20,9 @@ import uniffi.waystone_mobile.WebDav
 import uniffi.waystone_mobile.WaystoneException
 import uniffi.waystone_mobile.decidePull as ffiDecidePull
 import uniffi.waystone_mobile.fetchBlob as ffiFetchBlob
+import uniffi.waystone_mobile.foldHeads as ffiFoldHeads
 import uniffi.waystone_mobile.listHistory as ffiListHistory
 import uniffi.waystone_mobile.localHash as ffiLocalHash
-import uniffi.waystone_mobile.pullOne as ffiPullOne
 import uniffi.waystone_mobile.pushOne as ffiPushOne
 import uniffi.waystone_mobile.readRemoteHeads as ffiReadRemoteHeads
 
@@ -45,13 +47,6 @@ data class ConflictEntry(
     val remoteMtime: String,
 )
 
-data class SyncResult(
-    val save: NormalizedSave,
-    val decision: SyncDecision,
-    /** Decrypted remote files when this save was pulled; null for push/no-op decisions. */
-    val files: List<FileEntry>?,
-)
-
 /** Mirrors desktop/src/tui/action.rs sync flows over the UniFFI binding. */
 class SyncRepository(
     private val vault: Vault,
@@ -60,27 +55,11 @@ class SyncRepository(
     private val io: CoroutineContext = Dispatchers.IO,
 ) {
 
-    private val log = Logger.getLogger(SyncRepository::class.java.name)
+    private val log = Logger.getLogger("WS:SYNC")
+
+    fun remoteOnlyProbe(): RemoteOnlyProbe = RemoteOnlyProbe(vault, dav)
 
     suspend fun hashOf(save: NormalizedSave): String = withContext(io) { ffiLocalHash(save) }
-
-    suspend fun statusOf(save: NormalizedSave): SourceStatus = withContext(io) {
-        try {
-            val hash = ffiLocalHash(save)
-            val heads = ffiReadRemoteHeads(vault, save, dav)
-            when (val d = ffiDecidePull(hash, save.mtime, heads, deviceId, ConflictPolicy.PROMPT)) {
-                SyncDecision.InSync -> SourceStatus.InSync
-                SyncDecision.Push -> SourceStatus.Ahead
-                is SyncDecision.Pull -> SourceStatus.Behind
-                is SyncDecision.ConflictResolved ->
-                    if (d.winner == "remote") SourceStatus.Behind else SourceStatus.Ahead
-                is SyncDecision.ConflictNeedsInput -> SourceStatus.Conflict
-            }
-        } catch (e: Exception) {
-            log.log(Level.WARNING, "status scan failed for ${save.groupKey}", e)
-            SourceStatus.Error
-        }
-    }
 
     /** Newest head from another device, for inbox display on ConflictNeedsInput. */
     fun conflictEntry(
@@ -100,11 +79,6 @@ class SyncRepository(
         ffiPushOne(vault, save, deviceId, dav).also { log.info("push ${save.groupKey} -> $it") }
     }
 
-    suspend fun pullOne(save: NormalizedSave, policy: ConflictPolicy): PullOutcome = withContext(io) {
-        ffiPullOne(vault, save, deviceId, dav, policy)
-            .also { log.info("pull ${save.groupKey} -> ${it.decision}") }
-    }
-
     /** fetch_blob already returns decrypted plaintext zip bytes — no decryptBlob here. */
     suspend fun keepRemoteFiles(save: NormalizedSave, remoteHash: String): List<FileEntry> =
         withContext(io) {
@@ -117,26 +91,99 @@ class SyncRepository(
         ffiListHistory(vault, save, dav).also { log.info("history ${save.groupKey}: ${it.size} entries") }
     }
 
-    suspend fun syncAll(saves: List<NormalizedSave>, policy: ConflictPolicy): List<SyncResult> {
-        val results = mutableListOf<SyncResult>()
-        for (save in saves) {
-            val decision = withContext(io) {
-                val hash = ffiLocalHash(save)
-                val heads = ffiReadRemoteHeads(vault, save, dav)
-                ffiDecidePull(hash, save.mtime, heads, deviceId, policy)
+    suspend fun planOne(save: NormalizedSave, policy: ConflictPolicy): SyncPlanEntry = withContext(io) {
+        runCatchingCancellable {
+            val local = if (save.isRemoteOnly) null else ffiLocalHash(save)
+            val heads = ffiReadRemoteHeads(vault, save, dav)
+            val d = ffiDecidePull(local, save.mtime, heads, deviceId, policy)
+            val entry = when (d) {
+                SyncDecision.InSync -> SyncPlanEntry(save, PlanAction.InSync, d, heads = heads)
+                SyncDecision.Push -> SyncPlanEntry(save, PlanAction.Push, d, heads = heads)
+                is SyncDecision.Pull -> SyncPlanEntry(save, PlanAction.Pull, d, d.headHash, heads)
+                is SyncDecision.ConflictResolved ->
+                    if (d.winner == "remote") {
+                        val hash = ffiFoldHeads(heads)?.hash
+                        if (hash == null) SyncPlanEntry(save, PlanAction.Error, d, heads = heads, error = "no remote head to pull")
+                        else SyncPlanEntry(save, PlanAction.Pull, d, hash, heads)
+                    } else {
+                        SyncPlanEntry(save, PlanAction.Push, d, heads = heads)
+                    }
+                is SyncDecision.ConflictNeedsInput -> SyncPlanEntry(save, PlanAction.Conflict, d, heads = heads)
             }
-            val (final, files) = when (decision) {
-                SyncDecision.Push -> {
-                    pushOne(save)
-                    decision to null
-                }
-                is SyncDecision.Pull, is SyncDecision.ConflictResolved ->
-                    pullOne(save, policy).let { it.decision to it.files }
-                else -> decision to null
-            }
-            results.add(SyncResult(save, final, files))
+            log.info("plan ${save.groupKey}: ${entry.action} (decision=$d, remoteOnly=${save.isRemoteOnly})")
+            entry
+        }.getOrElse { e ->
+            log.log(Level.WARNING, "plan failed for ${save.groupKey}", e)
+            SyncPlanEntry(save, PlanAction.Error, error = e.message ?: e.javaClass.simpleName)
         }
-        return results
+    }
+
+    suspend fun plan(saves: List<NormalizedSave>, policy: ConflictPolicy): SyncPlan {
+        val started = System.currentTimeMillis()
+        log.info("plan start: ${saves.size} saves, policy=$policy")
+        return SyncPlan(saves.map { planOne(it, policy) }).also {
+            log.info("plan done in ${System.currentTimeMillis() - started} ms: ${it.describe()}")
+        }
+    }
+
+    /**
+     * Acts on a decided plan, mirroring shell-common sync_engine: never aborts, every failure lands in the
+     * summary. [restore] writes pulled files (guarded restore); false = aborted (e.g. safety snapshot failed).
+     * [isCancelled] is checked before each item, so a cancel takes effect after the current save.
+     */
+    fun execute(
+        plan: SyncPlan,
+        restore: suspend (SyncPlanEntry, List<FileEntry>) -> Boolean,
+        isCancelled: () -> Boolean = { false },
+    ): Flow<SyncProgress> = flow {
+        val total = plan.entries.size
+        emit(SyncProgress.Started(total))
+        log.info("execute start: $total entries (${plan.describe()})")
+        var s = SyncSummary()
+        val errors = mutableListOf<String>()
+        fun fail(entry: SyncPlanEntry, why: String, cause: Throwable? = null) {
+            log.log(Level.WARNING, "execute ${entry.save.groupKey} failed: $why", cause)
+            errors += "${entry.save.displayName}: $why"
+            s = s.copy(errors = s.errors + 1)
+        }
+        for ((index, entry) in plan.entries.withIndex()) {
+            if (isCancelled()) {
+                log.info("execute cancelled before item ${index + 1}/$total")
+                s = s.copy(cancelled = true)
+                break
+            }
+            when (entry.action) {
+                PlanAction.InSync -> s = s.copy(inSync = s.inSync + 1)
+                PlanAction.Conflict -> s = s.copy(conflicts = s.conflicts + 1)
+                PlanAction.Error -> fail(entry, entry.error ?: "unknown error")
+                PlanAction.Push -> {
+                    emit(SyncProgress.Item(index, total, entry.save, SyncPhase.Pushing))
+                    runCatchingCancellable { pushOne(entry.save) }
+                        .onSuccess { s = s.copy(pushed = s.pushed + 1) }
+                        .onFailure { e -> fail(entry, e.message ?: "push failed", e) }
+                }
+                PlanAction.Pull -> {
+                    emit(SyncProgress.Item(index, total, entry.save, SyncPhase.Pulling))
+                    val hash = entry.pullHash
+                    val files = if (hash == null) {
+                        fail(entry, "no head hash"); null
+                    } else {
+                        runCatchingCancellable { keepRemoteFiles(entry.save, hash) }
+                            .onFailure { e -> fail(entry, e.message ?: "download failed", e) }
+                            .getOrNull()
+                    }
+                    if (files != null) {
+                        emit(SyncProgress.Item(index, total, entry.save, SyncPhase.Restoring))
+                        val restored = runCatchingCancellable { restore(entry, files) }
+                        if (restored.getOrDefault(false)) s = s.copy(pulled = s.pulled + 1)
+                        else fail(entry, "restore aborted", restored.exceptionOrNull())
+                    }
+                }
+            }
+        }
+        val summary = s.copy(errorMessages = errors.take(SyncSummary.MAX_ERROR_MESSAGES))
+        log.info("execute done: ${summary.headline()}")
+        emit(SyncProgress.Done(summary))
     }
 
     /**
@@ -156,7 +203,9 @@ class SyncRepository(
     ): Boolean {
         if (safetyBackup) {
             val current = currentLocalFiles().associate { it.path to it.content }
-            if (!takeSnapshot(save.groupKey, current)) {
+            if (current.isEmpty()) {
+                log.info("no local files for ${save.groupKey}; safety snapshot skipped")
+            } else if (!takeSnapshot(save.groupKey, current)) {
                 log.warning("safety snapshot failed for ${save.groupKey}; restore aborted")
                 return false
             }

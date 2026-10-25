@@ -1,8 +1,8 @@
 name: Release
 
-# Build the 3DS shell (.3dsx + installable .cia) and the Switch shell (.nro) from one vX.Y.Z tag
-# and publish them as one GitHub Release. Each in-app updater picks its asset by suffix
-# (.3dsx / .nro), so asset names must not change.
+# Build the 3DS shell (.3dsx + installable .cia), the Switch shell (.nro) and the Android shell
+# (waystone.apk) from one vX.Y.Z tag and publish them as one GitHub Release. Each in-app updater
+# picks its asset by suffix (.3dsx / .cia / .nro / .apk), so asset names must not change.
 
 on:
   push:
@@ -14,7 +14,27 @@ permissions:
   contents: write
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: Check VERSION matches the tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          V=$(tr -d '[:space:]' < VERSION)
+          echo "VERSION=$V ref=$GITHUB_REF_NAME type=$GITHUB_REF_TYPE"
+          [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::VERSION '$V' is not X.Y.Z"; exit 1; }
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "v$V" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME != v$V"; exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
   build-3ds:
+    needs: version
     runs-on: ubuntu-latest
     # Build inside the devkitARM container: it ships devkitARM/libctru/3ds-curl
     # preinstalled (same base as 3ds/Dockerfile, minus the corp-CA injection,
@@ -78,6 +98,7 @@ jobs:
           if-no-files-found: error
 
   build-switch:
+    needs: version
     runs-on: ubuntu-latest
     container: devkitpro/devkita64
     steps:
@@ -97,18 +118,6 @@ jobs:
       - name: Mark workspace safe for git
         shell: bash
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
-
-      - name: Check shared version matches the tag
-        shell: bash
-        run: |
-          set -euo pipefail
-          V3=$(sed -n 's/.*WS_APP_VERSION "\([^"]*\)".*/\1/p' 3ds/source/version.h)
-          VS=$(sed -n 's/.*WS_APP_VERSION "\([^"]*\)".*/\1/p' switch/source/version.h)
-          echo "3ds=$V3 switch=$VS ref=$GITHUB_REF_NAME"
-          [ "$V3" = "$VS" ] || { echo "::error::3ds/switch version.h differ ($V3 vs $VS)"; exit 1; }
-          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "v$V3" != "$GITHUB_REF_NAME" ]; then
-            echo "::error::tag $GITHUB_REF_NAME != v$V3"; exit 1
-          fi
 
       - name: Install Rust nightly + rust-src
         shell: bash
@@ -168,8 +177,82 @@ jobs:
           path: switch/waystone.nro
           if-no-files-found: error
 
+  build-android:
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: 27.1.12297006
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install SDK platform, build-tools, NDK
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "ndk;${NDK_VERSION}"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Decode release keystore
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          [ -n "${ANDROID_KEYSTORE_BASE64:-}" ] || { echo "::error::secret ANDROID_KEYSTORE_BASE64 is missing"; exit 1; }
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "WAYSTONE_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          echo "keystore decoded ($(wc -c < "$RUNNER_TEMP/release.jks") bytes)"
+
+      - name: Build signed release APK
+        shell: bash
+        working-directory: android
+        env:
+          WAYSTONE_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          WAYSTONE_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          WAYSTONE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon :engine:cargoNdkBuild :app:assembleRelease
+          mkdir -p "$GITHUB_WORKSPACE/dist-android"
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/dist-android/waystone.apk"
+
+      - name: Verify APK signature, version and native libs
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/34.0.0"
+          "$BT/apksigner" verify --verbose --print-certs dist-android/waystone.apk
+          "$BT/aapt2" dump badging dist-android/waystone.apk > "$RUNNER_TEMP/badging.txt"
+          grep -F "versionName='${{ needs.version.outputs.version }}'" "$RUNNER_TEMP/badging.txt"
+          unzip -l dist-android/waystone.apk | grep -E 'lib/(arm64-v8a|x86_64)/lib(waystone_mobile|jnidispatch)\.so'
+
+      - name: Remove keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: waystone-android
+          path: dist-android/waystone.apk
+          if-no-files-found: error
+
   publish:
-    needs: [build-3ds, build-switch]
+    needs: [build-3ds, build-switch, build-android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -186,6 +269,7 @@ jobs:
             dist/waystone-3ds/waystone-3ds-spike.3dsx
             dist/waystone-3ds/waystone-3ds-spike.cia
             dist/waystone-switch/waystone.nro
+            dist/waystone-android/waystone.apk
           fail_on_unmatched_files: true
           generate_release_notes: true
         env:

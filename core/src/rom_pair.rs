@@ -1,11 +1,10 @@
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::model::SystemId;
-use crate::rom_systems::{
-    GLOBAL_SAVE_DIR, base_name, classify_save, rom_system, rom_system_for_file,
-};
+use crate::rom_flavor::{EXTERNAL_SAVE_ROOT, SaveFlavor, classify_flavored};
+use crate::rom_systems::{GLOBAL_SAVE_DIR, base_name, rom_system, rom_system_for_file};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RomPairing {
@@ -13,6 +12,7 @@ pub struct RomPairing {
     pub rom_path: String,
     pub save_dir: String,
     pub save_paths: Vec<String>,
+    pub flavor: SaveFlavor,
 }
 
 fn parent_dir(path: &str) -> &str {
@@ -57,18 +57,78 @@ pub fn save_dir_candidates(system: SystemId, rom_path: &str) -> Vec<String> {
     ]
 }
 
+struct Candidate {
+    dir: String,
+    flavor: SaveFlavor,
+    external_sub: bool,
+}
+
+fn is_external(path: &str) -> bool {
+    path.strip_prefix(EXTERNAL_SAVE_ROOT)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+}
+
+/// The external flavor when it can hold saves for `system` (else the ROM is native-only).
+fn external_for(external: Option<SaveFlavor>, system: SystemId) -> Option<SaveFlavor> {
+    external.filter(|f| f.supports(system))
+}
+
+fn candidates(
+    system: SystemId,
+    rom: &str,
+    external: Option<SaveFlavor>,
+    subdirs: &BTreeSet<String>,
+) -> Vec<Candidate> {
+    let mut out = Vec::new();
+    if let Some(flavor) = external_for(external, system) {
+        out.push(Candidate {
+            dir: EXTERNAL_SAVE_ROOT.to_string(),
+            flavor,
+            external_sub: false,
+        });
+        out.extend(subdirs.iter().map(|d| Candidate {
+            dir: d.clone(),
+            flavor,
+            external_sub: true,
+        }));
+    }
+    out.extend(
+        save_dir_candidates(system, rom)
+            .into_iter()
+            .map(|dir| Candidate {
+                dir,
+                flavor: SaveFlavor::Native,
+                external_sub: false,
+            }),
+    );
+    out
+}
+
 pub fn pair_roms(paths: &[String]) -> Vec<RomPairing> {
+    pair_roms_external(paths, None)
+}
+
+/// [pair_roms] plus an optional external save tree listed under `@saves/` (depth 0 and 1).
+/// External candidates come first; a save found in more than one external sub-folder is ambiguous
+/// (none chosen). With no save, the restore target is the external root when the flavor supports
+/// the system.
+pub fn pair_roms_external(paths: &[String], external: Option<SaveFlavor>) -> Vec<RomPairing> {
     let mut by_dir: BTreeMap<String, Vec<&str>> = BTreeMap::new();
     let mut roms: Vec<(SystemId, &str)> = Vec::new();
+    let mut subdirs: BTreeSet<String> = BTreeSet::new();
     for raw in paths {
         let p = clean(raw);
         if p.is_empty() || is_hidden(p) {
             continue;
         }
-        by_dir
-            .entry(parent_dir(p).to_ascii_lowercase())
-            .or_default()
-            .push(p);
+        let dir = parent_dir(p);
+        by_dir.entry(dir.to_ascii_lowercase()).or_default().push(p);
+        if is_external(p) {
+            if dir.matches('/').count() == 1 {
+                subdirs.insert(dir.to_string());
+            }
+            continue;
+        }
         if !is_internal(p)
             && let Some(rs) = rom_system_for_file(p)
         {
@@ -78,19 +138,21 @@ pub fn pair_roms(paths: &[String]) -> Vec<RomPairing> {
     roms.sort_by(|a, b| a.1.cmp(b.1));
     roms.dedup_by(|a, b| a.1 == b.1);
 
-    let mut found: Vec<Vec<Vec<String>>> = Vec::with_capacity(roms.len());
+    let mut found: Vec<Vec<(Candidate, Vec<String>)>> = Vec::with_capacity(roms.len());
     let mut claims: BTreeMap<String, usize> = BTreeMap::new();
     for &(system, rom) in &roms {
         let rom_name = base_name(rom);
         let mut per_dir = Vec::new();
-        for dir in save_dir_candidates(system, rom) {
+        for c in candidates(system, rom, external, &subdirs) {
             let mut hits: Vec<String> = by_dir
-                .get(&dir.to_ascii_lowercase())
+                .get(&c.dir.to_ascii_lowercase())
                 .map(|files| {
                     files
                         .iter()
                         .filter(|f| {
-                            **f != rom && classify_save(system, rom_name, base_name(f)).is_some()
+                            **f != rom
+                                && classify_flavored(c.flavor, system, rom_name, base_name(f))
+                                    .is_some()
                         })
                         .map(|f| f.to_string())
                         .collect()
@@ -101,7 +163,7 @@ pub fn pair_roms(paths: &[String]) -> Vec<RomPairing> {
             for h in &hits {
                 *claims.entry(h.to_ascii_lowercase()).or_insert(0) += 1;
             }
-            per_dir.push(hits);
+            per_dir.push((c, hits));
         }
         found.push(per_dir);
     }
@@ -109,27 +171,47 @@ pub fn pair_roms(paths: &[String]) -> Vec<RomPairing> {
     roms.iter()
         .zip(found)
         .map(|(&(system, rom), per_dir)| {
-            let chosen = per_dir
+            let unique: Vec<(Candidate, Vec<String>)> = per_dir
                 .into_iter()
-                .map(|hits| {
-                    hits.into_iter()
+                .map(|(c, hits)| {
+                    let hits = hits
+                        .into_iter()
                         .filter(|h| claims.get(&h.to_ascii_lowercase()) == Some(&1))
-                        .collect::<Vec<_>>()
+                        .collect::<Vec<_>>();
+                    (c, hits)
                 })
-                .find(|hits| !hits.is_empty());
+                .collect();
+            let sub_hits = unique
+                .iter()
+                .filter(|(c, h)| c.external_sub && !h.is_empty())
+                .count();
+            let chosen = unique
+                .into_iter()
+                .find(|(c, h)| !h.is_empty() && !(c.external_sub && sub_hits > 1));
             match chosen {
-                Some(save_paths) => RomPairing {
+                Some((c, save_paths)) => RomPairing {
                     system,
                     rom_path: rom.to_string(),
                     save_dir: parent_dir(&save_paths[0]).to_string(),
                     save_paths,
+                    flavor: c.flavor,
                 },
-                None => RomPairing {
-                    system,
-                    rom_path: rom.to_string(),
-                    save_dir: save_dir_candidates(system, rom).swap_remove(0),
-                    save_paths: Vec::new(),
-                },
+                None => {
+                    let (save_dir, flavor) = match external_for(external, system) {
+                        Some(f) => (EXTERNAL_SAVE_ROOT.to_string(), f),
+                        None => (
+                            save_dir_candidates(system, rom).swap_remove(0),
+                            SaveFlavor::Native,
+                        ),
+                    };
+                    RomPairing {
+                        system,
+                        rom_path: rom.to_string(),
+                        save_dir,
+                        save_paths: Vec::new(),
+                        flavor,
+                    }
+                }
             }
         })
         .collect()
@@ -294,5 +376,94 @@ mod tests {
         {
             assert!(r[0].save_paths.is_empty());
         }
+    }
+
+    fn px(list: &[&str], flavor: Option<SaveFlavor>) -> Vec<RomPairing> {
+        pair_roms_external(
+            &list.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            flavor,
+        )
+    }
+
+    #[test]
+    fn retroarch_external_root_depth0() {
+        let r = px(
+            &["roms/gba/Zelda.gba", "@saves/Zelda.srm"],
+            Some(SaveFlavor::RetroArch),
+        );
+        assert_eq!(r[0].save_dir, "@saves");
+        assert_eq!(r[0].save_paths, vec!["@saves/Zelda.srm"]);
+        assert_eq!(r[0].flavor, SaveFlavor::RetroArch);
+    }
+
+    #[test]
+    fn retroarch_per_core_subfolder_depth1() {
+        let r = px(
+            &["Zelda.gba", "@saves/mGBA/Zelda.srm"],
+            Some(SaveFlavor::RetroArch),
+        );
+        assert_eq!(r[0].save_dir, "@saves/mGBA");
+        assert_eq!(r[0].save_paths, vec!["@saves/mGBA/Zelda.srm"]);
+    }
+
+    #[test]
+    fn save_in_two_core_subfolders_is_ambiguous() {
+        let r = px(
+            &[
+                "Zelda.gba",
+                "@saves/mGBA/Zelda.srm",
+                "@saves/gpSP/Zelda.srm",
+            ],
+            Some(SaveFlavor::RetroArch),
+        );
+        assert!(r[0].save_paths.is_empty());
+        assert_eq!(r[0].save_dir, "@saves");
+        assert_eq!(r[0].flavor, SaveFlavor::RetroArch);
+    }
+
+    #[test]
+    fn external_wins_over_native_and_native_is_fallback() {
+        let both = px(
+            &["roms/Zelda.gba", "roms/Zelda.sav", "@saves/Zelda.srm"],
+            Some(SaveFlavor::RetroArch),
+        );
+        assert_eq!(both[0].save_paths, vec!["@saves/Zelda.srm"]);
+        let native_only = px(
+            &["roms/Zelda.gba", "roms/Zelda.sav"],
+            Some(SaveFlavor::RetroArch),
+        );
+        assert_eq!(native_only[0].save_paths, vec!["roms/Zelda.sav"]);
+        assert_eq!(native_only[0].flavor, SaveFlavor::Native);
+    }
+
+    #[test]
+    fn empty_external_dir_is_the_restore_target_only_when_supported() {
+        let nds = px(&["roms/Mario.nds"], Some(SaveFlavor::Drastic));
+        assert_eq!(
+            (nds[0].save_dir.as_str(), nds[0].flavor),
+            ("@saves", SaveFlavor::Drastic)
+        );
+        let gba = px(&["roms/Zelda.gba"], Some(SaveFlavor::Drastic));
+        assert_eq!(
+            (gba[0].save_dir.as_str(), gba[0].flavor),
+            ("roms/saves", SaveFlavor::Native)
+        );
+    }
+
+    #[test]
+    fn external_paths_are_never_roms_and_pair_roms_is_unchanged() {
+        assert!(px(&["@saves/Fake.gba"], Some(SaveFlavor::RetroArch)).is_empty());
+        let r = p(&["roms/gba/Zelda.gba", "roms/gba/Zelda.sav"]);
+        assert_eq!(r[0].flavor, SaveFlavor::Native);
+        assert_eq!(r[0].save_paths, vec!["roms/gba/Zelda.sav"]);
+    }
+
+    #[test]
+    fn drastic_dsv_pairs_from_backup_dir() {
+        let r = px(
+            &["roms/nds/Mario.nds", "@saves/Mario.dsv"],
+            Some(SaveFlavor::Drastic),
+        );
+        assert_eq!(r[0].save_paths, vec!["@saves/Mario.dsv"]);
     }
 }

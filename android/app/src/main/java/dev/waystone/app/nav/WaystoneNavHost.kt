@@ -106,6 +106,7 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                 },
             )
             val state by vm.uiState.collectAsState()
+            val syncRun by vm.syncRun.collectAsState()
             DashboardScreen(
                 state = state,
                 onRefresh = vm::refresh,
@@ -118,6 +119,9 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                 onAddSource = vm::addSource,
                 onOpenConflicts = { navController.navigate(Routes.CONFLICTS) },
                 onOpenSettings = { navController.navigate(Routes.SETTINGS) },
+                syncRun = syncRun,
+                onCancelSync = vm::cancelSync,
+                onCloseSync = vm::dismissSync,
             )
         }
 
@@ -134,12 +138,10 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                     }
                 },
             )
-            val state by vm.uiState.collectAsState()
-            val conflicts by vm.conflicts.collectAsState()
+            val state by vm.state.collectAsState()
             NavEventEffect(vm.navigateTo.value, navController, vm::consumeNavigation)
             ConflictsScreen(
                 state = state,
-                conflicts = conflicts,
                 onKeepLocal = vm::keepLocal,
                 onKeepRemote = vm::keepRemote,
             )
@@ -197,18 +199,25 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                         ServiceLocator.settingsProvider,
                         ServiceLocator.sessionVaultStore,
                         session,
+                        dev.waystone.app.BuildConfig.VERSION_NAME,
                     )
                     }
                 },
             )
             val state by vm.uiState.collectAsState()
             NavEventEffect(vm.navigateTo.value, navController, vm::consumeNavigation)
+            val updatePhase by vm.updater.phase.collectAsState()
             SettingsScreen(
                 state = state,
                 onChangeServer = vm::changeServer,
                 onPolicyChange = vm::setConflictPolicy,
                 onSafetyBackupChange = vm::setSafetyBackup,
                 onLogout = vm::logout,
+                updatePhase = updatePhase,
+                onCheckUpdates = vm.updater::check,
+                onInstallUpdate = vm.updater::downloadAndInstall,
+                onCancelUpdate = vm.updater::cancel,
+                onOpenInstallPermission = vm::openInstallPermissionSettings,
             )
         }
     }

@@ -4,9 +4,10 @@ import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
+import android.provider.DocumentsContract
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -16,17 +17,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,9 +33,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import dev.waystone.app.ui.theme.LocalWaystoneSpacing
 import dev.waystone.app.ui.theme.LocalWaystoneTypography
+import dev.waystone.app.vm.AddSourceFlow
+import dev.waystone.app.vm.AddSourceStep
 import dev.waystone.app.vm.DashboardReady
 import dev.waystone.app.vm.SaveRow
+import dev.waystone.app.vm.SyncRunState
 import dev.waystone.app.vm.UiState
+import dev.waystone.data.config.EmulatorPreset
 import dev.waystone.data.config.SourceFolder
 
 private const val TAG = "WS:DASHBOARD"
@@ -53,29 +54,63 @@ fun DashboardScreen(
     onPull: (String) -> Unit,
     onOpenHistory: (String) -> Unit,
     onOpenSnapshots: (String) -> Unit,
-    onAddSource: (uri: String, adapter: String, system: String) -> Unit,
+    onAddSource: (SourceFolder) -> Unit,
     onOpenConflicts: () -> Unit,
     onOpenSettings: () -> Unit,
+    syncRun: SyncRunState?,
+    onCancelSync: () -> Unit,
+    onCloseSync: () -> Unit,
 ) {
     val context = LocalContext.current
-    var pendingUri by remember { mutableStateOf<Uri?>(null) }
+    var step by remember { mutableStateOf<AddSourceStep>(AddSourceStep.Idle) }
 
-    val treePicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+    fun advance(next: AddSourceStep) {
+        Log.i(TAG, "add source: $next")
+        step = next
+    }
+
+    fun persisted(result: ActivityResult): String? {
         val uri = result.data?.data
-        if (result.resultCode == Activity.RESULT_OK && uri != null) {
-            runCatching {
-                context.contentResolver.takePersistableUriPermission(
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-                )
-            }.onSuccess {
-                Log.i(TAG, "persisted URI permission for $uri")
-                pendingUri = uri
-            }.onFailure {
-                Log.e(TAG, "takePersistableUriPermission failed for $uri", it)
-            }
-        } else {
+        if (result.resultCode != Activity.RESULT_OK || uri == null) {
             Log.i(TAG, "source picker cancelled")
+            return null
+        }
+        return runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
+            )
+        }.onSuccess { Log.i(TAG, "persisted URI permission for $uri") }
+            .onFailure { Log.e(TAG, "takePersistableUriPermission failed for $uri", it) }
+            .map { uri.toString() }
+            .getOrNull()
+    }
+
+    val romsPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        (step as? AddSourceStep.PickRoms)?.let { advance(AddSourceFlow.onRomsPicked(it, persisted(result))) }
+    }
+    val savesPicker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        (step as? AddSourceStep.PickSaves)?.let { advance(AddSourceFlow.onSavesPicked(it, persisted(result))) }
+    }
+
+    LaunchedEffect(step) {
+        when (val s = step) {
+            is AddSourceStep.PickRoms -> romsPicker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE))
+            is AddSourceStep.PickSaves -> savesPicker.launch(
+                Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                    s.preset.savesInitialDocId?.let {
+                        putExtra(
+                            DocumentsContract.EXTRA_INITIAL_URI,
+                            DocumentsContract.buildDocumentUri("com.android.externalstorage.documents", it),
+                        )
+                    }
+                },
+            )
+            is AddSourceStep.Done -> {
+                onAddSource(s.folder)
+                advance(AddSourceStep.Idle)
+            }
+            else -> Unit
         }
     }
 
@@ -84,6 +119,7 @@ fun DashboardScreen(
         is UiState.Error -> ErrorView(state.message)
         is UiState.Ready -> {
             val ready = state.data
+            val idle = syncRun?.running != true
             Column(modifier = Modifier.fillMaxSize().padding(LocalWaystoneSpacing.current.Md)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -102,16 +138,15 @@ fun DashboardScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(LocalWaystoneSpacing.current.Sm),
                 ) {
-                    Button(onClick = onSyncAll) { Text("Sync all") }
-                    OutlinedButton(onClick = {
-                        treePicker.launch(Intent(Intent.ACTION_OPEN_DOCUMENT_TREE))
-                    }) { Text("Add source") }
+                    Button(onClick = onSyncAll, enabled = idle) { Text("Sync all") }
+                    OutlinedButton(onClick = { advance(AddSourceStep.ChoosePreset) }) { Text("Add source") }
                 }
 
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(LocalWaystoneSpacing.current.Md)) {
-                    items(ready.sources, key = { it.folder.uri }) { card ->
+                    items(ready.sources, key = { it.folder.key }) { card ->
                         SourceCardView(
                             card = card,
+                            syncEnabled = idle,
                             onSyncSource = { onSyncSource(card.folder) },
                             onPush = onPush,
                             onPull = onPull,
@@ -122,64 +157,23 @@ fun DashboardScreen(
                 }
             }
 
-            pendingUri?.let { uri ->
-                AdapterSystemDialog(
-                    onConfirm = { adapter, system ->
-                        onAddSource(uri.toString(), adapter, system)
-                        pendingUri = null
-                    },
-                    onDismiss = { pendingUri = null },
+            syncRun?.let { SyncProgressDialog(it, onCancelSync, onCloseSync) }
+
+            when (val current = step) {
+                is AddSourceStep.ChoosePreset -> PresetChooserDialog(
+                    onChoose = { advance(AddSourceFlow.onPresetChosen(it)) },
+                    onDismiss = { advance(AddSourceStep.Idle) },
                 )
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AdapterSystemDialog(onConfirm: (adapter: String, system: String) -> Unit, onDismiss: () -> Unit) {
-    val adapters = listOf("jksv", "mgba", "checkpoint", "rom_keyed")
-    val systems = listOf("switch", "3ds", "nds", "gba", "gbc", "gb")
-    var adapter by remember { mutableStateOf(adapters.first()) }
-    var system by remember { mutableStateOf(systems.first()) }
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Source type") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(LocalWaystoneSpacing.current.Md)) {
-                PickerDropdown("Adapter", adapters, adapter) { adapter = it }
-                if (adapter != "rom_keyed") {
-                    PickerDropdown("System", systems, system) { system = it }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(adapter, if (adapter == "rom_keyed") "" else system) }) { Text("Add") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun PickerDropdown(label: String, options: List<String>, selected: String, onSelect: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-        androidx.compose.material3.OutlinedTextField(
-            value = selected,
-            onValueChange = {},
-            readOnly = true,
-            label = { Text(label) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-            modifier = Modifier.menuAnchor(),
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            options.forEach { option ->
-                DropdownMenuItem(text = { Text(option) }, onClick = {
-                    onSelect(option)
-                    expanded = false
-                })
+                is AddSourceStep.ConfirmManual -> AdapterSystemDialog(
+                    onConfirm = { adapter, system -> advance(AddSourceFlow.onManualConfirmed(current, adapter, system)) },
+                    onDismiss = { advance(AddSourceStep.Idle) },
+                )
+                is AddSourceStep.ExplainSaves -> ExplainSavesDialog(
+                    preset = current.preset,
+                    onPick = { advance(AddSourceFlow.onExplained(current, pickSaves = true)) },
+                    onSkip = { advance(AddSourceFlow.onExplained(current, pickSaves = false)) },
+                )
+                else -> Unit
             }
         }
     }
@@ -188,6 +182,7 @@ private fun PickerDropdown(label: String, options: List<String>, selected: Strin
 @Composable
 private fun SourceCardView(
     card: dev.waystone.app.vm.SourceCard,
+    syncEnabled: Boolean,
     onSyncSource: () -> Unit,
     onPush: (String) -> Unit,
     onPull: (String) -> Unit,
@@ -201,13 +196,18 @@ private fun SourceCardView(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("${card.folder.adapter} / ${card.folder.system.ifBlank { "auto" }}", style = LocalWaystoneTypography.current.lg)
+                    Text(
+                        EmulatorPreset.of(card.folder.preset)?.label
+                            ?: "${card.folder.adapter} / ${card.folder.system.ifBlank { "auto" }}",
+                        style = LocalWaystoneTypography.current.lg,
+                    )
                     Text(card.folder.uri, style = LocalWaystoneTypography.current.xs)
+                    card.folder.saveUri?.let { Text("Saves: $it", style = LocalWaystoneTypography.current.xs) }
                 }
                 if (card.error == null) {
                     StatusBadge(card.worstStatus)
                 }
-                TextButton(onClick = onSyncSource) { Text("Sync") }
+                TextButton(onClick = onSyncSource, enabled = syncEnabled) { Text("Sync") }
             }
             card.error?.let { ErrorBanner(it) }
             card.saves.forEach { row -> SaveRowView(row, onPush, onPull, onOpenHistory, onOpenSnapshots) }
@@ -229,12 +229,15 @@ private fun SaveRowView(
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(modifier = Modifier.weight(1f)) {
             Text(row.displayName, style = LocalWaystoneTypography.current.base)
-            Text(row.mtime, style = LocalWaystoneTypography.current.xs)
+            if (row.remoteOnly) Text("Remote only — tap Pull to restore", style = LocalWaystoneTypography.current.xs)
+            else Text(row.mtime, style = LocalWaystoneTypography.current.xs)
         }
         StatusBadge(row.status)
-        TextButton(onClick = { onPush(row.groupKey) }) { Text("Push") }
+        if (!row.remoteOnly) TextButton(onClick = { onPush(row.groupKey) }) { Text("Push") }
         TextButton(onClick = { onPull(row.groupKey) }) { Text("Pull") }
-        TextButton(onClick = { onOpenHistory(row.groupKey) }) { Text("History") }
-        TextButton(onClick = { onOpenSnapshots(row.groupKey) }) { Text("Snapshots") }
+        if (!row.remoteOnly) {
+            TextButton(onClick = { onOpenHistory(row.groupKey) }) { Text("History") }
+            TextButton(onClick = { onOpenSnapshots(row.groupKey) }) { Text("Snapshots") }
+        }
     }
 }

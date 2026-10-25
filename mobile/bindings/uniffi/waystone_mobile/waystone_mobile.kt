@@ -755,6 +755,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_waystone_mobile_checksum_func_rom_keyed_normalize(
     ): Int
+    external fun uniffi_waystone_mobile_checksum_func_rom_keyed_slots(
+    ): Int
     external fun uniffi_waystone_mobile_checksum_func_rom_keyed_to_native(
     ): Int
     external fun uniffi_waystone_mobile_checksum_func_rom_needs_full_hash(
@@ -888,13 +890,15 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_rom_identity(`system`: RustBuffer.ByValue,`header`: RustBuffer.ByValue,`fullCrc32`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_waystone_mobile_fn_func_rom_keyed_normalize(`system`: RustBuffer.ByValue,`romId`: RustBuffer.ByValue,`displayName`: RustBuffer.ByValue,`romFileName`: RustBuffer.ByValue,`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_waystone_mobile_fn_func_rom_keyed_normalize(`system`: RustBuffer.ByValue,`romId`: RustBuffer.ByValue,`displayName`: RustBuffer.ByValue,`romFileName`: RustBuffer.ByValue,`flavor`: RustBuffer.ByValue,`raw`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
-    external fun uniffi_waystone_mobile_fn_func_rom_keyed_to_native(`save`: RustBuffer.ByValue,`romFileName`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_waystone_mobile_fn_func_rom_keyed_slots(`system`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_rom_keyed_to_native(`save`: RustBuffer.ByValue,`romFileName`: RustBuffer.ByValue,`flavor`: RustBuffer.ByValue,`existing`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_rom_needs_full_hash(`system`: RustBuffer.ByValue,`header`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
-    external fun uniffi_waystone_mobile_fn_func_rom_pair(`paths`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    external fun uniffi_waystone_mobile_fn_func_rom_pair(`paths`: RustBuffer.ByValue,`externalFlavor`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_vault_from_mdk(`mdk`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
@@ -1070,16 +1074,19 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_waystone_mobile_checksum_func_rom_identity() != 9432) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_waystone_mobile_checksum_func_rom_keyed_normalize() != 16375) {
+    if (lib.uniffi_waystone_mobile_checksum_func_rom_keyed_normalize() != 64618) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_waystone_mobile_checksum_func_rom_keyed_to_native() != 11680) {
+    if (lib.uniffi_waystone_mobile_checksum_func_rom_keyed_slots() != 37804) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_rom_keyed_to_native() != 27251) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_func_rom_needs_full_hash() != 5366) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_waystone_mobile_checksum_func_rom_pair() != 29346) {
+    if (lib.uniffi_waystone_mobile_checksum_func_rom_pair() != 21205) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_func_vault_from_mdk() != 58647) {
@@ -2644,6 +2651,8 @@ data class RomPairing (
     var `saveDir`: kotlin.String
     , 
     var `savePaths`: List<kotlin.String>
+    , 
+    var `flavor`: kotlin.String
     
 ){
     
@@ -2664,6 +2673,7 @@ public object FfiConverterTypeRomPairing: FfiConverterRustBuffer<RomPairing> {
             FfiConverterString.read(buf),
             FfiConverterString.read(buf),
             FfiConverterSequenceString.read(buf),
+            FfiConverterString.read(buf),
         )
     }
 
@@ -2671,7 +2681,8 @@ public object FfiConverterTypeRomPairing: FfiConverterRustBuffer<RomPairing> {
             FfiConverterString.allocationSize(value.`system`) +
             FfiConverterString.allocationSize(value.`romPath`) +
             FfiConverterString.allocationSize(value.`saveDir`) +
-            FfiConverterSequenceString.allocationSize(value.`savePaths`)
+            FfiConverterSequenceString.allocationSize(value.`savePaths`) +
+            FfiConverterString.allocationSize(value.`flavor`)
     )
 
     override fun write(value: RomPairing, buf: ByteBuffer) {
@@ -2679,6 +2690,7 @@ public object FfiConverterTypeRomPairing: FfiConverterRustBuffer<RomPairing> {
             FfiConverterString.write(value.`romPath`, buf)
             FfiConverterString.write(value.`saveDir`, buf)
             FfiConverterSequenceString.write(value.`savePaths`, buf)
+            FfiConverterString.write(value.`flavor`, buf)
     }
 }
 
@@ -3034,6 +3046,14 @@ sealed class WaystoneException: kotlin.Exception() {
             get() = "system=${ `system` }"
     }
     
+    class InvalidFlavor(
+        
+        val `flavor`: kotlin.String
+        ) : WaystoneException() {
+        override val message
+            get() = "flavor=${ `flavor` }"
+    }
+    
 
     
 
@@ -3069,6 +3089,9 @@ public object FfiConverterTypeWaystoneError : FfiConverterRustBuffer<WaystoneExc
                 FfiConverterString.read(buf),
                 )
             6 -> WaystoneException.InvalidSystem(
+                FfiConverterString.read(buf),
+                )
+            7 -> WaystoneException.InvalidFlavor(
                 FfiConverterString.read(buf),
                 )
             else -> throw RuntimeException("invalid error enum value, something is very wrong!!")
@@ -3107,6 +3130,11 @@ public object FfiConverterTypeWaystoneError : FfiConverterRustBuffer<WaystoneExc
                 4UL
                 + FfiConverterString.allocationSize(value.`system`)
             )
+            is WaystoneException.InvalidFlavor -> (
+                // Add the size for the Int that specifies the variant plus the size needed for all fields
+                4UL
+                + FfiConverterString.allocationSize(value.`flavor`)
+            )
         }
     }
 
@@ -3140,6 +3168,11 @@ public object FfiConverterTypeWaystoneError : FfiConverterRustBuffer<WaystoneExc
             is WaystoneException.InvalidSystem -> {
                 buf.putInt(6)
                 FfiConverterString.write(value.`system`, buf)
+                Unit
+            }
+            is WaystoneException.InvalidFlavor -> {
+                buf.putInt(7)
+                FfiConverterString.write(value.`flavor`, buf)
                 Unit
             }
         }.let { /* this makes the `when` an expression, which ensures it is exhaustive */ }
@@ -3730,7 +3763,7 @@ public object FfiConverterSequenceTypeRomPairing: FfiConverterRustBuffer<List<Ro
     }
     
 
-    @Throws(WaystoneException::class) fun `romKeyedNormalize`(`system`: kotlin.String, `romId`: kotlin.String, `displayName`: kotlin.String, `romFileName`: kotlin.String, `raw`: RawTree): List<NormalizedSave> {
+    @Throws(WaystoneException::class) fun `romKeyedNormalize`(`system`: kotlin.String, `romId`: kotlin.String, `displayName`: kotlin.String, `romFileName`: kotlin.String, `flavor`: kotlin.String, `raw`: RawTree): List<NormalizedSave> {
             return FfiConverterSequenceTypeNormalizedSave.lift(
     uniffiRustCallWithError(WaystoneException) { _status ->
     UniffiLib.uniffi_waystone_mobile_fn_func_rom_keyed_normalize(
@@ -3740,20 +3773,35 @@ public object FfiConverterSequenceTypeRomPairing: FfiConverterRustBuffer<List<Ro
         FfiConverterString.lower(`romId`),
         FfiConverterString.lower(`displayName`),
         FfiConverterString.lower(`romFileName`),
+        FfiConverterString.lower(`flavor`),
         FfiConverterTypeRawTree.lower(`raw`),_status)
 }
     )
     }
     
 
-    @Throws(WaystoneException::class) fun `romKeyedToNative`(`save`: NormalizedSave, `romFileName`: kotlin.String): RawTree {
+    @Throws(WaystoneException::class) fun `romKeyedSlots`(`system`: kotlin.String): List<kotlin.String> {
+            return FfiConverterSequenceString.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_rom_keyed_slots(
+    
+        
+        FfiConverterString.lower(`system`),_status)
+}
+    )
+    }
+    
+
+    @Throws(WaystoneException::class) fun `romKeyedToNative`(`save`: NormalizedSave, `romFileName`: kotlin.String, `flavor`: kotlin.String, `existing`: List<RawFileEntry>): RawTree {
             return FfiConverterTypeRawTree.lift(
     uniffiRustCallWithError(WaystoneException) { _status ->
     UniffiLib.uniffi_waystone_mobile_fn_func_rom_keyed_to_native(
     
         
         FfiConverterTypeNormalizedSave.lower(`save`),
-        FfiConverterString.lower(`romFileName`),_status)
+        FfiConverterString.lower(`romFileName`),
+        FfiConverterString.lower(`flavor`),
+        FfiConverterSequenceTypeRawFileEntry.lower(`existing`),_status)
 }
     )
     }
@@ -3771,13 +3819,15 @@ public object FfiConverterSequenceTypeRomPairing: FfiConverterRustBuffer<List<Ro
     )
     }
     
- fun `romPair`(`paths`: List<kotlin.String>): List<RomPairing> {
+
+    @Throws(WaystoneException::class) fun `romPair`(`paths`: List<kotlin.String>, `externalFlavor`: kotlin.String?): List<RomPairing> {
             return FfiConverterSequenceTypeRomPairing.lift(
-    uniffiRustCall() { _status ->
+    uniffiRustCallWithError(WaystoneException) { _status ->
     UniffiLib.uniffi_waystone_mobile_fn_func_rom_pair(
     
         
-        FfiConverterSequenceString.lower(`paths`),_status)
+        FfiConverterSequenceString.lower(`paths`),
+        FfiConverterOptionalString.lower(`externalFlavor`),_status)
 }
     )
     }

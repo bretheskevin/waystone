@@ -8,7 +8,14 @@ import dev.waystone.data.config.SettingsStore
 import dev.waystone.data.dav.OkHttpWebDav
 import dev.waystone.data.fs.SafRomFileSource
 import dev.waystone.data.fs.SafTree
+import dev.waystone.data.config.ROM_KEYED_ADAPTER
+import dev.waystone.data.config.externalFlavor
+import dev.waystone.data.roms.CompositeRomFileSource
 import dev.waystone.data.roms.LocalRom
+import dev.waystone.data.roms.RemoteOnlyProbe
+import dev.waystone.data.roms.RestorePlacement
+import dev.waystone.data.roms.RestoreTree
+import dev.waystone.data.roms.RomFileSource
 import dev.waystone.data.roms.RomScanner
 import dev.waystone.data.session.KeystoreVaultStore
 import dev.waystone.data.session.SessionStore
@@ -99,11 +106,11 @@ private class SessionVaultStoreBinding(private val store: SessionStore) : Sessio
 
 private class SaveSourceProviderBinding(private val context: Context) : SaveSourceProvider {
 
-    override suspend fun scanSources(settings: Settings): List<SourceScan> = withContext(Dispatchers.IO) {
+    override suspend fun scanSources(settings: Settings, probe: RemoteOnlyProbe?): List<SourceScan> = withContext(Dispatchers.IO) {
         settings.sources.map { folder ->
             runCatching {
                 val saves = if (isRomKeyed(folder.adapter)) {
-                    scanRoms(folder)
+                    scanRoms(folder, probe)
                 } else {
                     normalize(folder.adapter, folder.system, SafTree(context, Uri.parse(folder.uri)).toRawTree())
                 }
@@ -125,16 +132,28 @@ private class SaveSourceProviderBinding(private val context: Context) : SaveSour
     override fun writeFiles(folder: SourceFolder, save: NormalizedSave, files: List<FileEntry>): Int {
         if (!isRomKeyed(folder.adapter)) return SafTree(context, Uri.parse(folder.uri)).writeFiles(files)
         val rom = localRom(folder, save)
-        val native = romKeyedToNative(save.copy(files = files), rom.romFileName).files
+        val scanner = RomScanner(
+            romSources[folder.key] ?: romSourceFor(folder).also { it.listPaths(RomScanner.MAX_DEPTH) },
+            folder.externalFlavor(),
+        )
+        val existing = scanner.readSaveFiles(rom)
+        val native = romKeyedToNative(save.copy(files = files), rom.romFileName, rom.flavor, existing).files
         if (native.isEmpty() && files.isNotEmpty()) {
             error("[roms] blob for ${save.groupKey} has no file for slot ${save.slot}")
         }
-        val placed = native.map { f ->
-            FileEntry(if (rom.saveDir.isEmpty()) f.path else "${rom.saveDir}/${f.path}", f.content)
+        val placement = RestorePlacement.of(rom.saveDir, native.map { FileEntry(it.path, it.content) })
+        val treeUri = when (placement.tree) {
+            RestoreTree.Roms -> folder.uri
+            RestoreTree.Saves -> folder.saveUri
+                ?: error("[roms] ${save.groupKey} targets the save tree but the source has none")
         }
-        Log.i(TAG, "[roms] restoring ${save.groupKey} -> ${rom.saveDir} (${placed.size} file(s))")
+        Log.i(
+            TAG,
+            "[roms] restoring ${save.groupKey} -> ${placement.tree} ${rom.saveDir} " +
+                "(${placement.files.size} file(s), flavor=${rom.flavor}, keepFooterFrom=${existing.size} local file(s))",
+        )
         return try {
-            SafTree(context, Uri.parse(folder.uri)).writeFiles(placed).also {
+            SafTree(context, Uri.parse(treeUri)).writeFiles(placement.files).also {
                 Log.i(TAG, "[roms] restore done: ${save.groupKey} wrote $it file(s)")
             }
         } catch (e: Exception) {
@@ -143,18 +162,30 @@ private class SaveSourceProviderBinding(private val context: Context) : SaveSour
         }
     }
 
+    private val romSources = ConcurrentHashMap<String, RomFileSource>()
+
+    private fun romSourceFor(folder: SourceFolder): RomFileSource {
+        val roms = SafRomFileSource(context, Uri.parse(folder.uri))
+        val source = folder.saveUri?.let { CompositeRomFileSource(roms, SafRomFileSource(context, Uri.parse(it))) } ?: roms
+        romSources[folder.key] = source
+        return source
+    }
+
     private val romIndex = ConcurrentHashMap<String, LocalRom>()
 
-    private fun isRomKeyed(adapter: String) = adapter == "rom_keyed" || adapter == "twilight"
+    private fun isRomKeyed(adapter: String) = adapter == ROM_KEYED_ADAPTER || adapter == "twilight"
 
-    private fun romKey(folder: SourceFolder, system: String, romId: String) = "${folder.uri}|$system/$romId"
+    private fun romKey(folder: SourceFolder, system: String, romId: String) = "${folder.key}|$system/$romId"
 
-    private fun scanRoms(folder: SourceFolder): List<NormalizedSave> {
+    private fun scanRoms(folder: SourceFolder, probe: RemoteOnlyProbe? = null): List<NormalizedSave> {
         Log.i(TAG, "[roms] scanning ${folder.uri}")
-        val scanner = RomScanner(SafRomFileSource(context, Uri.parse(folder.uri)))
+        val scanner = RomScanner(romSourceFor(folder), folder.externalFlavor())
         val roms = scanner.scan()
         roms.forEach { romIndex[romKey(folder, it.system, it.romId)] = it }
-        return scanner.loadSaves(roms).also { Log.i(TAG, "[roms] ${folder.uri}: ${roms.size} ROM(s), ${it.size} save(s)") }
+        val local = scanner.loadSaves(roms)
+        val remote = probe?.find(roms, local.map { it.groupKey }.toSet()).orEmpty()
+        Log.i(TAG, "[roms] ${folder.uri}: ${roms.size} ROM(s), ${local.size} local save(s), ${remote.size} remote-only")
+        return local + remote
     }
 
     private fun localRom(folder: SourceFolder, save: NormalizedSave): LocalRom {

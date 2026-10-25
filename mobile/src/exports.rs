@@ -12,15 +12,16 @@ use waystone_core::adapters::checkpoint::CheckpointAdapter;
 use waystone_core::adapters::jksv::JksvAdapter;
 use waystone_core::adapters::mgba::MgbaAdapter;
 use waystone_core::adapters::rom_keyed::{
-    RomKeyedAdapter, rom_keyed_to_native as core_rom_keyed_to_native,
+    RomKeyedAdapter, rom_keyed_to_native_flavored as core_rom_keyed_to_native_flavored,
 };
 use waystone_core::crc32::crc32_update as core_crc32_update;
 use waystone_core::model as core_model;
+use waystone_core::rom_flavor::SaveFlavor;
 use waystone_core::rom_id::{
     display_name as core_display_name, needs_full_hash, rom_identity as core_rom_identity,
 };
-use waystone_core::rom_pair::pair_roms;
-use waystone_core::rom_systems::rom_system;
+use waystone_core::rom_pair::pair_roms_external;
+use waystone_core::rom_systems::{rom_system, slot_names};
 
 fn to_core_save(save: &NormalizedSave) -> Result<core_model::NormalizedSave, WaystoneError> {
     Ok(core_model::NormalizedSave {
@@ -401,16 +402,32 @@ pub fn rom_display_name(
 }
 
 #[uniffi::export]
-pub fn rom_pair(paths: Vec<String>) -> Vec<RomPairing> {
-    pair_roms(&paths)
+pub fn rom_keyed_slots(system: String) -> Result<Vec<String>, WaystoneError> {
+    Ok(slot_names(parse_rom_system(&system)?))
+}
+
+fn parse_flavor(s: &str) -> Result<SaveFlavor, WaystoneError> {
+    SaveFlavor::parse(s).ok_or_else(|| WaystoneError::InvalidFlavor {
+        flavor: s.to_string(),
+    })
+}
+
+#[uniffi::export]
+pub fn rom_pair(
+    paths: Vec<String>,
+    external_flavor: Option<String>,
+) -> Result<Vec<RomPairing>, WaystoneError> {
+    let external = external_flavor.as_deref().map(parse_flavor).transpose()?;
+    Ok(pair_roms_external(&paths, external)
         .into_iter()
         .map(|p| RomPairing {
             system: p.system.as_str().to_string(),
             rom_path: p.rom_path,
             save_dir: p.save_dir,
             save_paths: p.save_paths,
+            flavor: p.flavor.as_str().to_string(),
         })
-        .collect()
+        .collect())
 }
 
 #[uniffi::export]
@@ -419,6 +436,7 @@ pub fn rom_keyed_normalize(
     rom_id: String,
     display_name: String,
     rom_file_name: String,
+    flavor: String,
     raw: RawTree,
 ) -> Result<Vec<NormalizedSave>, WaystoneError> {
     let adapter = RomKeyedAdapter::new(
@@ -426,7 +444,8 @@ pub fn rom_keyed_normalize(
         rom_id,
         display_name,
         rom_file_name,
-    );
+    )
+    .with_flavor(parse_flavor(&flavor)?);
     Ok(adapter
         .normalize(&to_core_raw(raw))
         .iter()
@@ -438,11 +457,23 @@ pub fn rom_keyed_normalize(
 pub fn rom_keyed_to_native(
     save: NormalizedSave,
     rom_file_name: String,
+    flavor: String,
+    existing: Vec<RawFileEntry>,
 ) -> Result<RawTree, WaystoneError> {
+    let flavor = parse_flavor(&flavor)?;
+    let existing: Vec<(String, Vec<u8>)> =
+        existing.into_iter().map(|f| (f.path, f.content)).collect();
     to_native_via(save, |s| core_model::RawTree {
-        files: core_rom_keyed_to_native(s.id.system, &s.id.slot, &rom_file_name, &s.files)
-            .into_iter()
-            .map(|(path, content)| core_model::RawFile { path, content })
-            .collect(),
+        files: core_rom_keyed_to_native_flavored(
+            s.id.system,
+            &s.id.slot,
+            &rom_file_name,
+            flavor,
+            &s.files,
+            &existing,
+        )
+        .into_iter()
+        .map(|(path, content)| core_model::RawFile { path, content })
+        .collect(),
     })
 }

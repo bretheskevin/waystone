@@ -81,4 +81,5 @@ pub struct RomPairing {
     pub rom_path: String,
     pub save_dir: String,
     pub save_paths: Vec<String>,
+    pub flavor: String,
 }

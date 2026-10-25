@@ -144,7 +144,7 @@ pub fn rom_system_for_file(file_name: &str) -> Option<&'static RomSystem> {
         .find(|r| r.rom_exts.iter().any(|e| e.eq_ignore_ascii_case(ext)))
 }
 
-fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+pub(crate) fn strip_prefix_ci<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
     if s.len() < prefix.len() || !s.is_char_boundary(prefix.len()) {
         return None;
     }

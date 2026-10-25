@@ -6,6 +6,7 @@ pub enum WaystoneError {
     Json { msg: String },
     BlobNotFound { path: String },
     InvalidSystem { system: String },
+    InvalidFlavor { flavor: String },
 }
 
 impl std::fmt::Display for WaystoneError {
@@ -17,6 +18,7 @@ impl std::fmt::Display for WaystoneError {
             Self::Json { msg } => write!(f, "json: {msg}"),
             Self::BlobNotFound { path } => write!(f, "blob not found: {path}"),
             Self::InvalidSystem { system } => write!(f, "unknown system: {system}"),
+            Self::InvalidFlavor { flavor } => write!(f, "unknown save flavor: {flavor}"),
         }
     }
 }
