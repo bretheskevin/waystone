@@ -9,6 +9,8 @@ endif
 TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/devkitARM/3ds_rules
 
+include $(TOPDIR)/../version.mk
+
 #---------------------------------------------------------------------------------
 # App metadata (feeds smdhtool for .3dsx SMDH + makerom/bannertool for .cia)
 #---------------------------------------------------------------------------------
@@ -49,7 +51,7 @@ CFLAGS	:=	-g -Wall -O2 -mword-relocations \
 			-ffunction-sections -fdata-sections \
 			$(ARCH) $(DEFINES)
 
-CFLAGS	+=	$(INCLUDE) -D__3DS__
+CFLAGS	+=	$(INCLUDE) -D__3DS__ $(WS_VERSION_DEFINE)
 
 CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions -std=c++11
 
@@ -119,9 +121,9 @@ clean:
 # CIA packaging (post-link). Requires bannertool + makerom on PATH.
 # Usage: make -C 3ds cia   —  Title ID 0x000400000FF3FF00 (UniqueId 0xFF3FF) — NEVER change.
 #---------------------------------------------------------------------------------
-CIA_VERSION_MAJOR := $(shell sed -n 's/.*WS_APP_VERSION "\([0-9]*\)\..*/\1/p' $(TOPDIR)/source/version.h)
-CIA_VERSION_MINOR := $(shell sed -n 's/.*WS_APP_VERSION "[0-9]*\.\([0-9]*\)\..*/\1/p' $(TOPDIR)/source/version.h)
-CIA_VERSION_MICRO := $(shell sed -n 's/.*WS_APP_VERSION "[0-9]*\.[0-9]*\.\([0-9]*\)".*/\1/p' $(TOPDIR)/source/version.h)
+CIA_VERSION_MAJOR := $(word 1,$(subst ., ,$(WS_VERSION)))
+CIA_VERSION_MINOR := $(word 2,$(subst ., ,$(WS_VERSION)))
+CIA_VERSION_MICRO := $(word 3,$(subst ., ,$(WS_VERSION)))
 
 cia: all
 	@echo "[cia] building banner ..."

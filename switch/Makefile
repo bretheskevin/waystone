@@ -9,10 +9,12 @@ endif
 TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
 
+include $(TOPDIR)/../version.mk
+
 #---------------------------------------------------------------------------------
 APP_TITLE	:=	Waystone
 APP_AUTHOR	:=	kandid
-APP_VERSION	:=	$(shell sed -n 's/.*WS_APP_VERSION "\([^"]*\)".*/\1/p' $(TOPDIR)/source/version.h)
+APP_VERSION	:=	$(WS_VERSION)
 
 TARGET		:=	waystone
 BUILD		:=	build
@@ -65,7 +67,7 @@ ARCH	:=	-march=armv8-a+crc+crypto -mtune=cortex-a57 -mtp=soft -fPIE
 CFLAGS	:=	-g -Wall -O2 -ffunction-sections \
 			$(ARCH) $(DEFINES)
 
-CFLAGS	+=	$(INCLUDE) -D__SWITCH__
+CFLAGS	+=	$(INCLUDE) -D__SWITCH__ $(WS_VERSION_DEFINE)
 
 ifeq ($(CONSOLE),1)
 # Console build: apply globally — no borealis TUs in the tree.

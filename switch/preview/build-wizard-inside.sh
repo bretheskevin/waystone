@@ -13,6 +13,9 @@ UI=/work/switch/source/ui
 SHELL_COMMON=/work/shell-common
 SWITCH_SRC=/work/switch/source
 FFI_INCLUDE=/work/ffi/include
+WS_VERSION="$(tr -d '[:space:]' < /work/VERSION)"
+[ -n "$WS_VERSION" ] || { echo "[preview] /work/VERSION missing or empty" >&2; exit 1; }
+echo "[preview] WS_APP_VERSION=$WS_VERSION" >&2
 
 OUT=/work/switch/preview/build-wizard
 mkdir -p "$OUT"
@@ -59,6 +62,7 @@ CXXFLAGS=(
     -D__GLFW__
     "-DBRLS_RESOURCES=\"./resources/\""
     -DPREVIEW_SLOW_TRANSITION
+    "-DWS_APP_VERSION=\"${WS_VERSION}\""
     -O2
     # Silence all warnings — vendored borealis code is noisy
     -w

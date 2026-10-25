@@ -1,8 +1,9 @@
 #ifndef WAYSTONE_SWITCH_VERSION_H
 #define WAYSTONE_SWITCH_VERSION_H
 
-// Shared release version: one vX.Y.Z tag ships the .3dsx, .cia and .nro. Keep equal to
-// 3ds/source/version.h; bump both in the release commit (CI checks they match the tag).
-#define WS_APP_VERSION "0.5.4"
+// Value comes from the repo-root VERSION file via -DWS_APP_VERSION (switch/Makefile, preview script).
+#ifndef WS_APP_VERSION
+#error "WS_APP_VERSION undefined: build through switch/Makefile, which reads ../VERSION"
+#endif
 
 #endif

@@ -128,13 +128,15 @@ https://libctru.devkitpro.org/swkbd_8h_source.html before using it.
 ### Releasing
 
 Releases are cut by pushing ONE `vX.Y.Z` tag that ships both shells — the GitHub Actions workflow
-`.github/workflows/release.yml` builds the 3DS (`devkitpro/devkitarm`, same toolchain as the Docker image)
-and the Switch (`devkitpro/devkita64`) in parallel jobs, then a `publish` job creates the release and attaches
+`.github/workflows/release.yml` builds the 3DS (`devkitpro/devkitarm`, same toolchain as the Docker image),
+the Switch (`devkitpro/devkita64`) and the Android shell in parallel jobs, then a `publish` job creates the release and attaches
 `waystone-3ds-spike.3dsx` (listed first), the installable `waystone-3ds-spike.cia`
-(`make -C 3ds cia`, makerom + bannertool installed by the workflow) and `waystone.nro`:
+(`make -C 3ds cia`, makerom + bannertool installed by the workflow), `waystone.nro` and the signed `waystone.apk`:
 
-1. Bump `WS_APP_VERSION` in **both** `3ds/source/version.h` and `switch/source/version.h` in one commit
-   (CI fails if they differ or don't match the tag).
+1. Bump the repo-root `VERSION` file (single line `X.Y.Z`, no `v`) — it feeds the 3DS/Switch Makefiles
+   (`-DWS_APP_VERSION`, CIA major/minor/micro, NACP) and Android Gradle (versionName/versionCode). CI's
+   `version` job fails if `VERSION` != tag. After bumping, `make clean` before an incremental build (the
+   define is not a tracked dependency).
 2. `git tag vX.Y.Z`.
 3. `git push origin vX.Y.Z` — the workflow builds and publishes the release.
 4. Verify on the GitHub release page that `waystone-3ds-spike.3dsx` (first), `waystone-3ds-spike.cia` and

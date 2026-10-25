@@ -68,8 +68,7 @@ after input dispatch unwinds. Two safe patterns: (1) mutate views in place (`set
 
 ## Releasing
 
-Same shared flow as the 3DS (see `3ds/CLAUDE.md` "Releasing"): bump `WS_APP_VERSION` in both
-`3ds/source/version.h` and `switch/source/version.h`, tag `vX.Y.Z`, push the tag; the `build-switch` job
+Same shared flow as the 3DS (see `3ds/CLAUDE.md` "Releasing"): bump the repo-root `VERSION`, tag `vX.Y.Z`, push the tag; the `build-switch` job
 in `.github/workflows/release.yml` builds `switch/waystone.nro` and `publish` attaches it.
 
 - The in-app updater (Settings -> Check for updates) downloads the release asset ending in `.nro` to
