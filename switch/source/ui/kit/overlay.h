@@ -1,15 +1,34 @@
 #pragma once
 #include <borealis.hpp>
+#include <cstdio>
 #include <functional>
+#include <memory>
 #include <string>
 #include "guide_pill.h"
 #include "ws_style.h"
 #include "../keymap_switch.h"
 
+// Overlay callbacks run after the overlay is deleted, possibly after their owner: wraps `cb` so
+// it is dropped (and logged) once the owner's `alive` token has expired or been cleared.
+inline std::function<void()> ws_if_alive(std::weak_ptr<bool> alive, const char* what,
+                                         std::function<void()> cb) {
+    return [alive, what, cb] {
+        auto a = alive.lock();
+        if (!a || !*a) {
+            printf("[ui] %s: owner gone, callback dropped\n", what);
+            return;
+        }
+        if (cb) cb();
+    };
+}
+
 // Translucent Activity drawn over the one below (which keeps rendering and gets its focus
 // back after the pop). Push with OverlayActivity::push(); close with close(after).
 // `after` runs one frame after the overlay has been popped AND deleted, so it may push
 // another overlay; it must not capture the closed overlay's `this`.
+// close() drops focus, plays the exit animation, waits until every borealis animation inside
+// the overlay has ended (ws_overlay_settle_ms), then pops with the content view already hidden
+// so borealis deletes the overlay synchronously instead of inside its own hide-fade callback.
 class OverlayActivity : public brls::Activity {
   public:
     explicit OverlayActivity(bool dim);
@@ -31,17 +50,25 @@ class OverlayActivity : public brls::Activity {
 
     virtual brls::Box* makeContainer(brls::Box* root) { return root; }
     virtual void playEnter() {}
-    virtual void playExit(std::function<void()> done) { done(); }
+    // Default: fade the whole overlay out.
+    virtual void playExit(std::function<void()> done);
+    // Stop the overlay's own timers / tasks: runs when close() starts, frames before the delete.
+    virtual void onClose() {}
     virtual const char* kind() const { return "overlay"; }
 
     brls::Box* root() const { return root_; }
 
   private:
+    void pop();
+
     bool                  dim_;
     bool                  closing_   = false;
+    brls::Time            close_us_  = 0;
     const char*           kind_name_ = "overlay";
     brls::Box*            root_    = nullptr;
     std::function<void()> after_;
+    // Expires with the overlay: drops exit/pop callbacks fired from its own teardown (app exit).
+    std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 };
 
 // Right-anchored full-height panel that slides in/out; B (WsAction::Back) closes it.

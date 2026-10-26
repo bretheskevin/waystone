@@ -17,7 +17,14 @@ WS_VERSION="$(tr -d '[:space:]' < /work/VERSION)"
 [ -n "$WS_VERSION" ] || { echo "[preview] /work/VERSION missing or empty" >&2; exit 1; }
 echo "[preview] WS_APP_VERSION=$WS_VERSION" >&2
 
+# PREVIEW_SANITIZE=1: ASan+UBSan build of every object (borealis included) into a separate dir.
+SANITIZE=()
 OUT=/work/switch/preview/build-wizard
+if [ "${PREVIEW_SANITIZE:-0}" = "1" ]; then
+    SANITIZE=(-fsanitize=address,undefined -fsanitize-recover=address -fno-omit-frame-pointer -g)
+    OUT=/work/switch/preview/build-wizard-asan
+    echo "[preview] PREVIEW_SANITIZE=1 -> ASan/UBSan build in $OUT" >&2
+fi
 mkdir -p "$OUT"
 
 # Compile filestream stubs if not already built (build-inside.sh does this
@@ -66,11 +73,13 @@ CXXFLAGS=(
     -O2
     # Silence all warnings — vendored borealis code is noisy
     -w
+    "${SANITIZE[@]}"
 )
 
 CFLAGS=(
     -O2
     -w
+    "${SANITIZE[@]}"
 )
 
 # ---------------------------------------------------------------------------
@@ -102,7 +111,7 @@ cc() {
         return
     fi
     echo "  [CC ] ${tag}" >&2
-    gcc ${CFLAGS[@]} "${INCLUDES[@]}" -c "$src" -o "$obj"
+    gcc "${CFLAGS[@]}" "${INCLUDES[@]}" -c "$src" -o "$obj"
     echo "$obj"
 }
 
@@ -232,7 +241,7 @@ OBJS+=( $(cxx "$PREVIEW/main.cpp" preview_main) )
 # ---------------------------------------------------------------------------
 echo "=== Linking ===" >&2
 GLFW_LIBS=$(pkg-config --libs glfw3 2>/dev/null || echo "-lglfw -ldl")
-g++ "${OBJS[@]}" \
+g++ "${SANITIZE[@]}" "${OBJS[@]}" \
     /tmp/filestream_stubs.o \
     $GLFW_LIBS \
     -lGL -lm -lpthread \

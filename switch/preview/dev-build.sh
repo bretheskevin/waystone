@@ -3,7 +3,8 @@
 # Only changed source files are recompiled; borealis objects are reused from the mounted volume.
 #
 # Prerequisites: run 'bash switch/preview/build.sh' once to create the borealis-preview image.
-# Usage: bash switch/preview/dev-build.sh [PREVIEW_FORCE_REBUILD=1]
+# Usage: [PREVIEW_FORCE_REBUILD=1] [PREVIEW_SANITIZE=1] bash switch/preview/dev-build.sh
+# PREVIEW_SANITIZE=1 builds an ASan/UBSan binary into switch/preview/build-wizard-asan/.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -32,8 +33,11 @@ fi
 echo "=== Incremental build in $CONTAINER ==="
 docker exec \
     -e PREVIEW_FORCE_REBUILD="${PREVIEW_FORCE_REBUILD:-0}" \
+    -e PREVIEW_SANITIZE="${PREVIEW_SANITIZE:-0}" \
     "$CONTAINER" \
     bash /work/switch/preview/build-wizard-inside.sh
 
 echo ""
-echo "=== Binary: $REPO_ROOT/switch/preview/build-wizard/waystone_preview ==="
+BIN_DIR=build-wizard
+[ "${PREVIEW_SANITIZE:-0}" = "1" ] && BIN_DIR=build-wizard-asan
+echo "=== Binary: $REPO_ROOT/switch/preview/$BIN_DIR/waystone_preview ==="

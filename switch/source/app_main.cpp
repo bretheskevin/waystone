@@ -3,6 +3,9 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <unistd.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <switch.h>
@@ -36,11 +39,19 @@ static const char* const LOG_PATH = "sdmc:/waystone/log.txt";
 
 // stdout/stderr go to nxlink when netloaded; otherwise to a size-capped file on
 // the SD card so crashes on real hardware leave a post-mortem behind.
+// borealis' userAppInit (lib/platforms/switch/switch_wrapper.c) already ran romfsInit,
+// socketInitializeDefault and nxlinkStdio before main, and userAppExit tears them down.
+// Never redirect again: a second nxlinkStdio opens a connection nxlink never accepts,
+// silently swallowing every later log line.
 static void redirect_logs() {
-    int link_fd = nxlinkStdio();
-    if (link_fd >= 0) {
+    int sock_type = 0;
+    socklen_t type_len = sizeof(sock_type);
+    if (getsockopt(STDOUT_FILENO, SOL_SOCKET, SO_TYPE, &sock_type, &type_len) == 0) {
         setvbuf(stdout, NULL, _IONBF, 0);  // unbuffered: every printf reaches nxlink immediately
-        printf("[net] nxlink stdio fd=%d\n", link_fd);
+        // Nagle would hold lines until the host ACKs; a crash then resets the socket and drops them.
+        int one = 1;
+        int nd_rc = setsockopt(STDOUT_FILENO, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+        printf("[net] stdout is the nxlink socket (nodelay rc=%d errno=%d)\n", nd_rc, nd_rc ? errno : 0);
         return;
     }
 
@@ -81,18 +92,13 @@ static bool switch_device_key(uint8_t* out_key, size_t* out_len) {
 
 int main(int argc, char* argv[])
 {
-    updater_set_self_candidates(argc > 0 ? argv[0] : nullptr, "sdmc:/switch/waystone.nro");
-    socketInitializeDefault();
     redirect_logs();            // nxlink when netloaded, else size-capped sdmc:/waystone/log.txt
-    printf("[boot] socket init done\n");
-    Result romfs_rc = romfsInit();
-    printf("[boot] romfs init rc=%d\n", (int)romfs_rc);
+    printf("[boot] logging ready (romfs + sockets from borealis userAppInit)\n");
+    updater_set_self_candidates(argc > 0 ? argv[0] : nullptr, "sdmc:/switch/waystone.nro");
     session_store_set_device_key_fn(switch_device_key);  // Task 3: register before any session use
     printf("[boot] curl init start\n");
     if (curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) {
         printf("[boot] curl init FAILED\n");
-        romfsExit();
-        socketExit();
         return 1;
     }
     printf("[boot] curl init done\n");
@@ -201,7 +207,5 @@ cleanup:
     if (session.vault) ws_vault_free(session.vault);
     session.vault = nullptr;
     curl_global_cleanup();
-    romfsExit();
-    socketExit();
     return 0;
 }

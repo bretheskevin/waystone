@@ -16,6 +16,10 @@ static const char* const FIXTURE_ICON = "./resources/placeholder_icon.jpg";
 // Delay before a mode pushes its overlay / drives input, once the base activity is up.
 static constexpr int PREVIEW_READY_DELAY_MS = 1000;
 
+// Stub sync state (preview/stubs/sync_controller_stub.cpp).
+extern bool g_preview_sync_running;
+extern bool g_preview_sync_done;
+
 inline void preview_press(brls::ControllerButton b) {
     printf("[ui] preview: press button %d\n", (int)b);
     brls::Application::onControllerButtonPressed(b, false);

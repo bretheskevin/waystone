@@ -39,6 +39,7 @@ class RestoreListPanel : public SlidePanel {
     virtual std::string status() const                 = 0;
 
     void buildBody(brls::Box* body) override;
+    void onClose() override { stopPolling(); }
     void stopPolling();
     void askRestore(size_t i);
 

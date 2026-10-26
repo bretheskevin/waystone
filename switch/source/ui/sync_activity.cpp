@@ -101,10 +101,6 @@ void SyncActivity::buildBody(brls::Box* body) {
         close_if_finished("B");
         return true;
     });
-    root()->registerAction(ws_label(WsAction::Continue), ws_brls(WsAction::Continue), [this](brls::View*) {
-        close_if_finished("A");
-        return true;
-    });
 }
 
 void SyncActivity::onContentAvailable() {
@@ -120,7 +116,6 @@ void SyncActivity::close_if_finished(const char* why) {
         return;
     }
     printf("[ui] sync modal dismissed (%s)\n", why);
-    poll_timer_.stop();
     std::string headline = ctrl_->status();
     close([headline] { ws_toast(headline); });
 }
@@ -172,6 +167,6 @@ void SyncActivity::poll() {
     bar_fill_->setWidth(track_w);
     bar_fill_->setBackgroundColor(outcome_color(WS_C_BAR));
     pct_label_->setText("100%");
-    setHint(ws_hint(WsAction::Continue));
+    setHint(ws_hint(WsAction::Back, "Close"));
     printf("[ui] sync modal finished: %s\n", ctrl_->status().c_str());
 }

@@ -1,17 +1,22 @@
 #include "overlay.h"
+#include "overlay_timing.h"
 #include "toast.h"
 #include "ws_views.h"
 #include <cstdio>
 
 namespace {
 
-// One-shot: runs fn on the next Ticking update, then frees itself.
+// One-shot: runs fn on a Ticking update at least `delay_ms` after the next one, then frees itself.
 class DeferredCall : public brls::Ticking {
   public:
-    explicit DeferredCall(std::function<void()> fn) : fn_(std::move(fn)) {}
+    explicit DeferredCall(std::function<void()> fn, brls::Time delay_ms = 0)
+        : fn_(std::move(fn)), delay_ms_(delay_ms) {}
 
   protected:
-    bool onUpdate(brls::Time) override { return false; }
+    bool onUpdate(brls::Time delta) override {
+        elapsed_ms_ += delta;
+        return elapsed_ms_ < delay_ms_;
+    }
     // Last thing Ticking::stop() touches, so self-deletion here is safe.
     void onStop() override {
         auto fn = std::move(fn_);
@@ -21,6 +26,8 @@ class DeferredCall : public brls::Ticking {
 
   private:
     std::function<void()> fn_;
+    brls::Time            delay_ms_;
+    brls::Time            elapsed_ms_ = 0;
 };
 
 class OverlayRoot : public brls::Box {
@@ -67,15 +74,34 @@ void OverlayActivity::close(std::function<void()> after) {
         printf("[ui] %s %p: close ignored (already closing)\n", kind(), static_cast<void*>(this));
         return;
     }
-    closing_ = true;
-    after_   = std::move(after);
+    closing_  = true;
+    after_    = std::move(after);
+    close_us_ = brls::getCPUTimeUsec();
     printf("[ui] %s %p: close\n", kind(), static_cast<void*>(this));
     brls::Application::blockInputs();
-    playExit([this] {
-        brls::Application::unblockInputs();
-        printf("[ui] %s %p: exit animation done, popping\n", kind(), static_cast<void*>(this));
-        brls::Application::popActivity(brls::TransitionAnimation::FADE, [] {});
-    });
+    onClose();
+    // Focus-loss fades / label scrolling inside the overlay start now, so they end before the pop.
+    brls::Application::giveFocus(nullptr);
+    playExit(ws_if_alive(alive_, "overlay exit", [this] {
+        brls::Style style = brls::Application::getStyle();
+        const int64_t settle  = ws_overlay_settle_ms(style["brls/animations/show"], style["brls/animations/highlight"]);
+        const int64_t elapsed = (brls::getCPUTimeUsec() - close_us_) / 1000;
+        const int64_t wait    = ws_overlay_remaining_ms(settle, elapsed);
+        printf("[ui] %s %p: exit animation done after %lld ms, pop in %lld ms\n", kind(),
+               static_cast<void*>(this), (long long)elapsed, (long long)wait);
+        (new DeferredCall(ws_if_alive(alive_, "overlay pop", [this] { pop(); }), wait))->start();
+    }));
+}
+
+void OverlayActivity::pop() {
+    printf("[ui] %s %p: popping\n", kind(), static_cast<void*>(this));
+    root_->hide([] {}, false, 0.0f);
+    brls::Application::unblockInputs();
+    brls::Application::popActivity(brls::TransitionAnimation::FADE, [] {});
+}
+
+void OverlayActivity::playExit(std::function<void()> done) {
+    root_->hide(std::move(done), true, WS_ANIM_SLIDE_MS);
 }
 
 brls::View* OverlayActivity::createContentView() {
@@ -84,8 +110,8 @@ brls::View* OverlayActivity::createContentView() {
     return root_;
 }
 
-// borealis has no TransitionAnimation::NONE: overlays push/pop with FADE and shrink its
-// fade to ~1 ms, since they animate themselves.
+// borealis has no TransitionAnimation::NONE: overlays push with FADE and shrink its fade to
+// ~1 ms, since they animate themselves. The pop never fades (content view hidden first).
 float OverlayActivity::getShowAnimationDuration(brls::TransitionAnimation) { return 1.0f; }
 
 SlidePanel::SlidePanel(float width, bool dim) : OverlayActivity(dim), width_(width) {}

@@ -8,7 +8,7 @@
 // OverlayActivity::push. ctrl is borrowed: TitleListActivity owns it and sits below.
 // Every view is built once in buildBody and only mutated in place afterwards
 // (setText/setTextColor/setWidth) — no rebuilds, so no focused-view UAF.
-// B/A close it only once the run is Done/Error; closing toasts the final status.
+// B closes it only once the run is Done/Error; closing toasts the final status.
 class SyncActivity : public DialogCard {
   public:
     explicit SyncActivity(SyncController* ctrl);
@@ -17,6 +17,7 @@ class SyncActivity : public DialogCard {
 
   protected:
     void buildBody(brls::Box* body) override;
+    void onClose() override { poll_timer_.stop(); }
 
   private:
     SyncController* ctrl_;

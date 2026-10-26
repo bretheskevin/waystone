@@ -10,9 +10,6 @@
 #include "kit/ws_scroll_frame.h"
 #include "session.h"
 
-extern bool g_preview_sync_running;
-extern bool g_preview_sync_done;
-
 static const char* const FIXTURE_GAME = "The Legend of Zelda: TotK";
 
 // ShellFrame base whose content is a dummy title grid.
