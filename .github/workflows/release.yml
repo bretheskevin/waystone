@@ -191,7 +191,10 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # v3's default "tools platform-tools" fails: Google no longer serves the legacy `tools` package.
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
 
       - name: Install SDK platform, build-tools, NDK
         shell: bash
