@@ -2,7 +2,6 @@
 #include "loading_activity.h"
 #include "vault_helpers.h"
 #include "session_store.h"
-#include "keymap_switch.h"
 #include <cstdio>
 
 extern "C" {
@@ -14,17 +13,10 @@ UnlockActivity::UnlockActivity(Session* session, const uint8_t* keys_data, size_
     : WizardActivity(NUM_VALUES), session_(session), keys_data_(keys_data), keys_len_(keys_len) {}
 
 std::vector<WizardStepDef> UnlockActivity::get_steps() const {
-    WizardFieldDef passphrase_field;
-    if (recovery_mode_) {
-        passphrase_field = {FIELD_PASSPHRASE, "Recovery Key", false, "not set",
-                            "enter your hex recovery key (Y to switch to passphrase)"};
-    } else {
-        passphrase_field = {FIELD_PASSPHRASE, "Vault Passphrase", true, "not set",
-                            "enter your vault passphrase (Y to switch to recovery key)"};
-    }
     WizardFieldDef password_field = {FIELD_PASSWORD, "WebDAV Password", true, "not set",
                                      "your WebDAV password"};
-    return {{"Unlock Vault", "", {passphrase_field, password_field}}};
+    return {{"Unlock Vault", "",
+             {vault_secret_field(FIELD_PASSPHRASE, recovery_mode_), password_field}}};
 }
 
 std::string UnlockActivity::finish_label() const { return "Unlock"; }
@@ -34,7 +26,7 @@ std::string UnlockActivity::wizard_title() const { return "Unlock Vault"; }
 bool UnlockActivity::validate_step(size_t /*step*/) {
     error_.clear();
     if (values_[FIELD_PASSPHRASE].empty()) {
-        error_ = recovery_mode_ ? "Recovery key is required" : "Passphrase is required";
+        error_ = vault_secret_required(recovery_mode_);
         return false;
     }
     if (values_[FIELD_PASSWORD].empty()) {
@@ -47,17 +39,8 @@ bool UnlockActivity::validate_step(size_t /*step*/) {
 void UnlockActivity::on_finish() { do_unlock(); }
 
 void UnlockActivity::register_extra_actions() {
-    registerAction(ws_label(WsAction::ToggleRecovery), ws_brls(WsAction::ToggleRecovery), [this](brls::View*) {
-        if (current_step_ == 0) {
-            recovery_mode_ = !recovery_mode_;
-            printf("[ui] unlock: recovery mode -> %s\n", recovery_mode_ ? "on" : "off");
-            zeroize_string(values_[FIELD_PASSPHRASE]);
-            error_.clear();
-            reload_steps();
-            schedule_refresh();
-        }
-        return true;
-    });
+    register_recovery_toggle(&recovery_mode_, FIELD_PASSPHRASE,
+                             [this] { return current_step_ == 0; });
 }
 
 // Task 5 + 7b: run Argon2 KDF + title listing off the render thread; persist session.
@@ -95,8 +78,7 @@ void UnlockActivity::do_unlock() {
 
         persist_session(session->vault, session->dav.pass);
 
-        auto titles = list_titles(session->vault, session->dav.as_cfg(), session->uid);
-        return {true, "", std::move(titles)};
+        return {true, "", load_titles_after_unlock(session)};
     };
 
     // Zeroize originals — copies moved into the lambda above.

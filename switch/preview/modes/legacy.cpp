@@ -29,8 +29,8 @@ public:
         values_[0]       = "https://dav.example.com";  // FIELD_SERVER
         values_[1]       = "waystone";                  // FIELD_USERNAME
         current_step_    = 3;
-        creating_vault_  = true;
-        status_          = "Creating vault\xe2\x80\xa6 please wait";
+        busy_            = true;
+        status_          = setup_work_status(SetupVaultMode::Create);
     }
 };
 

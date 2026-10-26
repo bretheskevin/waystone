@@ -165,7 +165,7 @@ void SettingsPane::do_logout() {
     zeroize_string(session_->dav.pass);  // in place: OwnedWebDavCfg is non-movable
     zeroize_string(session_->dav.user);
     long klen = 0;
-    uint8_t* kbuf = read_keys_file("sdmc:/waystone/keys.json", &klen);
+    uint8_t* kbuf = read_keys_file(WS_KEYS_PATH, &klen);
     if (!kbuf || klen <= 0) {
         printf("[vault] logout: keys.json unreadable -- staying on Settings\n");
         ws_toast("Logged out. Please restart the app.");

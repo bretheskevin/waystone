@@ -11,10 +11,9 @@ Wizard::Wizard(std::vector<WizardStepDef> steps, size_t num_values)
     recompute_layout(false);
 }
 Wizard::~Wizard() { zeroize_secrets(); }
+// Every value: the recovery key field is not masked (is_secret false) but is still a secret.
 void Wizard::zeroize_secrets() {
-    for (size_t s=0;s<steps_.size();s++)
-        for (size_t f=0;f<steps_[s].fields.size();f++)
-            if (steps_[s].fields[f].is_secret) zeroize_string(values_[steps_[s].fields[f].value_index]);
+    for (size_t i = 0; i < values_.size(); i++) zeroize_string(values_[i]);
 }
 void Wizard::reload_steps(std::vector<WizardStepDef> new_steps) {
     steps_ = new_steps;

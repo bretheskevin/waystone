@@ -4,53 +4,47 @@
 #include <borealis.hpp>
 #include <cstdio>
 
-extern "C" {
-#include "waystone.h"
-}
-
-static std::vector<WizardStepDef> setup_steps() {
-    return {
-        {"Welcome to Waystone", "Press (R) to begin setup", {}},
-        {"Server URL",          "",                          {
-            {0, "Server URL", false, "not set",
-             "your Waystone server, e.g. https://dav.example.com"},
-        }},
-        {"WebDAV Login",        "",                          {
-            {1, "WebDAV Username", false, "not set", "your WebDAV username"},
-            {2, "WebDAV Password", true,  "not set", "your WebDAV password (stored in RAM only)"},
-        }},
-        {"Vault Passphrase",    "",                          {
-            {3, "Passphrase",         true, "not set",
-             "choose a strong passphrase to encrypt your saves"},
-            {4, "Confirm Passphrase", true, "not set",
-             "re-enter your vault passphrase"},
-        }},
-    };
-}
-
 SetupActivity::SetupActivity(Session* session)
     : WizardActivity(NUM_VALUES), session_(session) {}
 
 SetupActivity::~SetupActivity() {
     poll_fn_ = nullptr;
-    if (vault_thread_.joinable()) vault_thread_.join();
-    // vault_result_.vault is non-null only if the worker succeeded but we were
-    // destroyed before the poll lambda could transfer ownership to session_.
-    if (vault_result_.vault) {
-        ws_vault_free(vault_result_.vault);
-        vault_result_.vault = nullptr;
+    if (worker_.joinable()) worker_.join();
+    if (setup_result_.vault) {
+        ws_vault_free(setup_result_.vault);
+        setup_result_.vault = nullptr;
     }
-    // No explicit zeroize_secrets() here: if the poll lambda ran, secrets are
-    // already moved into session_; if the worker is still running (early exit),
-    // the worker's std::string copies are zeroized by the worker itself. The
-    // base class ~WizardActivity zeroizes values_[] automatically.
+    vault_setup_wipe_recovery(&setup_result_);
 }
 
-std::vector<WizardStepDef> SetupActivity::get_steps() const { return setup_steps(); }
-
-std::string SetupActivity::finish_label() const {
-    return creating_vault_ ? "Creating vault\xe2\x80\xa6" : "Create Vault";
+std::vector<WizardStepDef> SetupActivity::get_steps() const {
+    std::vector<WizardStepDef> steps = {
+        {"Welcome to Waystone", "Press (R) to begin setup", {}},
+        {"Server URL",          "",                          {
+            {FIELD_SERVER, "Server URL", false, "not set",
+             "your Waystone server, e.g. https://dav.example.com"},
+        }},
+        {"WebDAV Login",        "",                          {
+            {FIELD_USERNAME, "WebDAV Username", false, "not set", "your WebDAV username"},
+            {FIELD_PASSWORD, "WebDAV Password", true,  "not set",
+             "your WebDAV password (stored in RAM only)"},
+        }},
+    };
+    if (mode_ == SetupVaultMode::Join) {
+        steps.push_back({setup_vault_step_title(mode_), "",
+                         {vault_secret_field(FIELD_PASSPHRASE, join_recovery_)}});
+    } else {
+        steps.push_back({setup_vault_step_title(mode_), "", {
+            {FIELD_PASSPHRASE, "Passphrase",         true, "not set",
+             "choose a strong passphrase to encrypt your saves"},
+            {FIELD_CONFIRM,    "Confirm Passphrase", true, "not set",
+             "re-enter your vault passphrase"},
+        }});
+    }
+    return steps;
 }
+
+std::string SetupActivity::finish_label() const { return setup_finish_label(mode_, busy_); }
 
 std::string SetupActivity::wizard_title() const { return "Waystone Setup"; }
 
@@ -68,7 +62,11 @@ bool SetupActivity::validate_step(size_t step) {
                 return false;
             }
             return true;
-        case 2:  // WebDAV Login
+        case STEP_LOGIN:
+            if (probe_passed_) {
+                probe_passed_ = false;
+                return true;
+            }
             if (values_[FIELD_USERNAME].empty()) {
                 error_ = "WebDAV Username is required";
                 return false;
@@ -77,12 +75,14 @@ bool SetupActivity::validate_step(size_t step) {
                 error_ = "WebDAV Password is required";
                 return false;
             }
-            return true;
-        case 3:  // Vault Passphrase
+            start_probe();  // advances from on_probe_done
+            return false;
+        case STEP_VAULT:
             if (values_[FIELD_PASSPHRASE].empty()) {
-                error_ = "Passphrase is required";
+                error_ = vault_secret_required(mode_ == SetupVaultMode::Join && join_recovery_);
                 return false;
             }
+            if (mode_ == SetupVaultMode::Join) return true;
             if (values_[FIELD_CONFIRM].empty()) {
                 error_ = "Please confirm your passphrase";
                 return false;
@@ -98,77 +98,111 @@ bool SetupActivity::validate_step(size_t step) {
     }
 }
 
-void SetupActivity::on_finish() { do_create_vault(); }
+void SetupActivity::on_finish() { start_setup(); }
 
-void SetupActivity::do_create_vault() {
-    if (creating_vault_) return;
-    // Re-entry guard: creating_vault_ prevents a second worker spawn if the
-    // user hammers the finish button while Argon2 is running.
+void SetupActivity::register_extra_actions() {
+    register_recovery_toggle(&join_recovery_, FIELD_PASSPHRASE, [this] {
+        return current_step_ == STEP_VAULT && mode_ == SetupVaultMode::Join && !busy_;
+    });
+}
 
+void SetupActivity::run_worker(std::function<void()> work, std::function<void()> on_done) {
+    if (worker_.joinable()) worker_.join();
+    busy_ = true;
+    worker_done_.store(false);
+    worker_ = std::thread([this, work] {
+        work();
+        worker_done_.store(true);
+    });
+    // The pump copies poll_fn_ before calling it, so clearing it here is safe.
+    poll_fn_ = [this, on_done] {
+        if (!worker_done_.load()) return;
+        poll_fn_ = nullptr;
+        if (worker_.joinable()) worker_.join();
+        busy_ = false;
+        status_.clear();
+        on_done();
+    };
+}
+
+void SetupActivity::start_probe() {
+    printf("[ui] setup: probing server for an existing vault\n");
+    status_ = setup_probe_status();
+    run_worker([this] {
+        WebDavCfg cfg{values_[FIELD_SERVER].c_str(), values_[FIELD_USERNAME].c_str(),
+                      values_[FIELD_PASSWORD].c_str()};
+        probe_ = vault_fetch_remote_keys(cfg);
+    }, [this] { on_probe_done(); });
+}
+
+void SetupActivity::on_probe_done() {
+    if (probe_.state == RemoteKeysState::Error) {
+        printf("[ui] setup: probe failed (http=%d) - staying on login step\n", probe_.http_status);
+        error_ = setup_probe_error(probe_.http_status);
+        schedule_refresh();
+        return;
+    }
+    SetupVaultMode mode = probe_.state == RemoteKeysState::Present ? SetupVaultMode::Join
+                                                                   : SetupVaultMode::Create;
+    printf("[ui] setup: probe -> %s vault step\n", mode == SetupVaultMode::Join ? "join" : "create");
+    if (mode != mode_) {
+        mode_          = mode;
+        join_recovery_ = false;
+        zeroize_string(values_[FIELD_PASSPHRASE]);
+        zeroize_string(values_[FIELD_CONFIRM]);
+        reload_steps();
+    }
+    probe_passed_ = true;
+    go_next();
+}
+
+void SetupActivity::start_setup() {
+    if (busy_) return;
+    bool join = mode_ == SetupVaultMode::Join;
     session_->config.server_url = values_[FIELD_SERVER];
     session_->config.username   = values_[FIELD_USERNAME];
 
-    creating_vault_ = true;
-    status_ = "Creating vault\xe2\x80\xa6 please wait";
+    printf("[ui] setup: %s vault start\n", join ? "join" : "create");
+    status_ = setup_work_status(mode_);
+    run_worker([this, join] {
+        if (join) {
+            setup_result_ = setup_join_vault(session_, probe_.bytes, values_[FIELD_PASSPHRASE],
+                                             join_recovery_);
+        } else {
+            WebDavCfg cfg{values_[FIELD_SERVER].c_str(), values_[FIELD_USERNAME].c_str(),
+                          values_[FIELD_PASSWORD].c_str()};
+            setup_result_ = setup_create_vault(session_, cfg, values_[FIELD_PASSPHRASE]);
+        }
+    }, [this, join] { on_setup_done(join); });
     schedule_refresh();
+}
 
-    std::string passphrase_copy = values_[FIELD_PASSPHRASE];
+void SetupActivity::on_setup_done(bool join) {
+    WsVault* vault      = setup_result_.vault;
+    setup_result_.vault = nullptr;
+    if (!vault) {
+        printf("[ui] setup: %s failed: %s\n", join ? "join" : "create", setup_result_.error.c_str());
+        error_ = setup_result_.error;
+        schedule_refresh();
+        return;
+    }
+    printf("[ui] setup: %s ok -> %s\n", join ? "join" : "create",
+           join ? "dashboard" : "recovery key");
 
-    vault_done_.store(false);
+    session_->vault          = vault;
+    session_->dav.server_url = values_[FIELD_SERVER];
+    session_->dav.user       = values_[FIELD_USERNAME];
+    session_->dav.pass       = values_[FIELD_PASSWORD];  // copy: zeroize_secrets wipes the source
+    zeroize_secrets();
+    probe_.bytes.clear();
 
-    vault_thread_ = std::thread([this, pass = passphrase_copy]() mutable {
-        VaultCreateResult res = create_vault(pass, session_);
-        zeroize_string(pass);
-        vault_result_ = std::move(res);
-        vault_done_.store(true);
-    });
-    zeroize_string(passphrase_copy);
+    persist_session(session_->vault, session_->dav.pass);
 
-    // Called by the pump's on_tick on the main thread. The pump copies
-    // poll_fn_ to a local std::function before invoking it, because this
-    // lambda clears poll_fn_ on completion (preventing re-entry after the
-    // worker is joined).
-    poll_fn_ = [this]() {
-        if (!vault_done_.load()) return;
-
-        poll_fn_ = nullptr;
-
-        if (vault_thread_.joinable()) vault_thread_.join();
-
-        if (values_[FIELD_SERVER].empty()) {
-            creating_vault_ = false;
-            status_.clear();
-            return;
-        }
-
-        // Transfer ownership of the vault pointer out of vault_result_ so the
-        // destructor cannot double-free it if this activity is destroyed after
-        // we push RecoveryKeyActivity (which takes session_->vault).
-        WsVault*    vault_ptr     = vault_result_.vault;
-        vault_result_.vault       = nullptr;
-        std::string recovery_hex  = std::move(vault_result_.recovery_hex);
-        std::string recovery_path = std::move(vault_result_.recovery_path);
-        std::string err_msg       = std::move(vault_result_.error);
-
-        creating_vault_ = false;
-        status_.clear();
-
-        if (!vault_ptr) {
-            error_ = err_msg;
-            schedule_refresh();
-            return;
-        }
-
-        session_->vault          = vault_ptr;
-        session_->dav.server_url = values_[FIELD_SERVER];
-        session_->dav.user       = values_[FIELD_USERNAME];
-        session_->dav.pass       = std::move(values_[FIELD_PASSWORD]);
-        zeroize_secrets();
-
-        persist_session(session_->vault, session_->dav.pass);
-
-        brls::Application::pushActivity(
-            new RecoveryKeyActivity(session_, recovery_hex, recovery_path));
-        zeroize_string(recovery_hex);
-    };
+    if (join) {
+        push_dashboard(session_);
+        return;
+    }
+    brls::Application::pushActivity(
+        new RecoveryKeyActivity(session_, setup_result_.recovery_hex, ws_recovery_path(session_->device_id)));
+    vault_setup_wipe_recovery(&setup_result_);
 }

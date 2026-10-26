@@ -4,71 +4,37 @@
 #include "title_list_activity.h"
 #include <borealis.hpp>
 #include <cstdio>
-#include <sys/stat.h>
 
-extern "C" {
-struct Vault;
-#include "waystone.h"
+static void persist_setup(const Session* session, const VaultSetupResult& r,
+                          const std::string& recovery_path) {
+    vault_setup_persist(r, WS_KEYS_PATH, recovery_path, session->config,
+                        session->config_path.c_str());
 }
 
-VaultCreateResult create_vault(const std::string& passphrase, Session* session) {
-    VaultCreateResult result = {nullptr, "", "", ""};
-
-    const char* keys_path = "sdmc:/waystone/keys.json";
-    FILE* existing = fopen(keys_path, "rb");
-    if (existing) {
-        fseek(existing, 0, SEEK_END);
-        long esz = ftell(existing);
-        fclose(existing);
-        if (esz > 0) {
-            result.error = "keys.json already exists! Aborting setup.";
-            return result;
-        }
-    }
-
-    WsBuf recovery = {nullptr, 0};
-    WsBuf keys = {nullptr, 0};
-    WsVault* vault = ws_vault_init(passphrase.c_str(), &recovery, &keys);
-
-    if (!vault) {
-        const char* err = ws_last_error();
-        result.error = std::string("Vault creation failed: ") + (err ? err : "unknown");
-        ws_buf_free(recovery);
-        ws_buf_free(keys);
-        return result;
-    }
-
-    mkdir("sdmc:/waystone", 0755);
-    FILE* wf = fopen(keys_path, "wb");
-    if (wf) {
-        fwrite(keys.ptr, 1, keys.len, wf);
-        fclose(wf);
-    }
-    ws_buf_free(keys);
-
-    wsconfig_save(session->config, session->config_path.c_str());
-
-    result.vault = vault;
-
-    if (recovery.ptr && recovery.len > 0) {
-        result.recovery_hex = std::string(reinterpret_cast<const char*>(recovery.ptr), recovery.len);
-        result.recovery_path = "sdmc:/waystone/recovery-" + session->device_id + ".txt";
-        FILE* rf = fopen(result.recovery_path.c_str(), "wb");
-        if (rf) {
-            fwrite(recovery.ptr, 1, recovery.len, rf);
-            fclose(rf);
-        }
-    }
-    ws_buf_free(recovery);
-
-    return result;
+VaultSetupResult setup_create_vault(Session* session, const WebDavCfg& dav,
+                                    const std::string& passphrase) {
+    VaultSetupResult r = vault_create_and_publish(dav, passphrase);
+    if (r.vault) persist_setup(session, r, ws_recovery_path(session->device_id));
+    printf("[vault] setup create: %s\n", r.vault ? "ok" : r.error.c_str());
+    return r;
 }
 
-// Task 5: push LoadingActivity; the worker runs list_titles() off the render thread.
+VaultSetupResult setup_join_vault(Session* session, const std::vector<uint8_t>& server_keys,
+                                  const std::string& secret, bool recovery) {
+    VaultSetupResult r = vault_join(server_keys, secret, recovery);
+    if (r.vault) persist_setup(session, r, "");
+    printf("[vault] setup join: %s\n", r.vault ? "ok" : r.error.c_str());
+    return r;
+}
+
+std::vector<TitleInfo> load_titles_after_unlock(Session* session) {
+    vault_publish_local_if_absent(session->dav.as_cfg(), WS_KEYS_PATH);
+    return list_titles(session->vault, session->dav.as_cfg(), session->uid);
+}
+
 void push_dashboard(Session* session) {
     auto worker = [session]() -> LoadingActivity::LoadResult {
-        auto titles = list_titles(session->vault, session->dav.as_cfg(), session->uid);
-        return {true, "", std::move(titles)};
+        return {true, "", load_titles_after_unlock(session)};
     };
 
     brls::Application::pushActivity(new LoadingActivity(session, worker));

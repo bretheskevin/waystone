@@ -119,7 +119,7 @@ int main(int argc, char* argv[]) {
             App app;
 
             long klen = 0;
-            kbuf = read_keys_file("sdmc:/waystone/keys.json", &klen);
+            kbuf = read_keys_file(WS_KEYS_PATH, &klen);
 
             // Wrap routing in a lambda so the no-internet gate can retry it.
             auto route_to_first_screen = [&]() {

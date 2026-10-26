@@ -151,13 +151,16 @@ static void session_note_connects(WebDavSession* s) {
 
 static int put_impl(CURL* c, const WebDavCfg& cfg, const char* path,
                     const uint8_t* data, size_t len,
-                    bool (*progress)(size_t, size_t, void*), void* ctx) {
+                    bool (*progress)(size_t, size_t, void*), void* ctx,
+                    bool if_absent = false) {
     std::string url = webdav_url(cfg, path);
     WriteCtx wctx;
     ReadCtx rctx = { data, len, 0 };
     XferCtx xctx = { progress, ctx, true };
+    struct curl_slist* hdrs = if_absent ? curl_slist_append(nullptr, "If-None-Match: *") : nullptr;
     curl_easy_setopt(c, CURLOPT_URL, url.c_str());
     set_auth(c, cfg);
+    if (hdrs) curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
     curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, write_cb);
     curl_easy_setopt(c, CURLOPT_WRITEDATA, &wctx);
     curl_easy_setopt(c, CURLOPT_UPLOAD, 1L);
@@ -168,6 +171,7 @@ static int put_impl(CURL* c, const WebDavCfg& cfg, const char* path,
     CURLcode res = curl_easy_perform(c);
     long http_code = 0;
     curl_easy_getinfo(c, CURLINFO_RESPONSE_CODE, &http_code);
+    curl_slist_free_all(hdrs);
     if (res != CURLE_OK) {
         printf("[net] webdav_put %s (%zu bytes) transport error: %s\n",
                path, len, curl_easy_strerror(res));
@@ -187,6 +191,14 @@ int webdav_put(const WebDavCfg& cfg, const char* path,
     CURL* c = curl_easy_init();
     if (!c) return -1;
     int rc = put_impl(c, cfg, path, data, len, progress, ctx);
+    curl_easy_cleanup(c);
+    return rc;
+}
+
+int webdav_put_if_absent(const WebDavCfg& cfg, const char* path, const uint8_t* data, size_t len) {
+    CURL* c = curl_easy_init();
+    if (!c) return -1;
+    int rc = put_impl(c, cfg, path, data, len, nullptr, nullptr, true);
     curl_easy_cleanup(c);
     return rc;
 }

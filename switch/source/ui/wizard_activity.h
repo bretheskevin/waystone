@@ -2,6 +2,7 @@
 #include <borealis.hpp>
 #include "wizard.h"
 #include "deferred_refresh_pump.h"
+#include "setup_model.h"
 #include <functional>
 #include <string>
 #include <vector>
@@ -41,12 +42,20 @@ class WizardActivity : public brls::Activity {
     void zeroize_secrets();
     void edit_field(const WizardFieldDef& f);
 
+    // Passphrase / recovery-key secret field shared by Unlock and Setup (join).
+    static WizardFieldDef vault_secret_field(size_t value_index, bool recovery);
+    // Y flips *recovery_mode while active() holds: wipes the field and reloads the steps.
+    void register_recovery_toggle(bool* recovery_mode, size_t value_index,
+                                  std::function<bool()> active);
+
     virtual std::vector<WizardStepDef> get_steps()      const = 0;
     virtual std::string                finish_label()    const = 0;
     virtual std::string                wizard_title()    const { return ""; }
     virtual bool                       validate_step(size_t step);
     virtual void                       on_finish()             = 0;
     virtual void                       register_extra_actions();
+    // True while a background worker owns the wizard: Next/Back/field edits are ignored.
+    virtual bool                       nav_locked()      const { return false; }
 
   private:
     std::vector<WizardStepDef> steps_;

@@ -13,6 +13,8 @@ extern "C" {
 }
 
 #include "net.h"
+#include "keys_file.h"
+#include "vault_remote.h"
 #include "saves.h"
 #include "sync.h"
 #include "wsconfig.h"
@@ -76,8 +78,7 @@ int main(int argc, char* argv[]) {
 
     // -- Vault init --
     {
-        const char* keys_path = "sdmc:/waystone/keys.json";
-        FILE* kf = fopen(keys_path, "rb");
+        FILE* kf = fopen(WS_KEYS_PATH, "rb");
         if (kf) {
             fseek(kf, 0, SEEK_END);
             long klen = ftell(kf);
@@ -104,11 +105,11 @@ int main(int argc, char* argv[]) {
             goto cleanup;
         }
         mkdir("sdmc:/waystone", 0755);
-        FILE* wf = fopen("sdmc:/waystone/keys.json", "wb");
+        FILE* wf = fopen(WS_KEYS_PATH, "wb");
         if (wf) {
             fwrite(keys.ptr, 1, keys.len, wf);
             fclose(wf);
-            printf("Keys saved to sdmc:/waystone/keys.json\n");
+            printf("Keys saved to %s\n", WS_KEYS_PATH);
         }
         if (recovery.ptr)
             printf("RECOVERY KEY (save this!): %.*s\n",
@@ -127,6 +128,8 @@ int main(int argc, char* argv[]) {
         printf("Device ID: %s\n\n", device_id.c_str());
 
         WebDavCfg dav = {WAYSTONE_WEBDAV_URL, WAYSTONE_WEBDAV_USER, WAYSTONE_WEBDAV_PASS};
+
+        vault_publish_local_if_absent(dav, WS_KEYS_PATH);
 
         printf("--- Enumerating titles ---\n");
         std::vector<TitleInfo> titles = list_titles(vault, dav);

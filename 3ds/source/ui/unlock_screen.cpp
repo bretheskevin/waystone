@@ -5,7 +5,7 @@
 #include "app.h"
 #include "theme.h"
 #include "worker_thread.h"
-#include "keymap_3ds.h"
+#include "vault_helpers.h"
 #include <cstdio>
 
 extern "C" {
@@ -38,20 +38,7 @@ UnlockScreen::~UnlockScreen() {
 }
 
 std::vector<WizardStepDef> UnlockScreen::make_steps() const {
-    WizardFieldDef pass_field;
-    if (recovery_mode_) {
-        pass_field.value_index = FIELD_PASSPHRASE;
-        pass_field.label       = "Recovery Key";
-        pass_field.is_secret   = false;
-        pass_field.placeholder = "not set";
-        pass_field.hint        = "enter your hex recovery key (Y to switch to passphrase)";
-    } else {
-        pass_field.value_index = FIELD_PASSPHRASE;
-        pass_field.label       = "Vault Passphrase";
-        pass_field.is_secret   = true;
-        pass_field.placeholder = "not set";
-        pass_field.hint        = "enter your vault passphrase (Y to switch to recovery key)";
-    }
+    WizardFieldDef pass_field = vault_secret_field(FIELD_PASSPHRASE, recovery_mode_);
     WizardFieldDef pwd_field;
     pwd_field.value_index = FIELD_PASSWORD;
     pwd_field.label       = "WebDAV Password";
@@ -72,7 +59,7 @@ std::vector<WizardStepDef> UnlockScreen::make_steps() const {
 bool UnlockScreen::validate() {
     wizard_.clear_error();
     if (wizard_.value(FIELD_PASSPHRASE).empty()) {
-        wizard_.set_error(recovery_mode_ ? "Recovery key is required" : "Passphrase is required");
+        wizard_.set_error(vault_secret_required(recovery_mode_));
         return false;
     }
     if (wizard_.value(FIELD_PASSWORD).empty()) {
@@ -146,14 +133,9 @@ void UnlockScreen::draw_bottom(C3D_RenderTarget* target) {
 
 void UnlockScreen::handle_input(u32 kDown, touchPosition touch) {
     if (unlocking_) return;
-    if (kDown & ws_key(WsAction::ToggleRecovery)) {
-        recovery_mode_ = !recovery_mode_;
-        printf("[ui] unlock: recovery mode -> %s\n", recovery_mode_ ? "on" : "off");
-        zeroize_string(wizard_.value(FIELD_PASSPHRASE));
-        wizard_.clear_error();
-        wizard_.reload_steps(make_steps());
+    if (vault_secret_toggle(kDown, &recovery_mode_, &wizard_, FIELD_PASSPHRASE,
+                            [this] { return make_steps(); }))
         return;
-    }
     int result = wizard_.handle_input(kDown, touch);
     if (result == 2 || result == 3) {
         do_unlock();

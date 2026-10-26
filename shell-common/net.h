@@ -26,6 +26,10 @@ int webdav_put(const WebDavCfg& cfg, const char* path,
                bool (*progress)(size_t got, size_t total, void* ctx) = nullptr,
                void* ctx = nullptr);
 
+// webdav_put with `If-None-Match: *`: a server honoring it answers 412 instead of overwriting
+// an existing path (servers ignoring the header behave like webdav_put).
+int webdav_put_if_absent(const WebDavCfg& cfg, const char* path, const uint8_t* data, size_t len);
+
 // GET binary data from path. Returns 0 on success, 1 on 404 (out empty), -1 on error.
 // progress (optional) reports download bytes; total is 0 when the server sends no length.
 int webdav_get(const WebDavCfg& cfg, const char* path,

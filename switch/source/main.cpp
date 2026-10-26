@@ -11,6 +11,8 @@ extern "C" {
 }
 
 #include "net.h"
+#include "keys_file.h"
+#include "vault_remote.h"
 #include "saves.h"
 #include "sync.h"
 
@@ -41,7 +43,7 @@ int main(int argc, char* argv[]) {
     WsVault* vault = nullptr;
 
     // Try to load existing keys from SD card
-    const char* keys_path = "sdmc:/waystone/keys.json";
+    const char* keys_path = WS_KEYS_PATH;
     FILE* kf = fopen(keys_path, "rb");
     if (kf) {
         fseek(kf, 0, SEEK_END);
@@ -117,6 +119,8 @@ int main(int argc, char* argv[]) {
                 WAYSTONE_WEBDAV_USER,
                 WAYSTONE_WEBDAV_PASS
             };
+
+            vault_publish_local_if_absent(dav, WS_KEYS_PATH);
 
             // -- List titles --
             printf("--- Enumerating titles ---\n");

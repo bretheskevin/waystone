@@ -322,7 +322,7 @@ void SettingsScreen::activate_row(size_t row) {
             zeroize_string(session_->dav.pass);
             zeroize_string(session_->dav.user);
             long klen = 0;
-            uint8_t* kbuf = read_keys_file("sdmc:/waystone/keys.json", &klen);
+            uint8_t* kbuf = read_keys_file(WS_KEYS_PATH, &klen);
             if (kbuf && klen > 0) {
                 // kbuf intentionally not freed: UnlockScreen borrows it for app lifetime
                 App::instance().set_screen(new UnlockScreen(session_, kbuf, static_cast<size_t>(klen)));

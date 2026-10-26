@@ -78,7 +78,31 @@ void WizardActivity::reload_steps() {
     step_changed_ = false;
 }
 
+WizardFieldDef WizardActivity::vault_secret_field(size_t value_index, bool recovery) {
+    return {value_index, vault_secret_label(recovery), !recovery, "not set",
+            vault_secret_hint(recovery, ws_glyph(ws_button(WsAction::ToggleRecovery)))};
+}
+
+void WizardActivity::register_recovery_toggle(bool* recovery_mode, size_t value_index,
+                                              std::function<bool()> active) {
+    registerAction(ws_label(WsAction::ToggleRecovery), ws_brls(WsAction::ToggleRecovery),
+                   [this, recovery_mode, value_index, active](brls::View*) {
+        if (!active()) return true;
+        *recovery_mode = !*recovery_mode;
+        printf("[ui] wizard: recovery mode -> %s\n", *recovery_mode ? "on" : "off");
+        zeroize_string(values_[value_index]);
+        error_.clear();
+        reload_steps();
+        schedule_refresh();
+        return true;
+    });
+}
+
 void WizardActivity::edit_field(const WizardFieldDef& f) {
+    if (nav_locked()) {
+        printf("[ui] wizard edit ignored: busy\n");
+        return;
+    }
     std::string result = swkbd_prompt(f.label.c_str(), values_[f.value_index], f.is_secret);
     if (!result.empty() || !f.is_secret) {
         if (f.is_secret) {
@@ -128,6 +152,10 @@ bool WizardActivity::validate_step(size_t /*step*/) { return true; }
 void WizardActivity::register_extra_actions() {}
 
 void WizardActivity::go_next() {
+    if (nav_locked()) {
+        printf("[ui] wizard next ignored: busy\n");
+        return;
+    }
     size_t n = steps_.size();
     if (!validate_step(current_step_)) {
         printf("[ui] wizard step %zu: validation failed\n", current_step_);
@@ -149,6 +177,10 @@ void WizardActivity::go_next() {
 }
 
 void WizardActivity::go_back() {
+    if (nav_locked()) {
+        printf("[ui] wizard back ignored: busy\n");
+        return;
+    }
     if (current_step_ == 0) {
         printf("[ui] wizard back ignored on first step\n");
         return;

@@ -5,6 +5,7 @@
 #include "theme.h"
 #include "widgets.h"
 #include "worker_thread.h"
+#include "vault_helpers.h"
 #include <cstdio>
 
 struct Vault;
@@ -59,9 +60,10 @@ void LoadingScreen::worker_entry(void* arg) {
         printf("[vault] auto-unlock: vault unlocked\n");
     }
 
-    printf("[titles] listing titles...\n");
     {
         WebDavCfg dav = self->session_->dav.as_cfg();
+        vault_publish_local_if_absent(dav, WS_KEYS_PATH);
+        printf("[titles] listing titles...\n");
         self->ctx_.result.titles = list_titles(self->session_->vault, dav);
     }
     printf("[titles] done: %zu titles\n", self->ctx_.result.titles.size());

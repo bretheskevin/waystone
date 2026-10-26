@@ -29,6 +29,7 @@ extern "C" {
 #include "ui/unlock_activity.h"
 #include "ui/no_internet_activity.h"
 #include "ui/loading_activity.h"
+#include "ui/vault_helpers.h"
 #include "session_store.h"
 #include "updater.h"
 #include "log_rotate.h"
@@ -137,9 +138,8 @@ int main(int argc, char* argv[])
         // Choose SetupActivity or UnlockActivity based on whether keys.json exists.
         // Task 6: when session.bin exists, try auto-unlock via LoadingActivity first.
         auto route_to_first_screen = [&]() {
-            const char* keys_path = "sdmc:/waystone/keys.json";
             long klen = 0;
-            kbuf = read_keys_file(keys_path, &klen);
+            kbuf = read_keys_file(WS_KEYS_PATH, &klen);
             if (kbuf && klen > 0) {
                 if (session_store_exists()) {
                     auto worker = [&session]() -> LoadingActivity::LoadResult {
@@ -153,8 +153,7 @@ int main(int argc, char* argv[])
                         session.dav.pass       = std::move(webdav_pass);
                         zeroize_string(webdav_pass);
 
-                        auto titles = list_titles(session.vault, session.dav.as_cfg(), session.uid);
-                        return {true, "", std::move(titles)};
+                        return {true, "", load_titles_after_unlock(&session)};
                     };
 
                     // on_failure runs from RefreshPump::run() on the render thread.
