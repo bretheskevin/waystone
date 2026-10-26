@@ -219,13 +219,15 @@ void session_store_clear() {
     remove(SESSION_STORE_PATH);
 }
 
-void persist_session(WsVault* vault, const std::string& webdav_pass) {
+bool persist_session(WsVault* vault, const std::string& webdav_pass) {
     WsBuf mdk_buf = ws_vault_export_mdk(vault);
-    if (mdk_buf.ptr && mdk_buf.len == 32) {
-        session_store_save(mdk_buf.ptr, mdk_buf.len, webdav_pass);
-    }
+    bool ok = false;
+    if (mdk_buf.ptr && mdk_buf.len == 32) ok = session_store_save(mdk_buf.ptr, mdk_buf.len, webdav_pass);
+    else printf("[vault] persist_session: MDK export failed (len=%zu)\n", (size_t)mdk_buf.len);
     if (mdk_buf.ptr) secure_clear(mdk_buf.ptr, mdk_buf.len);
     ws_buf_free(mdk_buf);
+    printf("[vault] persist_session: %s\n", ok ? "saved" : "FAILED");
+    return ok;
 }
 
 WsVault* session_store_load_vault(std::string& pass_out) {

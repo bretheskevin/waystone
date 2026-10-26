@@ -58,7 +58,7 @@ static bool collect_local_save_app_ids(AccountUid uid, std::set<u64>& out) {
         return false;
     }
     FsSaveDataInfo infos[32];
-    size_t scanned = 0;
+    size_t scanned = 0, device = 0;
     for (;;) {
         s64 got = 0;
         rc = fsSaveDataInfoReaderRead(&reader, infos, 32, &got);
@@ -70,14 +70,20 @@ static bool collect_local_save_app_ids(AccountUid uid, std::set<u64>& out) {
         if (got <= 0) break;
         for (s64 i = 0; i < got; i++) {
             scanned++;
-            if (infos[i].save_data_type != FsSaveDataType_Account) continue;
+            const u8 type = infos[i].save_data_type;
+            if (type == FsSaveDataType_Device) {
+                out.insert(infos[i].application_id);
+                device++;
+                continue;
+            }
+            if (type != FsSaveDataType_Account) continue;
             if (memcmp(&infos[i].uid, &uid, sizeof(uid)) != 0) continue;
             out.insert(infos[i].application_id);
         }
     }
     fsSaveDataInfoReaderClose(&reader);
-    printf("[titles] local account saves: %zu title(s) for this user (%zu entries scanned)\n",
-           out.size(), scanned);
+    printf("[titles] local saves: %zu title(s) for this user incl. %zu device save(s) (%zu entries scanned)\n",
+           out.size(), device, scanned);
     return true;
 }
 
@@ -204,8 +210,9 @@ std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav, A
 }
 
 // Recursively walk a directory and collect all files as (relative_path, content) pairs.
-static void walk_dir(const char* base, const char* rel,
-                     std::vector<std::pair<std::string, std::vector<uint8_t>>>* out,
+typedef std::vector<std::pair<std::string, std::vector<uint8_t>>> WalkedFiles;
+
+static void walk_dir(const char* base, const char* rel, WalkedFiles* out,
                      long long* max_mtime) {
     std::string full = std::string(base);
     if (rel[0] != '\0') {
@@ -254,21 +261,38 @@ static void walk_dir(const char* base, const char* rel,
     closedir(d);
 }
 
-std::vector<uint8_t> extract_save_json(const TitleInfo& title, AccountUid uid, std::string* local_mtime) {
-    // Mount save data
-    Result rc = fsdevMountSaveData("save", title.title_id, uid);
+static const char* save_kind_name(SwitchSaveKind kind) {
+    return kind == SaveDevice ? "device" : "account";
+}
+
+static Result mount_save(const char* name, u64 title_id, AccountUid uid, SwitchSaveKind kind) {
+    return kind == SaveDevice ? fsdevMountDeviceSaveData(name, title_id)
+                              : fsdevMountSaveData(name, title_id, uid);
+}
+
+// Mount + walk one save into `out` under "<title>/<slot>/<rel>". false when it does not mount.
+static bool extract_slot(const TitleInfo& title, AccountUid uid, SwitchSaveKind kind,
+                         WalkedFiles* out, long long* max_mtime) {
+    Result rc = mount_save("save", title.title_id, uid, kind);
     if (R_FAILED(rc)) {
-        // FsError_TargetNotFound = 0x7D402 means no save exists for this title+user
-        printf("[saves] fsdevMountSaveData failed: 0x%X\n", rc);
-        return std::vector<uint8_t>();
+        // 0x7D402 (TargetNotFound) = no such save for this title(+user): expected for most device saves
+        printf("[saves] %s: no %s save (mount rc=0x%X)\n", title.name.c_str(), save_kind_name(kind), rc);
+        return false;
     }
-
-    // Walk the mounted filesystem
-    std::vector<std::pair<std::string, std::vector<uint8_t>>> files;
-    long long max_mtime = 0;
-    walk_dir("save:", "", &files, &max_mtime);
-
+    WalkedFiles files;
+    walk_dir("save:", "", &files, max_mtime);
     fsdevUnmountDevice("save");
+    const char* slot = save_kind_slot(kind);
+    printf("[saves] %s save %016lX: %zu file(s) -> slot=%s\n", save_kind_name(kind),
+           (unsigned long)title.title_id, files.size(), slot);
+    for (auto& f : files) out->push_back({title.name + "/" + slot + "/" + f.first, std::move(f.second)});
+    return true;
+}
+
+std::vector<uint8_t> extract_save_json(const TitleInfo& title, AccountUid uid, std::string* local_mtime) {
+    WalkedFiles wrapped;
+    long long max_mtime = 0;
+    for (SwitchSaveKind kind : SWITCH_SAVE_KINDS) extract_slot(title, uid, kind, &wrapped, &max_mtime);
 
     if (local_mtime) {
         *local_mtime = plausible_mtime_iso(max_mtime, (long long)time(nullptr));
@@ -276,16 +300,7 @@ std::vector<uint8_t> extract_save_json(const TitleInfo& title, AccountUid uid, s
                local_mtime->empty() ? "(unusable -> NewestWins treated as Prompt)" : local_mtime->c_str());
     }
 
-    if (files.empty()) return std::vector<uint8_t>();
-
-    // Wrap file paths in JKSV convention: <GameName>/main/<relative_path>
-    // This lets ws_jksv_normalize parse title_dir=<GameName>, slot="main".
-    std::vector<std::pair<std::string, std::vector<uint8_t>>> wrapped;
-    wrapped.reserve(files.size());
-    for (auto& f : files) {
-        std::string jksv_path = title.name + "/main/" + f.first;
-        wrapped.push_back({jksv_path, std::move(f.second)});
-    }
+    if (wrapped.empty()) return std::vector<uint8_t>();
 
     std::vector<uint8_t> tree = file_tree_encode(wrapped);
     printf("[saves] extracted %zu files -> file tree %zu bytes\n", wrapped.size(), tree.size());
@@ -352,7 +367,7 @@ std::string get_device_id() {
     return std::string(hex, 32);
 }
 
-int write_save_files(u64 title_id, AccountUid uid,
+int write_save_files(u64 title_id, AccountUid uid, SwitchSaveKind kind,
                      const uint8_t* ft_ptr, size_t ft_len) {
     std::vector<FileTreeEntry> entries;
     if (!file_tree_decode(ft_ptr, ft_len, &entries)) {
@@ -360,12 +375,14 @@ int write_save_files(u64 title_id, AccountUid uid,
         return -1;
     }
 
-    Result rc = fsdevMountSaveData("save", title_id, uid);
+    Result rc = mount_save("save", title_id, uid, kind);
     if (R_FAILED(rc)) {
-        printf("[saves] write_save_files: fsdevMountSaveData failed: 0x%X\n", rc);
+        printf("[saves] write_save_files: mount %s save tid=%016lX failed: 0x%X\n",
+               save_kind_name(kind), (unsigned long)title_id, rc);
         return -1;
     }
-    printf("[saves] write_save_files: %zu files\n", entries.size());
+    printf("[saves] write_save_files: %s save tid=%016lX, %zu files\n", save_kind_name(kind),
+           (unsigned long)title_id, entries.size());
 
     int ret = 0;
 
@@ -416,7 +433,9 @@ int write_save_files(u64 title_id, AccountUid uid,
     }
 
     // REQUIRED: flush pending writes to the underlying FsFileSystem.
-    fsdevCommitDevice("save");
+    Result crc = fsdevCommitDevice("save");
+    printf("[saves] write_save_files: commit %s save rc=0x%X, result=%d\n", save_kind_name(kind), crc, ret);
+    if (R_FAILED(crc)) ret = -1;
     fsdevUnmountDevice("save");
     return ret;
 }

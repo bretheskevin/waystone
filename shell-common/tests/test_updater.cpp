@@ -1,9 +1,11 @@
 // Host-only test for the updater's pure logic: version compare + release JSON parse.
 // Build (from repo root):
+//   cargo build -p waystone-ffi
 //   g++ -std=c++11 -fno-exceptions -fno-rtti -Wall -Wextra \
-//     -I shell-common \
+//     -I shell-common -I ffi/include \
 //     shell-common/tests/test_updater.cpp shell-common/updater.cpp \
-//     shell-common/json.cpp shell-common/base64.cpp -o /tmp/test_updater && /tmp/test_updater
+//     shell-common/json.cpp shell-common/base64.cpp \
+//     target/debug/libwaystone_ffi.a -liconv -lSystem -lc -lm -o /tmp/test_updater && /tmp/test_updater
 // json.cpp is linked only because it is the SOLE jsmn implementation TU.
 #include "updater.h"
 #include "net.h"   // for the http_* signatures stubbed below

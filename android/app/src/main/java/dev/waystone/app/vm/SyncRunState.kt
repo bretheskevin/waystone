@@ -1,8 +1,8 @@
 package dev.waystone.app.vm
 
-import dev.waystone.data.sync.SyncPhase
 import dev.waystone.data.sync.SyncProgress
-import dev.waystone.data.sync.SyncSummary
+import uniffi.waystone_mobile.SyncPhase
+import uniffi.waystone_mobile.SyncSummary
 
 data class SyncRunState(
     val total: Int = 0,
@@ -23,7 +23,7 @@ data class SyncRunState(
 
     fun reduce(p: SyncProgress): SyncRunState = when (p) {
         is SyncProgress.Started -> copy(total = p.total)
-        is SyncProgress.Item -> copy(index = p.index, currentName = p.save.displayName, phase = p.phase)
+        is SyncProgress.Item -> copy(index = p.index, currentName = p.displayName, phase = p.phase)
         is SyncProgress.Done -> copy(summary = p.summary, phase = null)
     }
 }

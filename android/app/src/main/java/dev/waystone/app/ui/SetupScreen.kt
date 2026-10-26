@@ -25,6 +25,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import dev.waystone.app.log.Log
+import dev.waystone.app.vm.RecoveryFile
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import dev.waystone.app.ui.theme.LocalWaystoneSpacing
 import dev.waystone.app.ui.theme.LocalWaystoneTypography
 import dev.waystone.app.vm.SetupReady
@@ -43,9 +51,10 @@ fun SetupScreen(
     var passphrase by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf("") }
 
-    val recoveryHex = (state as? UiState.Ready)?.data?.recoveryHex.orEmpty()
+    val ready = (state as? UiState.Ready)?.data
+    val recoveryHex = ready?.recoveryHex.orEmpty()
     if (recoveryHex.isNotEmpty()) {
-        RecoveryKeySheet(recoveryHex = recoveryHex, onAcknowledged = onRecoveryAcknowledged)
+        RecoveryKeySheet(recoveryHex = recoveryHex, deviceId = ready?.deviceId.orEmpty(), onAcknowledged = onRecoveryAcknowledged)
     }
 
     Column(
@@ -114,8 +123,19 @@ fun SetupScreen(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun RecoveryKeySheet(recoveryHex: String, onAcknowledged: () -> Unit) {
+fun RecoveryKeySheet(recoveryHex: String, deviceId: String, onAcknowledged: () -> Unit) {
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val saveToFile = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        if (uri != null) scope.launch(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri)?.use { it.write(RecoveryFile.content(recoveryHex).toByteArray()) }
+                    ?: error("no output stream")
+            }.onSuccess { Log.i("WS:SETUP", "recovery key saved to file") }
+                .onFailure { Log.e("WS:SETUP", "recovery key save failed: ${it.javaClass.simpleName}") }
+        }
+    }
     ModalBottomSheet(onDismissRequest = onAcknowledged) {
         Column(
             modifier = Modifier
@@ -134,6 +154,9 @@ fun RecoveryKeySheet(recoveryHex: String, onAcknowledged: () -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(LocalWaystoneSpacing.current.Sm)) {
                 OutlinedButton(onClick = { clipboard.setText(AnnotatedString(recoveryHex)) }) {
                     Text("Copy")
+                }
+                OutlinedButton(onClick = { saveToFile.launch(RecoveryFile.defaultName(deviceId)) }) {
+                    Text("Save to file")
                 }
                 Button(onClick = onAcknowledged) {
                     Text("I saved it")

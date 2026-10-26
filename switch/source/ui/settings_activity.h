@@ -15,6 +15,7 @@ class SettingsActivity : public brls::Activity {
     Session* session_;
     brls::Label* server_label_  = nullptr;
     brls::Label* user_label_    = nullptr;
+    brls::Label* password_label_ = nullptr;
     brls::Label* policy_label_  = nullptr;
     brls::Label* backup_label_  = nullptr;
     brls::Label* device_label_  = nullptr;

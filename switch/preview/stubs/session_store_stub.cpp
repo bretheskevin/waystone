@@ -5,4 +5,4 @@ bool session_store_save(const uint8_t*, size_t, const std::string&) { return tru
 bool session_store_load(uint8_t*, size_t, std::string&) { return false; }
 bool session_store_exists() { return false; }
 void session_store_clear() {}
-void persist_session(WsVault*, const std::string&) {}
+bool persist_session(WsVault*, const std::string&) { return true; }

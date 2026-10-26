@@ -77,6 +77,20 @@ brls::View* SettingsActivity::createContentView()
     });
     col->addView(user_label_);
 
+    password_label_ = new brls::Label();
+    password_label_->setFontSize(20.0f);
+    password_label_->setFocusable(true);
+    password_label_->registerClickAction([this](brls::View*) {
+        if (banner_active()) return false;
+        std::string val = swkbd_prompt("WebDAV Password", "", true);
+        if (update_webdav_pass(session_->vault, session_->dav.pass, val)) {
+            status_label_->setText("WebDAV password updated");
+            refresh_labels();
+        }
+        return true;
+    });
+    col->addView(password_label_);
+
     policy_label_ = new brls::Label();
     policy_label_->setFontSize(20.0f);
     policy_label_->setFocusable(true);
@@ -224,6 +238,7 @@ void SettingsActivity::refresh_labels()
 {
     server_label_->setText("Server: " + session_->config.server_url);
     user_label_->setText("Username: " + session_->config.username);
+    password_label_->setText(webdav_pass_label(session_->dav.pass));
 
     const char* policy_name =
         (session_->config.conflict_policy == WsConflictPolicy::Prompt) ? "Prompt" : "Newest Wins";

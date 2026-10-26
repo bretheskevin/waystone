@@ -5,13 +5,14 @@ import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import dev.waystone.data.roms.RomFileSource
 import java.io.InputStream
+import java.util.concurrent.ConcurrentHashMap
 import java.util.logging.Level
 import java.util.logging.Logger
 
 class SafRomFileSource(private val context: Context, private val treeUri: Uri) : RomFileSource {
 
     private val log = Logger.getLogger(SafRomFileSource::class.java.name)
-    private val docs = HashMap<String, DocumentFile>()
+    private val docs = ConcurrentHashMap<String, DocumentFile>()
 
     override fun listPaths(maxDepth: Int): List<String> {
         docs.clear()
@@ -35,7 +36,7 @@ class SafRomFileSource(private val context: Context, private val treeUri: Uri) :
     }
 
     override fun open(path: String): InputStream? {
-        val doc = docs[path] ?: run {
+        val doc = docs[path] ?: resolve(path) ?: run {
             log.warning("[roms] SAF open: unknown path $path")
             return null
         }
@@ -45,5 +46,14 @@ class SafRomFileSource(private val context: Context, private val treeUri: Uri) :
             log.log(Level.WARNING, "[roms] SAF open failed for $path", e)
             null
         }
+    }
+
+    // Paths this instance never listed (art lookups, e.g. TWiLight box art): walk the segments.
+    private fun resolve(path: String): DocumentFile? {
+        var node = DocumentFile.fromTreeUri(context, treeUri) ?: return null
+        for (segment in path.split('/').filter { it.isNotEmpty() }) {
+            node = node.findFile(segment) ?: return null
+        }
+        return node.takeIf { it.isFile }
     }
 }

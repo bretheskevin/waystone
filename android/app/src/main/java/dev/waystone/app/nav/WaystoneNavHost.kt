@@ -16,6 +16,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import dev.waystone.app.ServiceLocator
+import androidx.compose.runtime.rememberCoroutineScope
+import dev.waystone.app.log.Log
+import dev.waystone.app.ui.NoInternetScreen
+import dev.waystone.data.net.NoInternetReason
+import dev.waystone.data.sync.runCatchingCancellable
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import dev.waystone.app.ui.ConflictsScreen
 import dev.waystone.app.ui.DashboardScreen
 import dev.waystone.app.ui.HistoryScreen
@@ -39,6 +46,31 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
     val session: SessionViewModel = viewModel(viewModelStoreOwner = activity)
 
     NavHost(navController = navController, startDestination = startDestination) {
+        composable(Routes.NO_INTERNET) {
+            val scope = rememberCoroutineScope()
+            NoInternetScreen(
+                reason = NoInternetReason.NoNetwork,
+                onRetry = {
+                    val online = ServiceLocator.networkMonitor.isOnline()
+                    Log.i("WS:APP", "no-internet retry: online=$online")
+                    if (online) {
+                        scope.launch {
+                            if (navController.previousBackStackEntry != null) {
+                                navController.popBackStack()
+                            } else {
+                                val url = runCatchingCancellable { ServiceLocator.settingsStore.load().serverUrl }.getOrNull()
+                                navController.navigate(StartDestinationResolver.resolve(url, true)) {
+                                    popUpTo(Routes.NO_INTERNET) { inclusive = true }
+                                }
+                            }
+                        }
+                    }
+                    online
+                },
+                onExit = { activity.finish() },
+            )
+        }
+
         composable(Routes.SETUP) {
             val vm: SetupViewModel = viewModel(
                 factory = viewModelFactory { initializer {
@@ -53,7 +85,7 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                 },
             )
             val state by vm.uiState.collectAsState()
-            NavEventEffect(vm.navigateTo.value, navController, vm::consumeNavigation)
+            NavEventEffect(vm.navigateTo, navController, vm::consumeNavigation)
             SetupScreen(
                 state = state,
                 onSubmit = vm::submit,
@@ -79,7 +111,7 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
             val passphrase by vm.passphrase.collectAsState()
             val useRecovery by vm.useRecoveryKey.collectAsState()
             val needsWebdav by vm.needsWebdavPassword.collectAsState()
-            NavEventEffect(vm.navigateTo.value, navController, vm::consumeNavigation)
+            NavEventEffect(vm.navigateTo, navController, vm::consumeNavigation)
             UnlockScreen(
                 state = state,
                 passphrase = passphrase,
@@ -101,11 +133,14 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                         ServiceLocator.settingsProvider,
                         ServiceLocator.saveSourceProvider,
                         ServiceLocator.snapshotStoreProvider,
+                        ServiceLocator.networkMonitor,
                     )
                     }
                 },
             )
             val state by vm.uiState.collectAsState()
+            NavEventEffect(vm.navigateTo, navController, vm::consumeNavigation)
+            LaunchedEffect(Unit) { vm.refreshIfSkippedOffline() }
             val syncRun by vm.syncRun.collectAsState()
             DashboardScreen(
                 state = state,
@@ -122,6 +157,7 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                 syncRun = syncRun,
                 onCancelSync = vm::cancelSync,
                 onCloseSync = vm::dismissSync,
+                loadArt = vm::artFor,
             )
         }
 
@@ -139,7 +175,7 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                 },
             )
             val state by vm.state.collectAsState()
-            NavEventEffect(vm.navigateTo.value, navController, vm::consumeNavigation)
+            NavEventEffect(vm.navigateTo, navController, vm::consumeNavigation)
             ConflictsScreen(
                 state = state,
                 onKeepLocal = vm::keepLocal,
@@ -205,8 +241,17 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                 },
             )
             val state by vm.uiState.collectAsState()
-            NavEventEffect(vm.navigateTo.value, navController, vm::consumeNavigation)
+            NavEventEffect(vm.navigateTo, navController, vm::consumeNavigation)
             val updatePhase by vm.updater.phase.collectAsState()
+            val logsStatus by vm.logsStatus.collectAsState()
+            val shareIntent by vm.shareLogsIntent.collectAsState()
+            val context = LocalContext.current
+            LaunchedEffect(shareIntent) {
+                shareIntent?.let {
+                    context.startActivity(it)
+                    vm.consumeShareLogs()
+                }
+            }
             SettingsScreen(
                 state = state,
                 onChangeServer = vm::changeServer,
@@ -218,13 +263,17 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                 onInstallUpdate = vm.updater::downloadAndInstall,
                 onCancelUpdate = vm.updater::cancel,
                 onOpenInstallPermission = vm::openInstallPermissionSettings,
+                logsStatus = logsStatus,
+                onShareLogs = vm::shareLogs,
             )
         }
     }
 }
 
+/** Collects [events] so a nav event fires even when nothing else on the screen recomposes. */
 @Composable
-private fun NavEventEffect(event: String?, navController: NavHostController, onConsumed: () -> Unit) {
+private fun NavEventEffect(events: StateFlow<String?>, navController: NavHostController, onConsumed: () -> Unit) {
+    val event by events.collectAsState()
     LaunchedEffect(event) {
         event?.let {
             navController.navigate(it)

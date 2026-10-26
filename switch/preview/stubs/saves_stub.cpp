@@ -34,7 +34,7 @@ std::string get_device_id()
     return "preview-device-0000000000000000";
 }
 
-int write_save_files(u64 /*title_id*/, AccountUid /*uid*/, const uint8_t* /*ft_ptr*/, size_t /*ft_len*/)
+int write_save_files(u64 /*title_id*/, AccountUid /*uid*/, SwitchSaveKind /*kind*/, const uint8_t* /*ft_ptr*/, size_t /*ft_len*/)
 {
     return 0;
 }

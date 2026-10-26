@@ -54,11 +54,4 @@ class RemoteOnlyProbeTest {
         assertTrue(found.isEmpty())
         assertTrue(dav.propfinds.isEmpty())
     }
-
-    @Test
-    fun `href last segment handles trailing slashes and full URLs`() {
-        assertEquals("abc", RemoteOnlyProbe.hrefLastSegment("/dav/x/abc/"))
-        assertEquals("abc", RemoteOnlyProbe.hrefLastSegment("abc"))
-        assertEquals("", RemoteOnlyProbe.hrefLastSegment("/"))
-    }
 }

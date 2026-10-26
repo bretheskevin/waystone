@@ -3,6 +3,7 @@ package dev.waystone.app.vm
 import dev.waystone.data.config.Settings
 import dev.waystone.data.config.SourceFolder
 import dev.waystone.data.roms.RemoteOnlyProbe
+import dev.waystone.data.roms.RomArt
 import dev.waystone.data.sync.SyncRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -26,6 +27,10 @@ interface SessionVaultStore {
     suspend fun clear()
 }
 
+interface NetworkMonitor {
+    fun isOnline(): Boolean
+}
+
 interface DavFactory {
     suspend fun create(serverUrl: String, username: String, password: String): WebDav
 }
@@ -45,6 +50,9 @@ interface SaveSourceProvider {
     /** With [probe], rom_keyed sources also return remote-only slots (files empty, see isRemoteOnly). */
     suspend fun scanSources(settings: Settings, probe: RemoteOnlyProbe? = null): List<SourceScan>
     suspend fun findSave(settings: Settings, groupKey: String): Pair<SourceFolder, NormalizedSave>?
+
+    /** Box art / NDS banner icon for a ROM-keyed row ([artKey] = `system/romId`); null = use the fallback tile. */
+    suspend fun romArt(folder: SourceFolder, artKey: String): RomArt?
 
     // Blocking SAF write; callers invoke on an IO dispatcher (guardedRestore's write lambda is not suspend).
     // `save` lets ROM-keyed sources map canonical files to the local ROM's native save names.

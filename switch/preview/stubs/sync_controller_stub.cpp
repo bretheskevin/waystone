@@ -27,6 +27,17 @@ static std::vector<TitleInfo> make_fixture_titles() {
     add(0x0100F2C0115B6000ULL, "The Legend of Zelda: Breath of the Wild");
     add(0x0100A3D008C5C000ULL, "The Legend of Zelda: Tears of the Kingdom");
     add(0x01007EF00011E000ULL, "The Legend of Zelda: Echoes of Wisdom");
+    auto add_rom = [&](const char* system, const char* name, bool with_icon) {
+        TitleInfo t;
+        t.title_id  = 0x8000000000000000ULL | (uint64_t)v.size();
+        t.name      = name;
+        t.source    = SourceRom;
+        t.system    = system;
+        if (with_icon) t.icon_path = PREVIEW_ICON;
+        v.push_back(t);
+    };
+    add_rom("nds", "Pokémon Platine (banner icon)", true);
+    add_rom("gba", "Metroid Fusion (no art: tinted fallback)", false);
     add(0x0100000000010000ULL, "Super Mario Odyssey");
     add(0x010000001B500000ULL, "Pokémon Écarlate");
     add(0x0100ABF008968000ULL, "Metroid Dread");

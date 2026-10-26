@@ -1,7 +1,7 @@
 package dev.waystone.app.vm
 
 import android.app.Application
-import android.util.Log
+import dev.waystone.app.log.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -53,7 +53,7 @@ class HistoryViewModel(
         }
     }
 
-    // Force-pull by hash: fetch the historical blob (already decrypted) and restore it locally.
+    // Force-restore by hash through the engine (fetch + unzip in Rust); this device's head is untouched.
     fun restore(hash: String) {
         viewModelScope.launch {
             runCatching {
@@ -61,16 +61,17 @@ class HistoryViewModel(
                 val (folder, save) = saveSourceProvider.findSave(loaded, groupKey)
                     ?: error("Save not found: $groupKey")
                 val repo = session.syncRepo() ?: error("Vault is locked")
-                val files = repo.keepRemoteFiles(save, hash)
-                restoreIntoSource(
-                    repo = repo,
-                    save = save,
-                    folder = folder,
-                    files = files,
-                    saveSourceProvider = saveSourceProvider,
-                    snapshotStoreProvider = snapshotStoreProvider,
-                    safetyBackup = loaded.safetyBackup,
-                )
+                repo.restoreHash(save, hash) { files ->
+                    restoreIntoSource(
+                        repo = repo,
+                        save = save,
+                        folder = folder,
+                        files = files,
+                        saveSourceProvider = saveSourceProvider,
+                        snapshotStoreProvider = snapshotStoreProvider,
+                        safetyBackup = loaded.safetyBackup,
+                    )
+                }
             }.onSuccess { ok ->
                 Log.i(TAG, "restored $groupKey @ ${hash.take(12)} (restored=$ok)")
                 refresh()

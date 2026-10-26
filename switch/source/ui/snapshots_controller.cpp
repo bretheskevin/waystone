@@ -96,35 +96,43 @@ void SnapshotsController::restore_worker(SnapshotEntry entry, size_t index) {
         }
     }
 
-    // 2. Read the selected snapshot into a binary file tree
-    printf("[snapshot] reading snapshot %s\n", entry.path.c_str());
-    std::vector<uint8_t> file_tree;
-    int fcount = snapshot_to_file_tree(entry.path.c_str(), nullptr, &file_tree);
-    if (fcount < 0) {
-        printf("[snapshot] snapshot_to_file_tree failed\n");
-        { std::lock_guard<std::mutex> lk(mu_);
-          status_ = "Restore failed: could not read snapshot."; }
-        phase_.store(BrowsePhase::Error);
-        running_.store(false);
-        return;
+    // 2. Restore each slot to its mount: "main" -> account save, "device" -> device save.
+    // A slot absent from the snapshot is skipped; only a genuine I/O failure aborts.
+    bool any_written = false;
+    for (SwitchSaveKind kind : SWITCH_SAVE_KINDS) {
+        const char* slot = save_kind_slot(kind);
+        printf("[snapshot] reading snapshot %s slot=%s\n", entry.path.c_str(), slot);
+        std::vector<uint8_t> file_tree;
+        int fcount = snapshot_to_file_tree(entry.path.c_str(), slot, &file_tree);
+        if (fcount < 0) {
+            printf("[snapshot] snapshot_to_file_tree failed slot=%s\n", slot);
+            { std::lock_guard<std::mutex> lk(mu_);
+              status_ = "Restore failed: could not read snapshot."; }
+            phase_.store(BrowsePhase::Error);
+            running_.store(false);
+            return;
+        }
+        if (fcount == 0) {
+            printf("[snapshot] slot=%s has no files in snapshot, skipping\n", slot);
+            continue;
+        }
+        printf("[snapshot] writing slot=%s files=%d (%zu bytes) for title %016lX\n", slot, fcount,
+               file_tree.size(), title_.title_id);
+        int wrc = write_save_files(title_.title_id, uid_, kind, file_tree.data(), file_tree.size());
+        if (wrc != 0) {
+            printf("[snapshot] write_save_files FAILED slot=%s (rc=%d)\n", slot, wrc);
+            { std::lock_guard<std::mutex> lk(mu_);
+              status_ = "Restore failed: write error."; }
+            phase_.store(BrowsePhase::Error);
+            running_.store(false);
+            return;
+        }
+        any_written = true;
     }
-    printf("[snapshot] snapshot has %d files (%zu bytes)\n", fcount, file_tree.size());
-    if (fcount == 0) {
+    if (!any_written) {
         { std::lock_guard<std::mutex> lk(mu_);
           status_ = "Snapshot is empty, nothing to restore."; }
         phase_.store(BrowsePhase::Done);
-        running_.store(false);
-        return;
-    }
-
-    // 3. Write the snapshot files to the save mount
-    printf("[snapshot] writing save files for title %016lX\n", title_.title_id);
-    int wrc = write_save_files(title_.title_id, uid_, file_tree.data(), file_tree.size());
-    if (wrc != 0) {
-        printf("[snapshot] write_save_files FAILED (rc=%d)\n", wrc);
-        { std::lock_guard<std::mutex> lk(mu_);
-          status_ = "Restore failed: write error."; }
-        phase_.store(BrowsePhase::Error);
         running_.store(false);
         return;
     }

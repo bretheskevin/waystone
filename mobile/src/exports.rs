@@ -23,7 +23,9 @@ use waystone_core::rom_id::{
 use waystone_core::rom_pair::pair_roms_external;
 use waystone_core::rom_systems::{rom_system, slot_names};
 
-fn to_core_save(save: &NormalizedSave) -> Result<core_model::NormalizedSave, WaystoneError> {
+pub(crate) fn to_core_save(
+    save: &NormalizedSave,
+) -> Result<core_model::NormalizedSave, WaystoneError> {
     Ok(core_model::NormalizedSave {
         id: core_model::SaveId {
             source: save.source.clone(),
@@ -53,7 +55,7 @@ fn to_core_save(save: &NormalizedSave) -> Result<core_model::NormalizedSave, Way
     })
 }
 
-fn from_core_save(save: &core_model::NormalizedSave) -> NormalizedSave {
+pub(crate) fn from_core_save(save: &core_model::NormalizedSave) -> NormalizedSave {
     NormalizedSave {
         source: save.id.source.clone(),
         system: save.id.system.as_str().to_string(),
@@ -86,7 +88,7 @@ fn from_core_save(save: &core_model::NormalizedSave) -> NormalizedSave {
     }
 }
 
-fn parse_system(s: &str) -> Result<core_model::SystemId, WaystoneError> {
+pub(crate) fn parse_system(s: &str) -> Result<core_model::SystemId, WaystoneError> {
     core_model::SystemId::parse(s).ok_or_else(|| WaystoneError::InvalidSystem {
         system: s.to_string(),
     })
@@ -100,7 +102,7 @@ fn parse_kind(s: &str) -> core_model::SaveKind {
     }
 }
 
-fn from_core_decision(d: &waystone_core::conflict::SyncDecision) -> SyncDecision {
+pub(crate) fn from_core_decision(d: &waystone_core::conflict::SyncDecision) -> SyncDecision {
     match d {
         waystone_core::conflict::SyncDecision::InSync => SyncDecision::InSync,
         waystone_core::conflict::SyncDecision::Push => SyncDecision::Push,
@@ -127,7 +129,9 @@ fn from_core_decision(d: &waystone_core::conflict::SyncDecision) -> SyncDecision
     }
 }
 
-fn map_conflict_policy(policy: ConflictPolicy) -> waystone_core::conflict::ConflictPolicy {
+pub(crate) fn map_conflict_policy(
+    policy: ConflictPolicy,
+) -> waystone_core::conflict::ConflictPolicy {
     match policy {
         ConflictPolicy::NewestWins => waystone_core::conflict::ConflictPolicy::NewestWins,
         ConflictPolicy::Prompt => waystone_core::conflict::ConflictPolicy::Prompt,
@@ -313,14 +317,8 @@ pub fn decide_pull(
     device_id: String,
     policy: ConflictPolicy,
 ) -> Result<SyncDecision, WaystoneError> {
-    let core_heads: Vec<waystone_core::conflict::DeviceHead> = heads
-        .into_iter()
-        .map(|h| waystone_core::conflict::DeviceHead {
-            device_id: h.device_id,
-            hash: h.hash,
-            mtime: h.mtime,
-        })
-        .collect();
+    let core_heads: Vec<waystone_core::conflict::DeviceHead> =
+        heads.into_iter().map(Into::into).collect();
     Ok(from_core_decision(&waystone_core::conflict::decide_pull(
         local_hash.as_deref(),
         &local_mtime,
@@ -333,14 +331,8 @@ pub fn decide_pull(
 // MergedHead has no device_id; the empty string is intentional.
 #[uniffi::export]
 pub fn fold_heads(heads: Vec<DeviceHead>) -> Option<DeviceHead> {
-    let core_heads: Vec<waystone_core::conflict::DeviceHead> = heads
-        .into_iter()
-        .map(|h| waystone_core::conflict::DeviceHead {
-            device_id: h.device_id,
-            hash: h.hash,
-            mtime: h.mtime,
-        })
-        .collect();
+    let core_heads: Vec<waystone_core::conflict::DeviceHead> =
+        heads.into_iter().map(Into::into).collect();
     waystone_core::conflict::fold_heads(&core_heads).map(|m| DeviceHead {
         device_id: String::new(),
         hash: m.hash,
@@ -476,4 +468,61 @@ pub fn rom_keyed_to_native(
         .map(|(path, content)| core_model::RawFile { path, content })
         .collect(),
     })
+}
+
+#[uniffi::export]
+pub fn version_newer(latest: String, current: String) -> bool {
+    waystone_core::version::version_newer(&latest, &current)
+}
+
+/// Strips `user:pass@` from a URL before it reaches a (shareable) log line.
+#[uniffi::export]
+pub fn redact_url(url: String) -> String {
+    waystone_core::url::redact_userinfo(&url)
+}
+
+#[uniffi::export]
+pub fn nds_banner_offset(header: Vec<u8>) -> Option<u32> {
+    waystone_core::nds_banner::nds_banner_offset(&header)
+}
+
+#[uniffi::export]
+pub fn nds_banner_len() -> u32 {
+    waystone_core::nds_banner::NDS_BANNER_LEN as u32
+}
+
+#[uniffi::export]
+pub fn nds_icon_side() -> u32 {
+    waystone_core::nds_banner::NDS_ICON_SIDE as u32
+}
+
+#[uniffi::export]
+pub fn nds_banner_icon_rgba(banner: Vec<u8>) -> Option<Vec<u8>> {
+    waystone_core::nds_banner::nds_banner_icon_rgba(&banner)
+}
+
+#[uniffi::export]
+pub fn nds_banner_title(banner: Vec<u8>) -> String {
+    waystone_core::nds_banner::nds_banner_title(&banner)
+}
+
+#[uniffi::export]
+pub fn twilight_boxart_paths(rom_file_name: String) -> Vec<String> {
+    waystone_core::rom_art::twilight_boxart_paths(&rom_file_name)
+}
+
+#[uniffi::export]
+pub fn retroarch_boxart_path(
+    system: String,
+    rom_file_name: String,
+) -> Result<Option<String>, WaystoneError> {
+    Ok(waystone_core::rom_art::retroarch_boxart_path(
+        parse_system(&system)?,
+        &rom_file_name,
+    ))
+}
+
+#[uniffi::export]
+pub fn rom_system_badge(system: String) -> String {
+    waystone_core::rom_art::system_badge(&system).to_string()
 }

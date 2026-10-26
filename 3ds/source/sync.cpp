@@ -2,6 +2,8 @@
 #include "sync_rules.h"
 #include "sync_summary.h"  // href_last_segment
 #include "rom_parse.h"
+#include "rom_io.h"
+#include "file_tree.h"
 
 #include <3ds.h>
 #include <sys/stat.h>
@@ -10,18 +12,15 @@
 #include <ctime>
 #include <set>
 
-extern "C" {
-#include "waystone.h"
-}
-
-static const char* ffi_err() { return ws_last_error() ? ws_last_error() : "unknown"; }
+#include "ffi_err.h"
 
 static WsBuf normalize_title(const TitleInfo& title, const std::vector<uint8_t>& raw) {
     if (title.source == SourceRom) {
-        printf("[sync] normalize rom system=%s rom_id=%s file=%s\n", title.system.c_str(),
-               title.rom_id.c_str(), title.rom_file_name.c_str());
-        return ws_rom_keyed_normalize(title.system.c_str(), title.rom_id.c_str(), title.name.c_str(),
-                                      title.rom_file_name.c_str(), raw.data(), raw.size());
+        printf("[sync] normalize rom system=%s rom_id=%s file=%s flavor=%s\n", title.system.c_str(),
+               title.rom_id.c_str(), title.rom_file_name.c_str(), title.flavor.c_str());
+        return ws_rom_keyed_normalize_flavored(title.system.c_str(), title.rom_id.c_str(),
+                                               title.name.c_str(), title.rom_file_name.c_str(),
+                                               title.flavor.c_str(), raw.data(), raw.size());
     }
     return ws_checkpoint_normalize("3ds", raw.data(), raw.size());
 }
@@ -131,10 +130,16 @@ static int ctr_write_save(void*, const void* tp, const std::string& group_key,
 
     if (title.source == SourceRom) {
         WsBuf native = {nullptr, 0};
-        int nrc = ws_rom_keyed_to_native(title.system.c_str(), slot.c_str(),
-                                         title.rom_file_name.c_str(), tree, tree_len, &native);
+        std::vector<FileTreeEntry> current;
+        rom_read_save_entries(title.save_paths, "", false, &current);
+        std::vector<uint8_t> existing = file_tree_encode(current);
+        printf("[sync] rom flavor=%s restore %s existing=%zu file(s)\n", title.flavor.c_str(),
+               group_key.c_str(), current.size());
+        int nrc = ws_rom_keyed_to_native_flavored(title.system.c_str(), slot.c_str(),
+                                                  title.rom_file_name.c_str(), title.flavor.c_str(),
+                                                  tree, tree_len, existing.data(), existing.size(), &native);
         if (nrc != 0) {
-            printf("[sync] ws_rom_keyed_to_native failed for %s: %s\n", group_key.c_str(), ffi_err());
+            printf("[sync] ws_rom_keyed_to_native_flavored failed for %s: %s\n", group_key.c_str(), ffi_err());
             return -1;
         }
         printf("[saves] rom restore %s -> dir=%s (%zu bytes native tree)\n", group_key.c_str(),

@@ -42,6 +42,8 @@ fun SettingsScreen(
     onInstallUpdate: () -> Unit,
     onCancelUpdate: () -> Unit,
     onOpenInstallPermission: () -> Unit,
+    logsStatus: String?,
+    onShareLogs: () -> Unit,
 ) {
     when (state) {
         is UiState.Loading -> LoadingView()
@@ -126,6 +128,9 @@ fun SettingsScreen(
                 Text("Version", style = LocalWaystoneTypography.current.sm)
                 Text("Waystone v${ready.appVersion}", style = LocalWaystoneTypography.current.monoSm)
                 UpdateSection(updatePhase, onCheckUpdates, onInstallUpdate, onCancelUpdate, onOpenInstallPermission)
+
+                OutlinedButton(onClick = onShareLogs, modifier = Modifier.fillMaxWidth()) { Text("Share logs") }
+                logsStatus?.let { Text(it, style = LocalWaystoneTypography.current.sm) }
 
                 OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) {
                     Text("Log out")

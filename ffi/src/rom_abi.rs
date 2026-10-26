@@ -1,4 +1,4 @@
-use crate::adapter_abi::{cstr_arg, parse_system_ptr};
+use crate::adapter_abi::{cstr_arg, flavor_arg, parse_system_ptr};
 use crate::buffer::{WsBuf, owned_c_string};
 use crate::error::{catch_and_set_error, set_last_error};
 use alloc::boxed::Box;
@@ -8,8 +8,11 @@ use core::ffi::{c_char, c_void};
 use waystone_core::crc32::crc32_update;
 use waystone_core::iso9660::{cue_first_data_file, psx_boot_serial, psx_fallback_id};
 use waystone_core::model::SystemId;
+use waystone_core::nds_banner::{nds_banner_icon_rgba, nds_banner_offset, nds_banner_title};
+use waystone_core::rom_art::{retroarch_boxart_path, twilight_boxart_paths};
+use waystone_core::rom_flavor::SaveFlavor;
 use waystone_core::rom_id::{display_name, needs_full_hash, rom_identity};
-use waystone_core::rom_pair::pair_roms;
+use waystone_core::rom_pair::pair_roms_external;
 use waystone_core::rom_systems::{rom_system, slot_names};
 
 unsafe fn bytes_arg<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
@@ -93,37 +96,105 @@ pub unsafe extern "C" fn ws_rom_display_name(
     .unwrap_or(core::ptr::null_mut())
 }
 
+fn pairs_tsv(
+    paths: *const u8,
+    paths_len: usize,
+    external: Option<SaveFlavor>,
+) -> Result<WsBuf, Box<dyn core::error::Error>> {
+    let text = core::str::from_utf8(unsafe { bytes_arg(paths, paths_len) })
+        .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)?;
+    let list: Vec<String> = text
+        .split('\n')
+        .map(|l| l.trim_end_matches('\r'))
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
+    let mut out = String::new();
+    for p in pair_roms_external(&list, external) {
+        out.push_str(p.system.as_str());
+        out.push('\t');
+        out.push_str(&p.rom_path);
+        out.push('\t');
+        out.push_str(&p.save_dir);
+        for s in &p.save_paths {
+            out.push('\t');
+            out.push_str(s);
+        }
+        out.push('\n');
+    }
+    Ok(WsBuf::from_vec(out.into_bytes()))
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ws_rom_pair(paths: *const u8, paths_len: usize) -> WsBuf {
     if paths.is_null() {
         set_last_error("null pointer argument");
         return WsBuf::null();
     }
-    catch_and_set_error(|| {
-        let text = core::str::from_utf8(unsafe { bytes_arg(paths, paths_len) })
-            .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)?;
-        let list: Vec<String> = text
-            .split('\n')
-            .map(|l| l.trim_end_matches('\r'))
-            .filter(|l| !l.is_empty())
-            .map(String::from)
-            .collect();
-        let mut out = String::new();
-        for p in pair_roms(&list) {
-            out.push_str(p.system.as_str());
-            out.push('\t');
-            out.push_str(&p.rom_path);
-            out.push('\t');
-            out.push_str(&p.save_dir);
-            for s in &p.save_paths {
-                out.push('\t');
-                out.push_str(s);
-            }
-            out.push('\n');
+    catch_and_set_error(|| pairs_tsv(paths, paths_len, None)).unwrap_or_else(WsBuf::null)
+}
+
+/// Like `ws_rom_pair`, also mapping `@saves/` entries for an external flavor
+/// ("retroarch"/"drastic"); NULL or "native" behaves exactly as `ws_rom_pair`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_rom_pair_flavored(
+    paths: *const u8,
+    paths_len: usize,
+    external_flavor: *const c_char,
+) -> WsBuf {
+    if paths.is_null() {
+        set_last_error("null pointer argument");
+        return WsBuf::null();
+    }
+    catch_and_set_error(|| pairs_tsv(paths, paths_len, unsafe { flavor_arg(external_flavor)? }))
+        .unwrap_or_else(WsBuf::null)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_nds_banner_offset(header: *const u8, len: usize) -> u32 {
+    nds_banner_offset(unsafe { bytes_arg(header, len) }).unwrap_or(0)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_nds_banner_icon_rgba(banner: *const u8, len: usize) -> WsBuf {
+    match nds_banner_icon_rgba(unsafe { bytes_arg(banner, len) }) {
+        Some(rgba) => WsBuf::from_vec(rgba),
+        None => {
+            set_last_error("NDS banner too short");
+            WsBuf::null()
         }
-        Ok(WsBuf::from_vec(out.into_bytes()))
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_nds_banner_title(banner: *const u8, len: usize) -> *mut c_char {
+    owned_c_string(nds_banner_title(unsafe { bytes_arg(banner, len) }))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_twilight_boxart_paths(rom_file_name: *const c_char) -> *mut c_char {
+    catch_and_set_error(|| {
+        let name = unsafe { cstr_arg(rom_file_name)? };
+        Ok(owned_c_string(twilight_boxart_paths(name).join("\n")))
     })
-    .unwrap_or_else(WsBuf::null)
+    .unwrap_or(core::ptr::null_mut())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_retroarch_boxart_path(
+    system: *const c_char,
+    rom_file_name: *const c_char,
+) -> *mut c_char {
+    let Some(sys) = parse_system_ptr(system) else {
+        return core::ptr::null_mut();
+    };
+    catch_and_set_error(|| {
+        let name = unsafe { cstr_arg(rom_file_name)? };
+        retroarch_boxart_path(sys, name)
+            .map(owned_c_string)
+            .ok_or_else(|| "no RetroArch playlist for this system".into())
+    })
+    .unwrap_or(core::ptr::null_mut())
 }
 
 #[unsafe(no_mangle)]

@@ -5,12 +5,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
-#include <sys/time.h>
 #include <utility>
 #include <vector>
 #include "net.h"
 #include "secure_clear.h"
 #include "sync_engine.h"
+#include "wall_clock.h"
 #include "wsconfig.h"
 
 // Shell-provided mutex (std::mutex on Switch, LightLock on 3DS). Non-recursive.
@@ -43,12 +43,6 @@ struct ConflictItem {
     std::vector<uint8_t> raw_tree;
     ConflictItem() : id(0), queued(false), title() {}
 };
-
-inline unsigned long long conflict_now_ms() {
-    struct timeval tv;
-    gettimeofday(&tv, 0);
-    return (unsigned long long)tv.tv_sec * 1000ULL + (unsigned long long)(tv.tv_usec / 1000);
-}
 
 // Scan/queue/resolve state machine shared by the Switch ConflictController and the 3DS
 // ConflictWorker. The shell owns the thread: begin_*() on the UI thread, then run_*() on the
@@ -100,7 +94,7 @@ public:
 
     void run_scan() {
         const size_t n = titles_.size();
-        const unsigned long long scan_t0 = conflict_now_ms();
+        const unsigned long long scan_t0 = wall_now_ms();
         printf("[conflict] scan begin: %zu title(s)\n", n);
         SyncEngineCfg ecfg = sync_cfg_from(config_, device_id_.c_str());
         WebDavSession* sess = webdav_session_begin(dav_);
@@ -134,7 +128,7 @@ public:
             snprintf(buf, sizeof(buf), "Scanning %zu/%zu: %s", i + 1, n, t.name.c_str());
             { Guard g(lock_); status_ = buf; }
 
-            const unsigned long long t0 = conflict_now_ms();
+            const unsigned long long t0 = wall_now_ms();
             std::vector<SaveDecision> decisions = sync_scan_title(
                 vault_, &t, t.name.c_str(), *ops_, ecfg, 1 /* Prompt */, sess, 0, 0);
             scanned++;
@@ -166,7 +160,7 @@ public:
                 printf("[conflict] found id=%lu %s\n", (unsigned long)id, d.group_key.c_str());
             }
             printf("[conflict] title %zu/%zu '%s' scanned in %llu ms (saves=%zu, conflicts=%zu)\n",
-                   i + 1, n, t.name.c_str(), conflict_now_ms() - t0, decisions.size(),
+                   i + 1, n, t.name.c_str(), wall_ms_since(t0), decisions.size(),
                    title_conflicts);
         }
 
@@ -197,7 +191,7 @@ public:
         if (dropped) printf("[conflict] dropped %zu queued resolve(s) on cancel\n", dropped);
         printf("[conflict] scan %s: scanned=%zu skipped=%zu found=%zu resolved=%d resolve_failed=%d in %llu ms\n",
                cancelled ? "cancelled" : "done", scanned, skipped, found, resolved, resolve_failed,
-               conflict_now_ms() - scan_t0);
+               wall_ms_since(scan_t0));
         phase_.store(found > 0 ? (int)ConflictPhase::Ready : (int)ConflictPhase::Done);
         running_.store(false);
     }
@@ -443,7 +437,7 @@ private:
 
         printf("[conflict] resolve id=%lu %s %s begin\n", (unsigned long)id,
                keep_local ? "keep-local" : "keep-remote", item.group_key.c_str());
-        const unsigned long long t0 = conflict_now_ms();
+        const unsigned long long t0 = wall_now_ms();
         const TitleT& ti = item.title;
         SyncEngineCfg ecfg = sync_cfg_from(config_, device_id_.c_str());
         int rc;
@@ -455,7 +449,7 @@ private:
         }
         const bool ok = (rc == 0);
         printf("[conflict] resolve id=%lu %s (rc=%d, %llu ms)\n", (unsigned long)id,
-               ok ? "done" : "failed", rc, conflict_now_ms() - t0);
+               ok ? "done" : "failed", rc, wall_ms_since(t0));
 
         Guard g(lock_);
         Item* q = find_locked(id);

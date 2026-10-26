@@ -122,7 +122,7 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
     C2D_TextBuf buf = App::instance().text_buf();
     float x = SP_MD;
     float w = (float)SCREEN_BOT_W - 2.0f * SP_MD;
-    float row_h = 28.0f;
+    float row_h = 22.0f;  // 8 rows + device line must clear the footer hint
     float y = (float)SP_MD;
 
     // Cleared each frame: while a banner replaces the row list there is nothing to tap.
@@ -153,44 +153,33 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
 
     const char* policy_str = (session_->config.conflict_policy == WsConflictPolicy::Prompt)
         ? "Prompt" : "Newest Wins";
-    char row_labels[7][128];
+    char row_labels[NUM_ROWS][128];
     snprintf(row_labels[0], sizeof(row_labels[0]), "Server: %s", session_->config.server_url.c_str());
     snprintf(row_labels[1], sizeof(row_labels[1]), "Username: %s", session_->config.username.c_str());
-    snprintf(row_labels[2], sizeof(row_labels[2]), "Conflict: %s", policy_str);
-    snprintf(row_labels[3], sizeof(row_labels[3]), "Safety Backup: %s", session_->config.safety_backup ? "ON" : "OFF");
-    snprintf(row_labels[4], sizeof(row_labels[4]), "Check for updates");
-    snprintf(row_labels[5], sizeof(row_labels[5]), "Save");
-    snprintf(row_labels[6], sizeof(row_labels[6]), "Log out");
+    snprintf(row_labels[2], sizeof(row_labels[2]), "%s", webdav_pass_label(session_->dav.pass).c_str());
+    snprintf(row_labels[3], sizeof(row_labels[3]), "Conflict: %s", policy_str);
+    snprintf(row_labels[4], sizeof(row_labels[4]), "Safety Backup: %s", session_->config.safety_backup ? "ON" : "OFF");
+    snprintf(row_labels[5], sizeof(row_labels[5]), "Check for updates");
+    snprintf(row_labels[6], sizeof(row_labels[6]), "Save");
+    snprintf(row_labels[7], sizeof(row_labels[7]), "Log out");
 
-    for (size_t i = 0; i < 4; i++) {
+    auto draw_row = [&](size_t i) {
         row_rects_[i] = { x, y, w, row_h };
         bool focused = (cursor_ == i);
-        u32 bg = focused ? CLR_PRIMARY_50 : CLR_CARD_BG;
-        if (focused) {
-            draw_rounded_rect(x - 1, y - 1, 0.49f, w + 2, row_h + 2, RAD_SM + 1, CLR_ACCENT);
-        }
-        draw_rounded_rect(x, y, 0.5f, w, row_h, RAD_SM, bg);
-        draw_text(buf, x + SP_MD, y + SP_SM, 0.51f, TEXT_BASE, CLR_TEXT, row_labels[i]);
+        if (focused) draw_rounded_rect(x - 1, y - 1, 0.49f, w + 2, row_h + 2, RAD_SM + 1, CLR_ACCENT);
+        draw_rounded_rect(x, y, 0.5f, w, row_h, RAD_SM, focused ? CLR_PRIMARY_50 : CLR_CARD_BG);
+        draw_text(buf, x + SP_MD, y + SP_XS + 1.0f, 0.51f, TEXT_BASE,
+                  i == ROW_LOG_OUT ? CLR_ERROR : CLR_TEXT, row_labels[i]);
         y += row_h + SP_XS;
-    }
+    };
+    for (size_t i = 0; i < FIRST_ACTION_ROW; i++) draw_row(i);
 
     char dev_buf[128];
     snprintf(dev_buf, sizeof(dev_buf), "Device: %s", session_->device_id.c_str());
     draw_text(buf, x + SP_SM, y + 2.0f, 0.5f, TEXT_SM, CLR_TEXT_HINT, dev_buf);
-    y += 20.0f;
+    y += 16.0f;
 
-    for (size_t i = 4; i < NUM_ROWS; i++) {
-        row_rects_[i] = { x, y, w, row_h };
-        bool focused = (cursor_ == i);
-        u32 bg = focused ? CLR_PRIMARY_50 : CLR_CARD_BG;
-        u32 text_color = (i == 6) ? CLR_ERROR : CLR_TEXT;
-        if (focused) {
-            draw_rounded_rect(x - 1, y - 1, 0.49f, w + 2, row_h + 2, RAD_SM + 1, CLR_ACCENT);
-        }
-        draw_rounded_rect(x, y, 0.5f, w, row_h, RAD_SM, bg);
-        draw_text(buf, x + SP_MD, y + SP_SM, 0.51f, TEXT_BASE, text_color, row_labels[i]);
-        y += row_h + SP_XS;
-    }
+    for (size_t i = FIRST_ACTION_ROW; i < NUM_ROWS; i++) draw_row(i);
 
     static const WsAction row_acts[] = { WsAction::Select, WsAction::Back };
     draw_footer_hint(buf, (ws_hint_bar(row_acts) + "  DPad: Nav").c_str());
@@ -279,16 +268,21 @@ void SettingsScreen::activate_row(size_t row) {
             break;
         }
         case 2: {
+            std::string v = swkbd_prompt("WebDAV password", true, "");
+            if (update_webdav_pass(session_->vault, session_->dav.pass, v)) status_text_ = "WebDAV password updated";
+            break;
+        }
+        case 3: {
             session_->config.conflict_policy =
                 (session_->config.conflict_policy == WsConflictPolicy::NewestWins)
                     ? WsConflictPolicy::Prompt : WsConflictPolicy::NewestWins;
             break;
         }
-        case 3: {
+        case 4: {
             session_->config.safety_backup = !session_->config.safety_backup;
             break;
         }
-        case 4: {
+        case 5: {
             if (worker_->is_running()) {
                 printf("[update] check ignored -- update worker busy\n");
                 break;
@@ -307,7 +301,7 @@ void SettingsScreen::activate_row(size_t row) {
             last_phase_ = UpdatePhase::Checking;  // a check that fails before the next poll still reports
             break;
         }
-        case 5: {
+        case 6: {
             printf("[ui] settings save -> %s\n", session_->config_path.c_str());
             if (wsconfig_save(session_->config, session_->config_path.c_str())) {
                 printf("[ui] settings save ok\n");
@@ -318,7 +312,7 @@ void SettingsScreen::activate_row(size_t row) {
             }
             break;
         }
-        case 6: {
+        case ROW_LOG_OUT: {
             printf("[ui] settings: log out\n");
             // set_screen/pop_screen below delete this screen; detach first so
             // ~SettingsScreen never joins a running worker on the render thread.

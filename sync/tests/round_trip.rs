@@ -1,60 +1,8 @@
-use std::collections::HashMap;
-use std::sync::Mutex;
 use waystone_core::conflict::SyncDecision;
 use waystone_core::crypto::Vault;
 use waystone_core::model::*;
-use waystone_sync::{PushOutcome, Result, WebDav};
-
-struct InMemoryDav {
-    store: Mutex<HashMap<String, Vec<u8>>>,
-}
-
-impl InMemoryDav {
-    fn new() -> Self {
-        Self {
-            store: Mutex::new(HashMap::new()),
-        }
-    }
-
-    fn keys(&self) -> Vec<String> {
-        self.store.lock().unwrap().keys().cloned().collect()
-    }
-}
-
-impl WebDav for InMemoryDav {
-    fn get(&self, path: &str) -> Result<Option<Vec<u8>>> {
-        Ok(self.store.lock().unwrap().get(path).cloned())
-    }
-
-    fn put(&self, path: &str, body: Vec<u8>) -> Result<()> {
-        self.store.lock().unwrap().insert(path.to_string(), body);
-        Ok(())
-    }
-
-    fn exists(&self, path: &str) -> Result<bool> {
-        Ok(self.store.lock().unwrap().contains_key(path))
-    }
-
-    fn propfind(&self, path: &str) -> Result<Vec<String>> {
-        let store = self.store.lock().unwrap();
-        let prefix = if path.ends_with('/') {
-            path.to_string()
-        } else {
-            format!("{}/", path)
-        };
-        let mut hrefs: Vec<String> = store
-            .keys()
-            .filter(|k| k.starts_with(&prefix) && k[prefix.len()..].find('/').is_none())
-            .cloned()
-            .collect();
-        hrefs.sort();
-        Ok(hrefs)
-    }
-
-    fn mkdir_p(&self, _path: &str) -> Result<()> {
-        Ok(())
-    }
-}
+use waystone_sync::PushOutcome;
+use waystone_sync::testing::MemoryDav;
 
 fn make_test_save(content: &[u8], mtime: &str) -> NormalizedSave {
     NormalizedSave {
@@ -82,7 +30,7 @@ fn make_test_save(content: &[u8], mtime: &str) -> NormalizedSave {
 #[test]
 fn push_one_creates_blob_head_and_history() {
     let (vault, _) = Vault::init("test-pass").unwrap();
-    let dav = InMemoryDav::new();
+    let dav = MemoryDav::new();
     let save = make_test_save(b"hello-world", "2026-01-01T00:00:00Z");
 
     let outcome = waystone_sync::push_one(&vault, &save, "dev1", &dav).unwrap();
@@ -106,7 +54,7 @@ fn push_one_creates_blob_head_and_history() {
 #[test]
 fn read_remote_heads_after_push() {
     let (vault, _) = Vault::init("test-pass").unwrap();
-    let dav = InMemoryDav::new();
+    let dav = MemoryDav::new();
     let save = make_test_save(b"content-a", "2026-01-01T00:00:00Z");
 
     waystone_sync::push_one(&vault, &save, "dev1", &dav).unwrap();
@@ -119,7 +67,7 @@ fn read_remote_heads_after_push() {
 #[test]
 fn pull_one_returns_files_when_remote_is_newer() {
     let (vault, _) = Vault::init("test-pass").unwrap();
-    let dav = InMemoryDav::new();
+    let dav = MemoryDav::new();
 
     let save_v1 = make_test_save(b"old-content", "2026-01-01T00:00:00Z");
     waystone_sync::push_one(&vault, &save_v1, "dev1", &dav).unwrap();
@@ -155,7 +103,7 @@ fn two_device_push_pull_round_trip() {
     let (vault1, _) = Vault::init("round-trip-pass").unwrap();
     let keys_json = vault1.keys_json().unwrap();
     let vault2 = Vault::unlock_with_passphrase("round-trip-pass", &keys_json).unwrap();
-    let dav = InMemoryDav::new();
+    let dav = MemoryDav::new();
 
     let save_old = make_test_save(b"shared-initial-save", "2026-01-01T00:00:00Z");
 
@@ -201,7 +149,7 @@ fn two_device_push_pull_round_trip() {
 #[test]
 fn conflict_needs_input_when_both_devices_diverged() {
     let (vault, _) = Vault::init("conflict-pass").unwrap();
-    let dav = InMemoryDav::new();
+    let dav = MemoryDav::new();
 
     let base_save = make_test_save(b"base-content", "2026-01-01T00:00:00Z");
     waystone_sync::push_one(&vault, &base_save, "dev1", &dav).unwrap();
@@ -232,7 +180,7 @@ fn conflict_needs_input_when_both_devices_diverged() {
 #[test]
 fn list_history_after_push() {
     let (vault, _) = Vault::init("test-pass").unwrap();
-    let dav = InMemoryDav::new();
+    let dav = MemoryDav::new();
 
     // Use distinct device_ids so the history filenames ({ts}-{device_id}.json) differ
     // even when both pushes land within the same clock-second.
@@ -268,7 +216,7 @@ fn list_history_after_push() {
 #[test]
 fn list_history_empty_when_no_push() {
     let (vault, _) = Vault::init("test-pass").unwrap();
-    let dav = InMemoryDav::new();
+    let dav = MemoryDav::new();
     let save = make_test_save(b"content", "2026-01-01T00:00:00Z");
 
     let entries = waystone_sync::list_history(&vault, &save, &dav).unwrap();

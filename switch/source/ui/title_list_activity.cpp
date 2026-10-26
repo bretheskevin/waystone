@@ -21,7 +21,7 @@ static NVGcolor muted_color() { return nvgRGB(0x71, 0x71, 0x7A); }
 // Placeholder icon color when a title has no icon JPEG cached.
 static NVGcolor placeholder_icon_color() { return nvgRGB(0x38, 0x38, 0x40); }
 
-// Deterministic per-system tint for ROM placeholder tiles (no box art on Switch v1).
+// Deterministic per-system tint for ROM placeholder tiles (fallback when no banner/box art).
 static NVGcolor rom_placeholder_color(const std::string& system) {
     return nvgHSL((float)(rom_fnv1a(system) % 360) / 360.0f, 0.45f, 0.42f);
 }
@@ -138,32 +138,24 @@ brls::View* TitleListActivity::createContentView() {
         row->addView(icon_box);  // parent in tree first
 
         bool icon_loaded = false;
-        if (t.source == SourceRom) {
-            // ROM rows never call setImageFromFile: per-system tinted placeholder tile.
-            auto* placeholder = new brls::Rectangle(rom_placeholder_color(t.system));
-            placeholder->setWidth(ICON_SIZE);
-            placeholder->setHeight(ICON_SIZE);
-            icon_box->addView(placeholder);
-        } else if (!t.icon_path.empty()) {
+        if (!t.icon_path.empty()) {
             auto* img = new brls::Image();
-            // FIX 1: STRETCH fills the icon_box 48×48 exactly (imageX=0,imageY=0,
-            // imageWidth=getWidth(),imageHeight=getHeight()). FIT on a square source
-            // was observed to crop the texture horizontally due to NVG paint origin
-            // mismatch at non-zero screen x. Square 256×256 icons: STRETCH = no distortion.
+            // STRETCH fills the icon_box exactly; FIT cropped square icons at non-zero screen x.
             img->setScalingType(brls::ImageScalingType::STRETCH);
-            icon_box->addView(img);  // in tree first — correct Yoga constraints
+            icon_box->addView(img);  // in tree first: correct Yoga constraints
             try {
                 img->setImageFromFile(t.icon_path);
                 icon_loaded = true;
             } catch (...) {
-                // Corrupt/missing cached icon — remove the Image and fall through to placeholder.
-                printf("[ui] dashboard: icon load failed for '%s', using placeholder\n", t.name.c_str());
+                printf("[ui] dashboard: icon load failed for '%s' (%s), using placeholder\n",
+                       t.name.c_str(), t.icon_path.c_str());
                 icon_box->removeView(img);  // img deleted by removeView
             }
         }
-        if (!icon_loaded && t.source != SourceRom) {
-            // No icon or load failed: solid-color placeholder fills the slot.
-            auto* placeholder = new brls::Rectangle(placeholder_icon_color());
+        if (!icon_loaded) {
+            auto* placeholder = new brls::Rectangle(t.source == SourceRom
+                                                        ? rom_placeholder_color(t.system)
+                                                        : placeholder_icon_color());
             placeholder->setWidth(ICON_SIZE);
             placeholder->setHeight(ICON_SIZE);
             icon_box->addView(placeholder);

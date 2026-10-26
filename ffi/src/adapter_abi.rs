@@ -10,8 +10,9 @@ use waystone_core::adapters::Adapter;
 use waystone_core::adapters::checkpoint::CheckpointAdapter;
 use waystone_core::adapters::jksv::JksvAdapter;
 use waystone_core::adapters::mgba::MgbaAdapter;
-use waystone_core::adapters::rom_keyed::{RomKeyedAdapter, rom_keyed_to_native};
+use waystone_core::adapters::rom_keyed::{RomKeyedAdapter, rom_keyed_to_native_flavored};
 use waystone_core::model::{NormalizedSave, RawFile, RawTree, SystemId};
+use waystone_core::rom_flavor::SaveFlavor;
 
 fn parse_system_id(s: &str) -> Result<SystemId, Box<dyn core::error::Error>> {
     serde_json::from_value(serde_json::Value::String(s.to_string()))
@@ -202,6 +203,19 @@ pub(crate) unsafe fn cstr_arg<'a>(
         .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)
 }
 
+pub(crate) unsafe fn flavor_arg(
+    p: *const c_char,
+) -> Result<Option<SaveFlavor>, Box<dyn core::error::Error>> {
+    if p.is_null() {
+        return Ok(None);
+    }
+    match SaveFlavor::parse(unsafe { cstr_arg(p)? }) {
+        Some(SaveFlavor::Native) => Ok(None),
+        Some(f) => Ok(Some(f)),
+        None => Err("unknown save flavor".into()),
+    }
+}
+
 // ── rom_keyed ─────────────────────────────────────────────────────────────────
 
 #[unsafe(no_mangle)]
@@ -213,20 +227,46 @@ pub unsafe extern "C" fn ws_rom_keyed_normalize(
     raw_files: *const u8,
     raw_files_len: usize,
 ) -> WsBuf {
+    unsafe {
+        ws_rom_keyed_normalize_flavored(
+            system,
+            rom_id,
+            display_name,
+            rom_file_name,
+            core::ptr::null(),
+            raw_files,
+            raw_files_len,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_rom_keyed_normalize_flavored(
+    system: *const c_char,
+    rom_id: *const c_char,
+    display_name: *const c_char,
+    rom_file_name: *const c_char,
+    flavor: *const c_char,
+    raw_files: *const u8,
+    raw_files_len: usize,
+) -> WsBuf {
     let Some(sys) = parse_system_ptr(system) else {
         return WsBuf::null();
     };
-    let Some((id, name, rom)) = catch_and_set_error(|| unsafe {
+    let Some((id, name, rom, flavor)) = catch_and_set_error(|| unsafe {
         Ok((
             cstr_arg(rom_id)?,
             cstr_arg(display_name)?,
             cstr_arg(rom_file_name)?,
+            flavor_arg(flavor)?.unwrap_or(SaveFlavor::Native),
         ))
     }) else {
         return WsBuf::null();
     };
     normalize_via(raw_files, raw_files_len, |t| {
-        RomKeyedAdapter::new(sys, id, name, rom).normalize(t)
+        RomKeyedAdapter::new(sys, id, name, rom)
+            .with_flavor(flavor)
+            .normalize(t)
     })
 }
 
@@ -239,6 +279,33 @@ pub unsafe extern "C" fn ws_rom_keyed_to_native(
     files_len: usize,
     out_tree: *mut WsBuf,
 ) -> i32 {
+    unsafe {
+        ws_rom_keyed_to_native_flavored(
+            system,
+            slot,
+            rom_file_name,
+            core::ptr::null(),
+            files,
+            files_len,
+            core::ptr::null(),
+            0,
+            out_tree,
+        )
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_rom_keyed_to_native_flavored(
+    system: *const c_char,
+    slot: *const c_char,
+    rom_file_name: *const c_char,
+    flavor: *const c_char,
+    files: *const u8,
+    files_len: usize,
+    existing: *const u8,
+    existing_len: usize,
+    out_tree: *mut WsBuf,
+) -> i32 {
     if out_tree.is_null() {
         set_last_error("null pointer argument");
         return -1;
@@ -249,8 +316,14 @@ pub unsafe extern "C" fn ws_rom_keyed_to_native(
     let result = catch_and_set_error(|| {
         let slot = unsafe { cstr_arg(slot)? };
         let rom = unsafe { cstr_arg(rom_file_name)? };
+        let flavor = unsafe { flavor_arg(flavor)? }.unwrap_or(SaveFlavor::Native);
         let decoded = decode_tree_arg(files, files_len)?;
-        let native = rom_keyed_to_native(sys, slot, rom, &decoded);
+        let existing = if existing.is_null() || existing_len == 0 {
+            Vec::new()
+        } else {
+            decode_tree_arg(existing, existing_len)?
+        };
+        let native = rom_keyed_to_native_flavored(sys, slot, rom, flavor, &decoded, &existing);
         if native.is_empty() && !decoded.is_empty() {
             return Err("no blob file maps to the requested slot".into());
         }

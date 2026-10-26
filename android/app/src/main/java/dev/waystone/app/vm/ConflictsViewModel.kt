@@ -1,7 +1,7 @@
 package dev.waystone.app.vm
 
 import android.app.Application
-import android.util.Log
+import dev.waystone.app.log.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.waystone.data.sync.SyncRepository
@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import uniffi.waystone_mobile.ConflictPolicy
-import uniffi.waystone_mobile.SyncDecision
 
 class ConflictsViewModel(
     application: Application,
@@ -28,8 +27,7 @@ class ConflictsViewModel(
         loadSaves = { saveSourceProvider.scanSources(settings.load()).flatMap { it.saves } },
         scanOne = { save ->
             val repo = requireRepo()
-            val planned = repo.planOne(save, ConflictPolicy.PROMPT)
-            (planned.decision as? SyncDecision.ConflictNeedsInput)?.let { repo.conflictEntry(save, planned.heads, it) }
+            repo.conflictEntry(repo.planOne(save, ConflictPolicy.PROMPT))
         },
         onKeepLocal = { entry -> requireRepo().pushOne(entry.save) },
         onKeepRemote = { entry ->
@@ -37,12 +35,13 @@ class ConflictsViewModel(
             val (folder, save) = saveSourceProvider.findSave(loaded, entry.save.groupKey)
                 ?: error("Save not found: ${entry.save.groupKey}")
             val repo = requireRepo()
-            val ok = restoreIntoSource(
-                repo = repo, save = save, folder = folder,
-                files = repo.keepRemoteFiles(save, entry.remoteHash),
-                saveSourceProvider = saveSourceProvider, snapshotStoreProvider = snapshotStoreProvider,
-                safetyBackup = loaded.safetyBackup,
-            )
+            val ok = repo.keepRemote(save, entry.remoteHash, entry.headMtime) { files ->
+                restoreIntoSource(
+                    repo = repo, save = save, folder = folder, files = files,
+                    saveSourceProvider = saveSourceProvider, snapshotStoreProvider = snapshotStoreProvider,
+                    safetyBackup = loaded.safetyBackup,
+                )
+            }
             check(ok) { "restore aborted (safety snapshot failed)" }
         },
     )

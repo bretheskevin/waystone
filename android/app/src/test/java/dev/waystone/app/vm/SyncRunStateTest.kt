@@ -1,8 +1,8 @@
 package dev.waystone.app.vm
 
-import dev.waystone.data.sync.SyncPhase
+import uniffi.waystone_mobile.SyncPhase
 import dev.waystone.data.sync.SyncProgress
-import dev.waystone.data.sync.SyncSummary
+import uniffi.waystone_mobile.SyncSummary
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -20,12 +20,14 @@ class SyncRunStateTest {
         assertTrue(s.running)
         s = s.reduce(SyncProgress.Started(3))
         assertEquals(3, s.total)
-        s = s.reduce(SyncProgress.Item(1, 3, save, SyncPhase.Pulling))
+        s = s.reduce(SyncProgress.Item(1, 3, save.groupKey, save.displayName, SyncPhase.PULLING))
         assertEquals("Game", s.currentName)
-        assertEquals(SyncPhase.Pulling, s.phase)
+        assertEquals(SyncPhase.PULLING, s.phase)
         assertEquals(2, s.position)
         assertEquals(2f / 3f, s.fraction, 0.001f)
-        s = s.reduce(SyncProgress.Done(SyncSummary(pulled = 1)))
+        s = s.reduce(SyncProgress.Done(SyncSummary(
+            pushed = 0u, pulled = 1u, inSync = 0u, conflicts = 0u, errors = 0u, errorMessages = emptyList(), cancelled = false,
+        )))
         assertFalse(s.running)
         assertEquals(1f, s.fraction, 0.001f)
     }

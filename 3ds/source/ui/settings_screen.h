@@ -26,7 +26,9 @@ private:
     bool restart_prompt_;   // CIA installed: "Restart now / Later" banner
     std::string pending_ver_;
     std::string pending_url_;
-    static const size_t NUM_ROWS = 7;
+    static const size_t NUM_ROWS = 8;
+    static const size_t FIRST_ACTION_ROW = 5;  // rows below the device line: update, save, log out
+    static const size_t ROW_LOG_OUT = 7;
     Rect row_rects_[NUM_ROWS];  // bottom-screen hit boxes, refreshed every draw
     void activate_row(size_t row);  // may delete this screen (log out); caller must return
     SettingsScreen(const SettingsScreen&);

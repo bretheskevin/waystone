@@ -1,4 +1,7 @@
+pub mod engine;
 pub mod orchestration;
+pub mod remote_only;
+pub mod testing;
 
 use std::fmt;
 

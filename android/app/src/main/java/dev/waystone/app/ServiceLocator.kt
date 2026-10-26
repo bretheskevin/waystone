@@ -2,8 +2,10 @@ package dev.waystone.app
 
 import android.content.Context
 import android.net.Uri
-import android.util.Log
+import dev.waystone.app.log.Log
 import dev.waystone.data.config.Settings
+import dev.waystone.app.log.LogShare
+import dev.waystone.data.log.WsLogFile
 import dev.waystone.data.config.SettingsStore
 import dev.waystone.data.dav.OkHttpWebDav
 import dev.waystone.data.fs.SafRomFileSource
@@ -13,6 +15,8 @@ import dev.waystone.data.config.externalFlavor
 import dev.waystone.data.roms.CompositeRomFileSource
 import dev.waystone.data.roms.LocalRom
 import dev.waystone.data.roms.RemoteOnlyProbe
+import dev.waystone.data.roms.RomArt
+import dev.waystone.data.roms.RomArtLoader
 import dev.waystone.data.roms.RestorePlacement
 import dev.waystone.data.roms.RestoreTree
 import dev.waystone.data.roms.RomFileSource
@@ -20,8 +24,10 @@ import dev.waystone.data.roms.RomScanner
 import dev.waystone.data.session.KeystoreVaultStore
 import dev.waystone.data.session.SessionStore
 import dev.waystone.data.snapshot.SnapshotStore
+import dev.waystone.app.net.Connectivity
 import dev.waystone.app.vm.DavFactory
 import dev.waystone.app.vm.DavProvider
+import dev.waystone.app.vm.NetworkMonitor
 import dev.waystone.app.vm.SnapshotInfo
 import dev.waystone.app.vm.SnapshotStoreProvider
 import dev.waystone.app.vm.SaveSourceProvider
@@ -34,6 +40,8 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import uniffi.waystone_mobile.FileEntry
+import uniffi.waystone_mobile.LogSink
+import uniffi.waystone_mobile.installLogSink
 import uniffi.waystone_mobile.NormalizedSave
 import uniffi.waystone_mobile.RawTree
 import uniffi.waystone_mobile.WebDav
@@ -60,9 +68,23 @@ object ServiceLocator {
         private set
     lateinit var snapshotStoreProvider: SnapshotStoreProvider
         private set
+    lateinit var networkMonitor: NetworkMonitor
+        private set
 
     fun init(context: Context) {
         val appContext = context.applicationContext
+        val logFile = WsLogFile.install(LogShare.logDir(appContext))
+        val sinkInstalled = installLogSink(object : LogSink {
+            override fun log(level: String, message: String) {
+                when (level) {
+                    "ERROR" -> Log.e(ENGINE_TAG, message)
+                    "WARN" -> Log.w(ENGINE_TAG, message)
+                    else -> Log.i(ENGINE_TAG, message)
+                }
+            }
+        })
+        Log.i(TAG, "log file at ${logFile.path}; engine log sink ${if (sinkInstalled) "installed" else "already installed"}")
+        networkMonitor = Connectivity(appContext)
         settingsStore = SettingsStore(appContext)
         sessionStore = KeystoreVaultStore(appContext)
         val backupsDir = File(appContext.filesDir, "backups")
@@ -93,6 +115,7 @@ object ServiceLocator {
     }
 
     private const val TAG = "WS:APP"
+    private const val ENGINE_TAG = "WS:ENGINE"
 }
 
 private class SessionVaultStoreBinding(private val store: SessionStore) : SessionVaultStore {
@@ -162,11 +185,29 @@ private class SaveSourceProviderBinding(private val context: Context) : SaveSour
         }
     }
 
+    override suspend fun romArt(folder: SourceFolder, artKey: String): RomArt? = withContext(Dispatchers.IO) {
+        if (!isRomKeyed(folder.adapter)) return@withContext null
+        val system = artKey.substringBefore('/')
+        val rom = runCatching { localRomBy(folder, system, artKey.substringAfter('/')) }
+            .onFailure { Log.w(TAG, "art $artKey: no local ROM", it) }
+            .getOrNull() ?: return@withContext null
+        val roms = safSource(folder.uri)
+        val (kind, art) = if (system == "nds") {
+            "nds" to RomArtLoader.ndsIcon(roms, rom.romPath)
+        } else {
+            "boxart" to RomArtLoader.boxArt(listOfNotNull(roms, folder.saveUri?.let(::safSource)), system, rom.romFileName)
+        }
+        Log.i(TAG, "art $artKey: ${if (art == null) "none" else kind}")
+        art
+    }
+
     private val romSources = ConcurrentHashMap<String, RomFileSource>()
 
+    private fun safSource(treeUri: String) = SafRomFileSource(context, Uri.parse(treeUri))
+
     private fun romSourceFor(folder: SourceFolder): RomFileSource {
-        val roms = SafRomFileSource(context, Uri.parse(folder.uri))
-        val source = folder.saveUri?.let { CompositeRomFileSource(roms, SafRomFileSource(context, Uri.parse(it))) } ?: roms
+        val roms = safSource(folder.uri)
+        val source = folder.saveUri?.let { CompositeRomFileSource(roms, safSource(it)) } ?: roms
         romSources[folder.key] = source
         return source
     }
@@ -188,12 +229,15 @@ private class SaveSourceProviderBinding(private val context: Context) : SaveSour
         return local + remote
     }
 
-    private fun localRom(folder: SourceFolder, save: NormalizedSave): LocalRom {
-        val key = romKey(folder, save.system, save.gameKey)
+    private fun localRom(folder: SourceFolder, save: NormalizedSave): LocalRom =
+        localRomBy(folder, save.system, save.gameKey)
+
+    private fun localRomBy(folder: SourceFolder, system: String, romId: String): LocalRom {
+        val key = romKey(folder, system, romId)
         romIndex[key]?.let { return it }
         Log.i(TAG, "[roms] index miss for $key, rescanning ${folder.uri}")
         scanRoms(folder)
-        return romIndex[key] ?: error("[roms] no local ROM for ${save.groupKey} in ${folder.uri}")
+        return romIndex[key] ?: error("[roms] no local ROM for $system/$romId in ${folder.uri}")
     }
 
     private fun normalize(adapter: String, system: String, raw: RawTree): List<NormalizedSave> = when (adapter) {

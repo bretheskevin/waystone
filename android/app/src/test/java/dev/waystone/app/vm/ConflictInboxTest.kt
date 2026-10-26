@@ -19,7 +19,7 @@ import uniffi.waystone_mobile.NormalizedSave
 class ConflictInboxTest {
     private fun save(k: String) = NormalizedSave("jksv", "switch", k, k, null, null, null, Confidence.STRONG,
         "main", "native", "switch/$k/main", true, "", emptyList())
-    private fun entry(k: String) = ConflictEntry(save(k), "l", "r", "dev2", "2026")
+    private fun entry(k: String) = ConflictEntry(save(k), "l", "r", "dev2", "2026", "2026")
 
     @Test
     fun `entries are emitted progressively in scan order`() = runTest {

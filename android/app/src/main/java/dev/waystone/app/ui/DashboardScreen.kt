@@ -5,7 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.provider.DocumentsContract
-import android.util.Log
+import dev.waystone.app.log.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -36,6 +36,9 @@ import dev.waystone.app.ui.theme.LocalWaystoneTypography
 import dev.waystone.app.vm.AddSourceFlow
 import dev.waystone.app.vm.AddSourceStep
 import dev.waystone.app.vm.DashboardReady
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
+import androidx.compose.ui.graphics.ImageBitmap
 import dev.waystone.app.vm.SaveRow
 import dev.waystone.app.vm.SyncRunState
 import dev.waystone.app.vm.UiState
@@ -60,6 +63,7 @@ fun DashboardScreen(
     syncRun: SyncRunState?,
     onCancelSync: () -> Unit,
     onCloseSync: () -> Unit,
+    loadArt: suspend (SourceFolder, String) -> ImageBitmap?,
 ) {
     val context = LocalContext.current
     var step by remember { mutableStateOf<AddSourceStep>(AddSourceStep.Idle) }
@@ -152,6 +156,7 @@ fun DashboardScreen(
                             onPull = onPull,
                             onOpenHistory = onOpenHistory,
                             onOpenSnapshots = onOpenSnapshots,
+                            loadArt = { key -> loadArt(card.folder, key) },
                         )
                     }
                 }
@@ -188,6 +193,7 @@ private fun SourceCardView(
     onPull: (String) -> Unit,
     onOpenHistory: (String) -> Unit,
     onOpenSnapshots: (String) -> Unit,
+    loadArt: suspend (String) -> ImageBitmap?,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(
@@ -210,7 +216,7 @@ private fun SourceCardView(
                 TextButton(onClick = onSyncSource, enabled = syncEnabled) { Text("Sync") }
             }
             card.error?.let { ErrorBanner(it) }
-            card.saves.forEach { row -> SaveRowView(row, onPush, onPull, onOpenHistory, onOpenSnapshots) }
+            card.saves.forEach { row -> SaveRowView(row, onPush, onPull, onOpenHistory, onOpenSnapshots, loadArt) }
             if (card.saves.isEmpty() && card.error == null) {
                 Text("No saves found", style = LocalWaystoneTypography.current.sm)
             }
@@ -225,8 +231,13 @@ private fun SaveRowView(
     onPull: (String) -> Unit,
     onOpenHistory: (String) -> Unit,
     onOpenSnapshots: (String) -> Unit,
+    loadArt: suspend (String) -> ImageBitmap?,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
+        if (row.system != null) {
+            RomIcon(row, loadArt)
+            Spacer(Modifier.width(LocalWaystoneSpacing.current.Sm))
+        }
         Column(modifier = Modifier.weight(1f)) {
             Text(row.displayName, style = LocalWaystoneTypography.current.base)
             if (row.remoteOnly) Text("Remote only — tap Pull to restore", style = LocalWaystoneTypography.current.xs)

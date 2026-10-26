@@ -11,6 +11,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import uniffi.waystone_mobile.versionNewer
 
 class UpdaterTest {
     @get:Rule val tmp = TemporaryFolder()
@@ -20,19 +21,19 @@ class UpdaterTest {
 
     @Test
     fun `versionNewer matches shell-common version_newer cases`() {
-        assertTrue(Updater.versionNewer("1.10.0", "1.9.0"))
-        assertFalse(Updater.versionNewer("1.9.0", "1.10.0"))
-        assertTrue(Updater.versionNewer("0.2.0", "0.1.0"))
-        assertTrue(Updater.versionNewer("2", "1.9.9"))
-        assertTrue(Updater.versionNewer("1.0.1", "1.0"))
-        assertFalse(Updater.versionNewer("1.0.0", "1.0.0"))
-        assertFalse(Updater.versionNewer("1.0", "1.0.0"))
-        assertFalse(Updater.versionNewer("1.0.0", "1.0"))
-        assertFalse(Updater.versionNewer("1.0.0", "1.0.0.0"))
-        assertFalse(Updater.versionNewer("abc", "1.0.0"))
-        assertFalse(Updater.versionNewer("", ""))
-        assertFalse(Updater.versionNewer("1.0a", "1.0"))
-        assertTrue(Updater.versionNewer("0.6.0", "0.5.4"))
+        assertTrue(versionNewer("1.10.0", "1.9.0"))
+        assertFalse(versionNewer("1.9.0", "1.10.0"))
+        assertTrue(versionNewer("0.2.0", "0.1.0"))
+        assertTrue(versionNewer("2", "1.9.9"))
+        assertTrue(versionNewer("1.0.1", "1.0"))
+        assertFalse(versionNewer("1.0.0", "1.0.0"))
+        assertFalse(versionNewer("1.0", "1.0.0"))
+        assertFalse(versionNewer("1.0.0", "1.0"))
+        assertFalse(versionNewer("1.0.0", "1.0.0.0"))
+        assertFalse(versionNewer("abc", "1.0.0"))
+        assertFalse(versionNewer("", ""))
+        assertFalse(versionNewer("1.0a", "1.0"))
+        assertTrue(versionNewer("0.6.0", "0.5.4"))
     }
 
     private val release = """{"tag_name":"v0.6.0","assets":[

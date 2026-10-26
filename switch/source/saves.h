@@ -11,12 +11,20 @@
 struct Vault;
 typedef Vault WsVault;
 
+// Which mounted save a file tree targets: per-user account save ('main' slot) or device save ('device' slot).
+enum SwitchSaveKind { SaveAccount, SaveDevice };
+static const SwitchSaveKind SWITCH_SAVE_KINDS[] = { SaveAccount, SaveDevice };
+inline const char* save_kind_slot(SwitchSaveKind kind) { return kind == SaveDevice ? "device" : "main"; }
+inline SwitchSaveKind save_kind_for_slot(const std::string& slot) {
+    return slot == save_kind_slot(SaveDevice) ? SaveDevice : SaveAccount;
+}
+
 enum TitleSource { SourceInstalled, SourceRom };
 
 struct TitleInfo {
     uint64_t title_id;
     std::string name;      // display name from NACP, or hex TID fallback; ROMs: ROM file stem
-    std::string icon_path; // path to cached icon JPEG on sdmc (empty if none; always empty for ROMs)
+    std::string icon_path; // cached icon on sdmc (JPEG/BMP/PNG; empty if none)
     bool has_remote = true; // game dir present on the server; true when unknown (fail-open)
     TitleSource source = SourceInstalled;
     // ROM-only fields (source == SourceRom):
@@ -34,8 +42,9 @@ struct TitleInfo {
 std::vector<TitleInfo> list_titles(const WsVault* vault, const WebDavCfg& dav, AccountUid uid);
 
 // Extract save data for a title+user as a WsFileTree buffer (binary file-tree).
-// Paths follow the JKSV convention "<game_name>/main/<relative_file_path>" so
-// ws_jksv_normalize can parse title_dir=<game_name>, slot="main".
+// Paths follow the JKSV convention "<game_name>/main/<relative_file_path>" (account save) and
+// "<game_name>/device/<relative_file_path>" (device save, when the title has one) so
+// ws_jksv_normalize can parse title_dir=<game_name>, slot="main"|"device".
 // Returns an empty vector on failure / no save.
 // local_mtime (optional): newest file mtime of the mounted save as ISO-8601 UTC, '' when unusable.
 std::vector<uint8_t> extract_save_json(const TitleInfo& title, AccountUid uid,
@@ -55,10 +64,10 @@ std::string get_device_id();
 
 // Restore save files from a WsFileTree buffer (from ws_unzip or
 // snapshot_to_file_tree). Paths are save-relative (written under save:/).
-// Mounts save data (read-write), writes each file, commits with
+// Mounts the account or device save per `kind` (read-write), writes each file, commits with
 // fsdevCommitDevice (REQUIRED or writes are lost), then unmounts.
 // Returns 0 on success, -1 on decode/mount/write failure.
-int write_save_files(u64 title_id, AccountUid uid,
+int write_save_files(u64 title_id, AccountUid uid, SwitchSaveKind kind,
                      const uint8_t* ft_ptr, size_t ft_len);
 
 #endif

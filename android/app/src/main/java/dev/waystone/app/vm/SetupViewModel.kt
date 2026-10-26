@@ -1,7 +1,7 @@
 package dev.waystone.app.vm
 
 import android.app.Application
-import android.util.Log
+import dev.waystone.app.log.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.waystone.data.sync.SyncRepository
@@ -13,7 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import uniffi.waystone_mobile.vaultInit
 
-data class SetupReady(val recoveryHex: String)
+data class SetupReady(val recoveryHex: String, val deviceId: String = "")
 
 class SetupViewModel(
     application: Application,
@@ -55,10 +55,10 @@ class SetupViewModel(
                 val existing = settings.load()
                 settings.save(existing.copy(serverUrl = serverUrl.trim(), username = username))
                 session.attach(init.vault, dav, SyncRepository(init.vault, dav, existing.deviceId))
-                init
-            }.onSuccess { init ->
+                init to existing.deviceId
+            }.onSuccess { (init, deviceId) ->
                 Log.i(TAG, "setup complete, vault initialized on server")
-                _uiState.value = UiState.Ready(SetupReady(init.recoveryHex))
+                _uiState.value = UiState.Ready(SetupReady(init.recoveryHex, deviceId))
             }.onFailure { e ->
                 Log.e(TAG, "setup failed", e)
                 if (e is VaultExistsException) {

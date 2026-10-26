@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import java.util.logging.Logger
 import kotlinx.coroutines.flow.first
+import uniffi.waystone_mobile.redactUrl
 
 private val Context.settingsDataStore by preferencesDataStore("waystone_settings")
 
@@ -17,7 +18,7 @@ class SettingsStore(private val context: Context) {
     suspend fun load(): Settings {
         val raw = context.settingsDataStore.data.first()[key]
         val settings = SettingsCodec.decode(raw)
-        log.info("settings loaded: deviceId=${settings.deviceId} server=${settings.serverUrl} sources=${settings.sources.size}")
+        log.info("settings loaded: deviceId=${settings.deviceId} server=${redactUrl(settings.serverUrl)} sources=${settings.sources.size}")
         return settings
     }
 

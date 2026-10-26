@@ -64,12 +64,32 @@ struct WsBuf ws_rom_keyed_normalize(const char *system,
                                     uintptr_t raw_files_len);
 
 
+struct WsBuf ws_rom_keyed_normalize_flavored(const char *system,
+                                             const char *rom_id,
+                                             const char *display_name,
+                                             const char *rom_file_name,
+                                             const char *flavor,
+                                             const uint8_t *raw_files,
+                                             uintptr_t raw_files_len);
+
+
 int32_t ws_rom_keyed_to_native(const char *system,
                                const char *slot,
                                const char *rom_file_name,
                                const uint8_t *files,
                                uintptr_t files_len,
                                struct WsBuf *out_tree);
+
+
+int32_t ws_rom_keyed_to_native_flavored(const char *system,
+                                        const char *slot,
+                                        const char *rom_file_name,
+                                        const char *flavor,
+                                        const uint8_t *files,
+                                        uintptr_t files_len,
+                                        const uint8_t *existing,
+                                        uintptr_t existing_len,
+                                        struct WsBuf *out_tree);
 
 /**
  * # Safety
@@ -168,6 +188,25 @@ char *ws_rom_display_name(const char *system,
 
  struct WsBuf ws_rom_pair(const uint8_t *paths, uintptr_t paths_len);
 
+/**
+ * Like `ws_rom_pair`, also mapping `@saves/` entries for an external flavor
+ * ("retroarch"/"drastic"); NULL or "native" behaves exactly as `ws_rom_pair`.
+ */
+
+struct WsBuf ws_rom_pair_flavored(const uint8_t *paths,
+                                  uintptr_t paths_len,
+                                  const char *external_flavor);
+
+ uint32_t ws_nds_banner_offset(const uint8_t *header, uintptr_t len);
+
+ struct WsBuf ws_nds_banner_icon_rgba(const uint8_t *banner, uintptr_t len);
+
+ char *ws_nds_banner_title(const uint8_t *banner, uintptr_t len);
+
+ char *ws_twilight_boxart_paths(const char *rom_file_name);
+
+ char *ws_retroarch_boxart_path(const char *system, const char *rom_file_name);
+
  char *ws_rom_keyed_slots(const char *system);
 
 /**
@@ -186,5 +225,16 @@ char *ws_rom_psx_identity(WsReadAtFn read_cb,
                           void *user,
                           uint64_t file_size,
                           uint32_t sample_crc32);
+
+/**
+ * `url` with any `user:pass@` replaced by `***@`, for log lines; free with `ws_string_free`.
+ * NULL or non-UTF-8 input returns NULL.
+ */
+ char *ws_redact_url(const char *url);
+
+/**
+ * NULL or non-UTF-8 arguments compare as "".
+ */
+ bool ws_version_newer(const char *latest, const char *current);
 
 #endif  /* WAYSTONE_H */

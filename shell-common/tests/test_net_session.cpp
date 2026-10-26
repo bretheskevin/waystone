@@ -1,8 +1,10 @@
 // Host-only test for WebDavSession connection reuse.
 // Build (from repo root):
+//   cargo build -p waystone-ffi
 //   g++ -std=c++11 -fno-exceptions -fno-rtti -Wall -Wextra \
-//     -I shell-common \
+//     -I shell-common -I ffi/include \
 //     shell-common/tests/test_net_session.cpp shell-common/net.cpp \
+//     target/debug/libwaystone_ffi.a -liconv -lSystem -lc -lm \
 //     -o /tmp/test_net_session -lcurl && /tmp/test_net_session
 // Requires a local dufs server (same as the desktop webdav tests):
 //   docker run --rm -d --name waystone-dufs-test -p 5099:5000 \

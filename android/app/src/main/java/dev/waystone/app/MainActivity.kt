@@ -1,7 +1,7 @@
 package dev.waystone.app
 
 import android.os.Bundle
-import android.util.Log
+import dev.waystone.app.log.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.lifecycleScope
@@ -26,7 +26,7 @@ class MainActivity : ComponentActivity() {
             val serverUrl = runCatching { ServiceLocator.settingsStore.load().serverUrl }
                 .onFailure { Log.w(TAG, "settings load failed; starting at setup", it) }
                 .getOrDefault("")
-            val startDestination = StartDestinationResolver.resolve(serverUrl)
+            val startDestination = StartDestinationResolver.resolve(serverUrl, ServiceLocator.networkMonitor.isOnline())
             Log.i(TAG, "start destination: $startDestination")
             setContent {
                 WaystoneTheme {

@@ -1,4 +1,5 @@
 #include "net.h"
+#include "ffi_err.h"
 #include <cstdio>
 #include <cstring>
 #include <sys/select.h>
@@ -81,9 +82,17 @@ std::string webdav_url(const WebDavCfg& cfg, const char* path) {
 
 // ---- Session ----
 
+// A user may type `user:pass@` into the server URL; log lines must never carry it.
+static std::string loggable_url(const std::string& url) {
+    char* r = ws_redact_url(url.c_str());
+    std::string out = r ? r : "<url>";
+    ws_string_free(r);
+    return out;
+}
+
 struct WebDavSession {
     CURL* curl;
-    std::string base_url, user, pass;
+    std::string base_url, log_url, user, pass;
     bool has_auth; // WebDavCfg allows null user/pass; empty string != null
     long num_connects;
 };
@@ -109,14 +118,15 @@ WebDavSession* webdav_session_begin(const WebDavCfg& cfg) {
     s->pass = cfg.pass ? cfg.pass : "";
     s->has_auth = cfg.user && cfg.pass;
     s->num_connects = 0;
-    printf("[net] webdav session begin: %s\n", s->base_url.c_str());
+    s->log_url = loggable_url(s->base_url);
+    printf("[net] webdav session begin: %s\n", s->log_url.c_str());
     return s;
 }
 
 void webdav_session_end(WebDavSession* s) {
     if (!s) return;
     printf("[net] webdav session end: %s num_connects=%ld\n",
-           s->base_url.c_str(), s->num_connects);
+           s->log_url.c_str(), s->num_connects);
     curl_easy_cleanup(s->curl);
     delete s;
 }

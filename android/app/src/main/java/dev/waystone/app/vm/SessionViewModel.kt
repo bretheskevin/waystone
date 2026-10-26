@@ -1,7 +1,7 @@
 package dev.waystone.app.vm
 
 import android.app.Application
-import android.util.Log
+import dev.waystone.app.log.Log
 import androidx.lifecycle.AndroidViewModel
 import dev.waystone.data.sync.SyncRepository
 import kotlinx.coroutines.flow.MutableStateFlow

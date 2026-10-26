@@ -1,11 +1,12 @@
 use crate::helpers;
-use crate::tui::app::{App, FormMode, Overlay, Screen, TargetStatus};
+use crate::sync_run::phase_label;
+use crate::tui::app::{App, FormMode, Overlay, Pane, Screen, TargetStatus, preset_label};
 use crate::tui::theme;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Gauge, List, ListItem, Paragraph, Wrap};
 
 const SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
 
@@ -30,6 +31,10 @@ pub fn ui(frame: &mut Frame, app: &App) {
         Screen::Settings => render_settings(frame, app),
     }
 
+    if app.sync_run.is_some() {
+        render_sync_overlay(frame, app);
+    }
+
     match &app.overlay {
         Overlay::None => {}
         Overlay::Help => render_help_overlay(frame),
@@ -45,14 +50,181 @@ fn render_dashboard(frame: &mut Frame, app: &App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
+            Constraint::Length(u16::from(app.offline.is_some())),
             Constraint::Min(5),
             Constraint::Length(8),
+            Constraint::Length(1),
         ])
         .split(frame.area());
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(chunks[2]);
 
     render_header(frame, app, chunks[0]);
-    render_targets(frame, app, chunks[1]);
-    render_log(frame, app, chunks[2]);
+    if let Some(banner) = app.offline_banner() {
+        frame.render_widget(
+            Paragraph::new(Line::styled(
+                format!(" {banner}"),
+                Style::default()
+                    .fg(theme::NEUTRAL_50)
+                    .bg(theme::ERROR)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            chunks[1],
+        );
+    }
+    render_targets(frame, app, panes[0]);
+    render_saves(frame, app, panes[1]);
+    render_log(frame, app, chunks[3]);
+    render_dashboard_footer(frame, app, chunks[4]);
+}
+
+fn app_title() -> String {
+    format!(" Waystone v{} ", crate::APP_VERSION)
+}
+
+fn pane_border(app: &App, pane: Pane) -> Style {
+    Style::default().fg(if app.pane == pane {
+        theme::PRIMARY
+    } else {
+        theme::NEUTRAL_700
+    })
+}
+
+fn render_dashboard_footer(frame: &mut Frame, app: &App, area: Rect) {
+    let hints = match app.pane {
+        Pane::Targets => {
+            " [tab] saves  [s] sync  [A] sync all  [p] push  [P] pull  [r] refresh  [a/e/d] target  [?] help"
+        }
+        Pane::Saves => {
+            " [tab] targets  [s] sync  [p] push  [P] pull  [A] sync all  [r] refresh  [?] help"
+        }
+    };
+    frame.render_widget(
+        Paragraph::new(Line::styled(hints, Style::default().fg(theme::NEUTRAL_400))),
+        area,
+    );
+}
+
+fn render_saves(frame: &mut Frame, app: &App, area: Rect) {
+    let rows = app.rows_for(app.selected);
+    let items: Vec<ListItem> = rows
+        .iter()
+        .map(|r| {
+            let mut spans = vec![
+                Span::styled(r.name.clone(), Style::default().fg(theme::NEUTRAL_50)),
+                Span::raw(format!("  {}  ", r.slot)),
+                Span::styled(
+                    r.status.label().to_string(),
+                    Style::default().fg(theme::status_color(r.status.label())),
+                ),
+            ];
+            if r.remote_only {
+                spans.push(Span::styled(
+                    "  remote only",
+                    Style::default().fg(theme::SYNC),
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+    let title = app
+        .targets
+        .get(app.selected)
+        .map_or(" Saves ".to_string(), |t| {
+            format!(" Saves \u{b7} {} ", t.name)
+        });
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(pane_border(app, Pane::Saves))
+                .title(title),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(theme::PRIMARY_800)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
+    let mut state = ratatui::widgets::ListState::default();
+    if app.pane == Pane::Saves && !rows.is_empty() {
+        state.select(Some(app.row_sel));
+    }
+    frame.render_stateful_widget(list, area, &mut state);
+}
+
+fn render_sync_overlay(frame: &mut Frame, app: &App) {
+    let Some(run) = app.sync_run.as_ref() else {
+        return;
+    };
+    let area = centered_rect(60, 12, frame.area());
+    frame.render_widget(Clear, area);
+    let title = match &run.summary {
+        None => "Syncing\u{2026}",
+        Some(s) if s.cancelled => "Sync cancelled",
+        Some(_) => "Sync complete",
+    };
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::PRIMARY))
+        .style(Style::default().bg(theme::NEUTRAL_900))
+        .title(format!(" {title} "));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let parts = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(inner);
+    let item_line = match (&run.index, &run.current) {
+        (Some(i), Some(name)) => format!("Item {} of {} \u{2014} {name}", i + 1, run.total),
+        _ => format!("{} item(s)", run.total),
+    };
+    frame.render_widget(Paragraph::new(item_line), parts[0]);
+    frame.render_widget(
+        Paragraph::new(Line::styled(
+            run.phase
+                .map_or(String::new(), |p| phase_label(p).to_string()),
+            Style::default().fg(theme::SYNC),
+        )),
+        parts[1],
+    );
+    frame.render_widget(
+        Gauge::default()
+            .gauge_style(Style::default().fg(theme::PRIMARY))
+            .ratio(run.ratio().clamp(0.0, 1.0)),
+        parts[2],
+    );
+    let mut lines = Vec::new();
+    if let Some(s) = &run.summary {
+        lines.push(Line::raw(s.headline()));
+        for m in s.error_messages.iter().take(3) {
+            lines.push(Line::styled(m.clone(), Style::default().fg(theme::ERROR)));
+        }
+    } else if run.cancelling {
+        lines.push(Line::styled(
+            "Cancelling after the current save...",
+            Style::default().fg(theme::WARNING),
+        ));
+    }
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), parts[3]);
+    let hint = if run.running() {
+        "c cancel"
+    } else {
+        "Enter close"
+    };
+    frame.render_widget(
+        Paragraph::new(Line::styled(hint, Style::default().fg(theme::NEUTRAL_400))),
+        parts[4],
+    );
 }
 
 fn render_conflicts_screen(frame: &mut Frame, app: &App) {
@@ -65,14 +237,14 @@ fn render_conflicts_screen(frame: &mut Frame, app: &App) {
         ])
         .split(frame.area());
 
-    let spinner = if app.busy.is_some() {
+    let spinner = if app.busy.is_some() || app.conflict_scanning || app.resolving {
         SPINNER_FRAMES[app.spinner as usize % SPINNER_FRAMES.len()]
     } else {
         ' '
     };
     let header_line = Line::from(vec![
         Span::styled(
-            " waystone ",
+            app_title(),
             Style::default()
                 .fg(theme::PRIMARY)
                 .add_modifier(Modifier::BOLD),
@@ -83,7 +255,16 @@ fn render_conflicts_screen(frame: &mut Frame, app: &App) {
                 .fg(theme::WARNING)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(format!(" | {} item(s) {} ", app.conflicts.len(), spinner,)),
+        Span::raw(format!(
+            " | {} item(s){} {} ",
+            app.conflicts.len(),
+            if app.conflict_scanning {
+                ", scanning"
+            } else {
+                ""
+            },
+            spinner,
+        )),
     ]);
     frame.render_widget(Paragraph::new(header_line), chunks[0]);
 
@@ -102,10 +283,15 @@ fn render_conflicts_screen(frame: &mut Frame, app: &App) {
             .enumerate()
             .map(|(i, entry)| {
                 let is_selected = i == app.conflict_sel;
+                let label = if entry.queued {
+                    format!("{} (queued)", entry.label)
+                } else {
+                    entry.label.clone()
+                };
                 let detail = if is_selected {
                     vec![
                         Line::from(vec![Span::styled(
-                            &entry.label,
+                            label.clone(),
                             Style::default().fg(theme::NEUTRAL_50),
                         )]),
                         Line::from(vec![
@@ -131,7 +317,7 @@ fn render_conflicts_screen(frame: &mut Frame, app: &App) {
                     ]
                 } else {
                     vec![Line::from(vec![Span::styled(
-                        &entry.label,
+                        label,
                         Style::default().fg(theme::NEUTRAL_300),
                     )])]
                 };
@@ -167,11 +353,14 @@ fn render_conflicts_screen(frame: &mut Frame, app: &App) {
         Span::styled(" [l] ", Style::default().fg(theme::NEUTRAL_50)),
         Span::styled("keep local", Style::default().fg(theme::SYNC)),
         Span::styled(" [r] ", Style::default().fg(theme::NEUTRAL_50)),
-        Span::styled("keep remote", Style::default().fg(theme::WARNING)),
+        Span::styled("keep remote (asks)", Style::default().fg(theme::WARNING)),
         Span::styled(" [esc] ", Style::default().fg(theme::NEUTRAL_50)),
         Span::styled("back", Style::default().fg(theme::NEUTRAL_400)),
     ]);
-    frame.render_widget(Paragraph::new(footer), chunks[2]);
+    let notice = app.conflict_notice.as_deref().map_or(Line::raw(""), |n| {
+        Line::styled(format!(" {n}"), Style::default().fg(theme::ERROR))
+    });
+    frame.render_widget(Paragraph::new(vec![footer, notice]), chunks[2]);
 }
 
 fn render_history_screen(frame: &mut Frame, app: &App) {
@@ -417,7 +606,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
     };
     let line = Line::from(vec![
         Span::styled(
-            " waystone ",
+            app_title(),
             Style::default()
                 .fg(theme::PRIMARY)
                 .add_modifier(Modifier::BOLD),
@@ -445,7 +634,11 @@ fn render_targets(frame: &mut Frame, app: &App, area: Rect) {
         .map(|(i, t)| {
             let status = app.statuses.get(&i).unwrap_or(&TargetStatus::Unknown);
             let color = theme::status_color(status.label());
-            let busy_mark = if app.busy == Some(i) { ">> " } else { "   " };
+            let busy_mark = if app.busy == Some(i) || app.sync_starting() {
+                ">> "
+            } else {
+                "   "
+            };
             let line = Line::from(vec![
                 Span::raw(busy_mark),
                 Span::styled(&t.name, Style::default().fg(theme::NEUTRAL_50)),
@@ -460,7 +653,7 @@ fn render_targets(frame: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(theme::NEUTRAL_700))
+                .border_style(pane_border(app, Pane::Targets))
                 .title(" Sync Targets "),
         )
         .highlight_style(
@@ -501,7 +694,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 }
 
 fn render_help_overlay(frame: &mut Frame) {
-    let area = centered_rect(50, 18, frame.area());
+    let area = centered_rect(56, 26, frame.area());
     frame.render_widget(Clear, area);
     let text = vec![
         Line::styled(
@@ -511,9 +704,13 @@ fn render_help_overlay(frame: &mut Frame) {
                 .add_modifier(Modifier::BOLD),
         ),
         Line::raw(""),
-        Line::raw("j/k or arrows  Select target"),
-        Line::raw("p              Push selected"),
-        Line::raw("P              Pull selected"),
+        Line::raw("Tab            Switch targets / saves pane"),
+        Line::raw("j/k or arrows  Select target or save"),
+        Line::raw("s              Sync selected target / save"),
+        Line::raw("A              Sync all targets"),
+        Line::raw("p              Push selected (saves pane: one save)"),
+        Line::raw("P              Pull selected (saves pane: one save)"),
+        Line::raw("c / Esc        Cancel a running sync"),
         Line::raw("r              Refresh status"),
         Line::raw("C              Conflicts inbox"),
         Line::raw("h              History"),
@@ -645,6 +842,8 @@ fn render_form_overlay(frame: &mut Frame, app: &App) {
         ref path,
         ref adapter,
         ref system,
+        preset,
+        ref save_dir,
         field_index,
         ref error,
     } = app.overlay
@@ -655,14 +854,17 @@ fn render_form_overlay(frame: &mut Frame, app: &App) {
         FormMode::Add => " Add Target ",
         FormMode::Edit(_) => " Edit Target ",
     };
-    let area = centered_rect(55, 12, frame.area());
+    let area = centered_rect(62, 15, frame.area());
     frame.render_widget(Clear, area);
 
+    let preset_text = format!("< {} >", preset_label(preset));
     let fields = [
         ("Name", name.as_str()),
         ("Path", path.as_str()),
         ("Adapter", adapter.as_str()),
         ("System", system.as_str()),
+        ("Preset", preset_text.as_str()),
+        ("Save dir", save_dir.as_str()),
     ];
     let mut lines = vec![
         Line::styled(
@@ -695,7 +897,7 @@ fn render_form_overlay(frame: &mut Frame, app: &App) {
     }
     lines.push(Line::raw(""));
     lines.push(Line::styled(
-        "Enter=submit  Esc=cancel  Tab=next field",
+        "Enter=submit  Esc=cancel  Tab=next field  \u{2190}/\u{2192}=preset",
         Style::default().fg(theme::NEUTRAL_500),
     ));
 
@@ -708,7 +910,7 @@ fn render_form_overlay(frame: &mut Frame, app: &App) {
 }
 
 fn render_confirm_overlay(frame: &mut Frame, message: &str) {
-    let area = centered_rect(45, 6, frame.area());
+    let area = centered_rect(64, 8, frame.area());
     frame.render_widget(Clear, area);
     let lines = vec![
         Line::raw(message),
@@ -723,7 +925,12 @@ fn render_confirm_overlay(frame: &mut Frame, message: &str) {
         .border_style(Style::default().fg(theme::WARNING))
         .style(Style::default().bg(theme::NEUTRAL_900))
         .title(" Confirm ");
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .block(block)
+            .wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 fn render_setup(frame: &mut Frame, app: &App) {
@@ -844,7 +1051,7 @@ fn render_settings(frame: &mut Frame, app: &App) {
 
     let header = Line::from(vec![
         Span::styled(
-            " waystone ",
+            app_title(),
             Style::default()
                 .fg(theme::PRIMARY)
                 .add_modifier(Modifier::BOLD),
@@ -878,7 +1085,40 @@ fn render_settings(frame: &mut Frame, app: &App) {
             false,
         ),
         ("Username", form.username.clone(), false),
+        (
+            "WebDAV password",
+            if form.webdav_password.is_empty() {
+                "(unchanged)".to_string()
+            } else {
+                "\u{2022}".repeat(form.webdav_password.chars().count())
+            },
+            false,
+        ),
+        (
+            "Check for updates",
+            app.update_status
+                .clone()
+                .unwrap_or_else(|| "press Enter".into()),
+            false,
+        ),
+        (
+            "Log out",
+            if app.creds.is_some() {
+                "press Enter".to_string()
+            } else {
+                "not logged in".to_string()
+            },
+            false,
+        ),
         ("Device ID", app.device_id.clone(), true),
+        ("Version", format!("v{}", crate::APP_VERSION), true),
+        (
+            "Log file",
+            crate::config::WaystoneConfig::config_dir()
+                .map(|d| d.join(crate::logging::LOG_FILE_NAME).display().to_string())
+                .unwrap_or_default(),
+            true,
+        ),
     ];
 
     let mut lines = vec![
@@ -930,7 +1170,7 @@ fn render_settings(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(lines).block(block), chunks[1]);
 
     let footer = Line::from(vec![Span::styled(
-        "Enter=save  Esc=discard  Tab=next field  Space=toggle (on policy/safety)",
+        "Enter=save (or run the row)  Esc=discard  Tab=next field  Space=toggle (policy/safety)",
         Style::default().fg(theme::NEUTRAL_500),
     )]);
     frame.render_widget(Paragraph::new(footer), chunks[2]);
@@ -991,12 +1231,12 @@ mod tests {
             server_url: "http://localhost".into(),
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
             username: None,
-            targets: vec![SyncTarget {
-                name: "Switch JKSV".into(),
-                path: "/saves/jksv".into(),
-                adapter: "jksv".into(),
-                system: "switch".into(),
-            }],
+            targets: vec![SyncTarget::plain(
+                "Switch JKSV",
+                std::path::Path::new("/saves/jksv"),
+                "jksv",
+                "switch",
+            )],
             safety_backup: false,
         };
         App::new(&config)
@@ -1013,6 +1253,72 @@ mod tests {
             buffer[(0, 0)].bg,
             theme::NEUTRAL_900,
             "base background must be NEUTRAL_900 so dark-theme text reads on any terminal"
+        );
+    }
+
+    fn render_text(app: &App) -> String {
+        let backend = TestBackend::new(100, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|frame| ui(frame, app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn dashboard_lists_saves_with_remote_only_marker() {
+        use crate::tui::app::SaveRow;
+        let mut app = ui_test_app();
+        app.rows = vec![SaveRow {
+            target_id: 0,
+            group_key: "nds/A/battery".into(),
+            name: "Mario Kart".into(),
+            slot: "battery".into(),
+            status: TargetStatus::Behind,
+            remote_only: true,
+        }];
+        let text = render_text(&app);
+        assert!(
+            text.contains("Mario Kart") && text.contains("remote only"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn sync_overlay_shows_item_phase_and_summary() {
+        use crate::tui::app::SyncRunView;
+        use waystone_sync::engine::{SyncPhase, SyncSummary};
+        let mut app = ui_test_app();
+        app.sync_run = Some(SyncRunView {
+            total: 3,
+            index: Some(1),
+            current: Some("Zelda".into()),
+            phase: Some(SyncPhase::Pulling),
+            ..Default::default()
+        });
+        let text = render_text(&app);
+        assert!(
+            text.contains("Item 2 of 3") && text.contains("Zelda"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Downloading") && text.contains("c cancel"),
+            "{text}"
+        );
+        app.sync_run.as_mut().unwrap().summary = Some(SyncSummary {
+            pushed: 1,
+            ..Default::default()
+        });
+        let text = render_text(&app);
+        assert!(
+            text.contains("Sync complete") && text.contains("Enter close"),
+            "{text}"
         );
     }
 }

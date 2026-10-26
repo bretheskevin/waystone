@@ -27,6 +27,29 @@ v1 adapters: **jksv** (Switch/3DS native) and **mgba** (GBA/GBC/GB battery saves
 
 M1 is buildable and testable on any desktop (no console hardware needed).
 
+## Desktop
+
+Download the binary for your platform from the latest GitHub Release:
+
+| Platform | Asset |
+|---|---|
+| macOS (Apple silicon) | `waystone-desktop-aarch64-apple-darwin` |
+| macOS (Intel) | `waystone-desktop-x86_64-apple-darwin` |
+| Linux (x86_64) | `waystone-desktop-x86_64-unknown-linux-gnu` |
+| Windows (x86_64) | `waystone-desktop-x86_64-pc-windows-msvc.exe` |
+
+```sh
+mv ./waystone-desktop-aarch64-apple-darwin ./waystone && chmod +x ./waystone
+# macOS binaries are unsigned: clear the quarantine flag once
+xattr -d com.apple.quarantine ./waystone
+./waystone tui
+```
+
+- The vault session is kept in the OS keychain. On Linux this needs a Secret Service provider
+  (GNOME Keyring or KWallet); without one the app prompts on every run.
+- Update in place with `waystone update`, or TUI Settings -> Check for updates.
+- Logs: `waystone.log` (rotated at 256 KiB) in the Waystone config directory.
+
 ## Quick start
 
 ### Self-host the backend (dufs on Dokploy)

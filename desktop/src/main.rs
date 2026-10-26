@@ -1,16 +1,32 @@
+mod cli_session;
 mod config;
 mod helpers;
+mod keychain;
+mod logging;
+mod net_status;
 mod pipeline;
+mod presets;
+mod save_io;
+mod sync_run;
 mod tui;
+mod updater;
+mod vault_ops;
 mod webdav;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use config::SyncTarget;
 use std::path::PathBuf;
-use waystone_core::conflict::SyncDecision;
+use waystone_core::model::NormalizedSave;
+use waystone_sync::engine::{
+    self, PlanAction, PlanEntry, SyncPhase, SyncProgressSink, SyncSummary,
+};
+use zeroize::Zeroize;
+
+pub const APP_VERSION: &str = env!("WAYSTONE_VERSION");
 
 #[derive(Parser)]
-#[command(name = "waystone", version, about = "Game-save sync tool")]
+#[command(name = "waystone", version = APP_VERSION, about = "Game-save sync tool")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -57,6 +73,23 @@ enum Commands {
         #[arg(long)]
         username: Option<String>,
     },
+    /// Sync every configured target: push local changes, pull newer remote saves
+    Sync {
+        /// Print the plan without changing anything
+        #[arg(long)]
+        dry_run: bool,
+        /// Only this target (by name)
+        #[arg(long)]
+        target: Option<String>,
+    },
+    /// Check for a newer release and install it
+    Update {
+        /// Only report whether an update is available
+        #[arg(long)]
+        check: bool,
+    },
+    /// Forget the keychain session (the next command asks for the passphrase again)
+    Logout,
     /// Launch the interactive TUI dashboard
     Tui,
     /// Show sync status
@@ -158,22 +191,6 @@ enum SnapshotCommands {
     },
 }
 
-/// Resolve WebDAV credentials: username from arg > config; password from env > interactive prompt.
-fn resolve_webdav_credentials(
-    username_arg: Option<String>,
-    cfg: &config::WaystoneConfig,
-) -> Result<(Option<String>, Option<String>)> {
-    let username = username_arg.or_else(|| cfg.username.clone());
-    if let Some(ref u) = username {
-        let password = std::env::var("WAYSTONE_WEBDAV_PASSWORD")
-            .ok()
-            .or_else(|| rpassword::prompt_password(format!("WebDAV password for {u}: ")).ok());
-        Ok((Some(u.clone()), password))
-    } else {
-        Ok((None, None))
-    }
-}
-
 fn resolve_history_selector<'a>(
     entries: &'a [waystone_sync::HistoryEntry],
     selector: &str,
@@ -248,94 +265,263 @@ fn resolve_save_by_game<'a>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn do_pull_save(
-    vault: &waystone_core::crypto::Vault,
-    dav: &webdav::BlockingWebDav,
-    save: &waystone_core::model::NormalizedSave,
-    dest: &std::path::Path,
-    adapter_name: &str,
-    system_name: &str,
-    device_id: &str,
-    policy: waystone_core::conflict::ConflictPolicy,
-    safety_backup: bool,
-) -> Result<()> {
-    let all_heads = waystone_sync::read_remote_heads(vault, save, dav)?;
-    let (entry, _) = waystone_core::packaging::package(save);
-
-    let decision = waystone_core::conflict::decide_pull(
-        Some(&entry.content.hash),
-        &entry.mtime,
-        &all_heads,
-        device_id,
-        policy,
-    );
-
-    let pull_hash: Option<String> = match &decision {
-        SyncDecision::Pull { head_hash } => Some(head_hash.clone()),
-        SyncDecision::ConflictResolved {
-            winner: waystone_core::conflict::ConflictWinner::Remote,
-            ..
-        } => waystone_core::conflict::fold_heads(&all_heads).map(|m| m.hash),
-        _ => None,
+pub fn format_plan_line(e: &PlanEntry, target_name: &str) -> String {
+    let action = match e.action {
+        PlanAction::Push => "push",
+        PlanAction::Pull => "pull",
+        PlanAction::InSync => "in-sync",
+        PlanAction::Conflict => "conflict",
+        PlanAction::Error => "error",
     };
+    let suffix = e
+        .error
+        .as_deref()
+        .map_or(String::new(), |err| format!(" \u{2014} {err}"));
+    format!(
+        "{action:<8} {target_name} \u{b7} {} / {}{suffix}",
+        e.save.id.game.display_name, e.save.id.slot
+    )
+}
 
-    match pull_hash {
-        Some(hash) => {
-            println!("Pulling: {} / {}", save.id.game.display_name, save.id.slot);
-            if let Some(p) = helpers::guarded_restore(
-                vault,
-                dav,
-                save,
-                &hash,
-                dest,
-                adapter_name,
-                system_name,
-                safety_backup,
-            )? {
-                println!("  safety backup -> {}", p.display());
-            }
+pub fn progress_line(index: usize, total: usize, name: &str, phase: SyncPhase) -> String {
+    format!(
+        "[{}/{total}] {} {name}",
+        index + 1,
+        sync_run::phase_label(phase)
+    )
+}
+
+struct CliProgress;
+
+impl SyncProgressSink for CliProgress {
+    fn started(&self, total: usize) {
+        println!("{total} item(s) to process");
+    }
+
+    fn item(&self, index: usize, total: usize, save: &NormalizedSave, phase: SyncPhase) {
+        println!(
+            "{}",
+            progress_line(index, total, &save.id.game.display_name, phase)
+        );
+    }
+
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+}
+
+fn print_summary(summary: &SyncSummary) {
+    println!("{}", summary.headline());
+    for m in &summary.error_messages {
+        println!("  {m}");
+    }
+}
+
+/// A CLI path argument as a target, inheriting the preset/save dir of a matching configured target.
+fn cli_target(
+    cfg: &config::WaystoneConfig,
+    path: &std::path::Path,
+    adapter: &str,
+    system: &str,
+) -> SyncTarget {
+    cfg.resolve_target(SyncTarget::plain("cli", path, adapter, system))
+}
+
+/// Push/pull one ad-hoc CLI path.
+async fn run_adhoc(
+    path: PathBuf,
+    adapter: String,
+    system: String,
+    username: Option<String>,
+    mode: sync_run::RunMode,
+) -> Result<()> {
+    let cfg = config::WaystoneConfig::load()?;
+    let target = cli_target(&cfg, &path, &adapter, &system);
+    run_planned(
+        cfg,
+        vec![target],
+        sync_run::Selection::All,
+        mode,
+        username,
+        false,
+    )
+    .await
+}
+
+async fn run_sync(dry_run: bool, target_name: Option<String>) -> Result<()> {
+    let mut cfg = config::WaystoneConfig::load()?;
+    if cfg.targets.is_empty() {
+        anyhow::bail!("no targets configured -- add one in `waystone tui` first");
+    }
+    let sel = match target_name {
+        None => sync_run::Selection::All,
+        Some(name) => sync_run::Selection::Target(
+            cfg.targets
+                .iter()
+                .position(|t| t.name == name)
+                .ok_or_else(|| anyhow::anyhow!("no target named '{name}'"))?,
+        ),
+    };
+    let targets = std::mem::take(&mut cfg.targets);
+    run_planned(cfg, targets, sel, sync_run::RunMode::Sync, None, dry_run).await
+}
+
+/// Plan + (unless `dry_run`) execute through the shared engine; exits 1 when any item failed.
+/// Remote-only ROM slots are discovered for sync and pull (`sync_run::wants_remote_only`), as in the TUI.
+async fn run_planned(
+    cfg: config::WaystoneConfig,
+    targets: Vec<SyncTarget>,
+    sel: sync_run::Selection,
+    mode: sync_run::RunMode,
+    username: Option<String>,
+    dry_run: bool,
+) -> Result<()> {
+    let session = cli_session::open(&cfg, username, &keychain::OsKeychain).await?;
+    let backups_root = helpers::default_backups_root()?;
+    log::info!("[sync] cli run start: {sel:?} {mode:?} dry_run={dry_run}");
+    let summary = tokio::task::spawn_blocking(move || -> Result<Option<SyncSummary>> {
+        let dav: &dyn waystone_sync::WebDav = session.blocking.as_ref();
+        let remote = sync_run::wants_remote_only(mode).then_some((session.vault.as_ref(), dav));
+        let collected = sync_run::collect_saves(&targets, &sel, remote)?;
+        let planned = sync_run::plan_run(
+            &session.vault,
+            collected,
+            &cfg.device_id,
+            cfg.conflict_policy,
+            mode,
+            dav,
+        );
+        for (e, owner) in planned.entries.iter().zip(&planned.owners) {
+            println!("{}", format_plan_line(e, &targets[*owner].name));
         }
-        None => match decision {
-            SyncDecision::InSync => {
-                println!("In sync: {} / {}", save.id.game.display_name, save.id.slot)
+        for err in &planned.scan_errors {
+            println!("error    {err}");
+        }
+        if dry_run {
+            println!("{}", engine::describe(&planned.entries));
+            return Ok(None);
+        }
+        Ok(Some(sync_run::execute_run(
+            &session.vault,
+            &planned,
+            &targets,
+            &cfg.device_id,
+            cfg.safety_backup,
+            backups_root,
+            dav,
+            &CliProgress,
+        )))
+    })
+    .await??;
+    if let Some(summary) = summary {
+        log::info!("[sync] cli run done: {}", summary.headline());
+        print_summary(&summary);
+        if summary.errors > 0 {
+            std::process::exit(1);
+        }
+    }
+    Ok(())
+}
+
+async fn run_update(check_only: bool) -> Result<()> {
+    let latest = tokio::task::spawn_blocking(|| updater::check(APP_VERSION)).await?;
+    let rel = match latest {
+        Err(e) => {
+            eprintln!("{}", e.check_message());
+            std::process::exit(1);
+        }
+        Ok(updater::CheckResult::UpToDate(v)) => {
+            println!("Up to date (v{v})");
+            return Ok(());
+        }
+        Ok(updater::CheckResult::Available(rel)) => rel,
+    };
+    println!("Update available: v{}", rel.version);
+    if check_only {
+        return Ok(());
+    }
+    let version = rel.version.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        updater::install(&rel, |done, total| {
+            if let Some(total) = total.filter(|t| *t > 0) {
+                print!("\rDownloading... {}%", done * 100 / total);
+                let _ = std::io::Write::flush(&mut std::io::stdout());
             }
-            _ => println!(
-                "Skipping (needs manual resolve): {} / {}",
-                save.id.game.display_name, save.id.slot
-            ),
-        },
+        })
+    })
+    .await?;
+    println!();
+    match result {
+        Ok(()) => println!("Updated to v{version} \u{2014} restart waystone to use it."),
+        Err(e) => {
+            eprintln!("{}", e.install_message());
+            std::process::exit(1);
+        }
     }
     Ok(())
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    if let Err(e) = run().await {
+        if let Some(off) = e.downcast_ref::<cli_session::Offline>() {
+            log::warn!("[net] offline: {off}");
+            eprintln!("{off}");
+            std::process::exit(2);
+        }
+        log::warn!("[app] command failed: {e:#}");
+        eprintln!("Error: {e:#}");
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
+    match config::WaystoneConfig::config_dir().and_then(|d| logging::init(&d)) {
+        Ok(p) => log::info!(
+            "[app] waystone-desktop v{APP_VERSION} ({}) start; log={}",
+            env!("WAYSTONE_TARGET"),
+            p.display()
+        ),
+        Err(e) => eprintln!("warning: file logging disabled: {e:#}"),
+    }
 
     match cli.command {
         Commands::Init { server, username } => {
-            let passphrase = rpassword::prompt_password("Enter passphrase: ")?;
-            let confirm = rpassword::prompt_password("Confirm passphrase: ")?;
-            if passphrase != confirm {
+            let mut passphrase = rpassword::prompt_password("Enter passphrase: ")?;
+            let mut confirm = rpassword::prompt_password("Confirm passphrase: ")?;
+            let matches = passphrase == confirm;
+            confirm.zeroize();
+            if !matches {
+                passphrase.zeroize();
                 anyhow::bail!("passphrases do not match");
             }
+            cli_session::ensure_online(&server).await?;
 
-            let (vault, recovery_key) = waystone_core::crypto::Vault::init(&passphrase)?;
-            let keys_json = vault.keys_json()?;
-
-            let cfg = config::WaystoneConfig {
-                server_url: server.clone(),
-                username: username.clone(),
-                ..Default::default()
+            let mut cfg = config::WaystoneConfig::load()?;
+            cfg.server_url = server.clone();
+            cfg.username = username.clone();
+            let password = cli_session::resolve_webdav_password(
+                username.as_deref(),
+                None,
+                &cli_session::prompt_secret,
+            )?;
+            let dav = webdav::WebDavClient::new(&server, username.clone(), password.clone());
+            let result = vault_ops::init_vault(&dav, &passphrase).await;
+            passphrase.zeroize();
+            let (vault, recovery_key) = match result {
+                Ok(v) => v,
+                Err(e) if e.is::<vault_ops::VaultExists>() => {
+                    cfg.save()?;
+                    eprintln!("{}", vault_ops::VAULT_EXISTS);
+                    eprintln!("Run any command (e.g. `waystone sync --dry-run`) to unlock it.");
+                    std::process::exit(1);
+                }
+                Err(e) => return Err(e),
             };
 
-            let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
-            let dav = webdav::WebDavClient::new(&server, wdav_user, wdav_pass);
-            dav.mkdir_p("/").await?;
-            dav.put("/keys.json", keys_json).await?;
-
             cfg.save()?;
+            cli_session::remember(&keychain::OsKeychain, &server, username, &vault, password);
 
             println!("Vault initialized.");
             println!("Device ID: {}", cfg.device_id);
@@ -351,86 +537,22 @@ async fn main() -> Result<()> {
             adapter,
             system,
             username,
-        } => {
-            let cfg = config::WaystoneConfig::load()?;
-
-            let passphrase = rpassword::prompt_password("Passphrase: ")?;
-            let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
-            let dav =
-                webdav::WebDavClient::new(&cfg.server_url, wdav_user.clone(), wdav_pass.clone());
-            let keys_data = dav.get("/keys.json").await?.ok_or_else(|| {
-                anyhow::anyhow!("no keys.json on server — run `waystone init` first")
-            })?;
-            let vault =
-                waystone_core::crypto::Vault::unlock_with_passphrase(&passphrase, &keys_data)?;
-
-            let vault_arc = std::sync::Arc::new(vault);
-            let device_id = cfg.device_id.clone();
-            let server_url_owned = cfg.server_url.clone();
-
-            let count = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
-                let blocking_dav =
-                    webdav::BlockingWebDav::new(&server_url_owned, wdav_user, wdav_pass);
-                let saves = helpers::load_saves(&adapter, &system, &source)?;
-                let count = saves.len();
-                for save in &saves {
-                    println!("Pushing: {} / {}", save.id.game.display_name, save.id.slot);
-                    waystone_sync::push_one(&vault_arc, save, &device_id, &blocking_dav)?;
-                }
-                Ok(count)
-            })
-            .await??;
-
-            println!("Done. {} save(s) pushed.", count);
-            Ok(())
-        }
+        } => run_adhoc(source, adapter, system, username, sync_run::RunMode::Push).await,
 
         Commands::Pull {
             dest,
             adapter,
             system,
             username,
-        } => {
-            let cfg = config::WaystoneConfig::load()?;
+        } => run_adhoc(dest, adapter, system, username, sync_run::RunMode::Pull).await,
 
-            let passphrase = rpassword::prompt_password("Passphrase: ")?;
-            let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
-            let dav =
-                webdav::WebDavClient::new(&cfg.server_url, wdav_user.clone(), wdav_pass.clone());
-            let keys_data = dav
-                .get("/keys.json")
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("no keys.json on server"))?;
-            let vault =
-                waystone_core::crypto::Vault::unlock_with_passphrase(&passphrase, &keys_data)?;
+        Commands::Sync { dry_run, target } => run_sync(dry_run, target).await,
 
-            let vault_arc = std::sync::Arc::new(vault);
-            let blocking_dav =
-                webdav::make_blocking_dav(&cfg.server_url, wdav_user, wdav_pass).await?;
-            let device_id = cfg.device_id.clone();
-            let policy = cfg.conflict_policy;
-            let safety_backup = cfg.safety_backup;
+        Commands::Update { check } => run_update(check).await,
 
-            tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                let local_saves = helpers::load_saves(&adapter, &system, &dest)?;
-                for save in &local_saves {
-                    do_pull_save(
-                        &vault_arc,
-                        &blocking_dav,
-                        save,
-                        &dest,
-                        &adapter,
-                        &system,
-                        &device_id,
-                        policy,
-                        safety_backup,
-                    )?;
-                }
-                Ok(())
-            })
-            .await??;
-
-            println!("Pull complete.");
+        Commands::Logout => {
+            keychain::clear_session(&keychain::OsKeychain)?;
+            println!("Logged out (keychain session cleared).");
             Ok(())
         }
 
@@ -449,9 +571,10 @@ async fn main() -> Result<()> {
             let cfg = config::WaystoneConfig::load()?;
             let device_id = cfg.device_id.clone();
             let server_url = cfg.server_url.clone();
+            let target = cli_target(&cfg, &source, &adapter, &system);
 
             tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                let saves = helpers::load_saves(&adapter, &system, &source)?;
+                let saves = helpers::load_target_saves(&target)?;
 
                 println!("Device: {}", device_id);
                 println!("Server: {}", server_url);
@@ -485,33 +608,22 @@ async fn main() -> Result<()> {
                     system,
                     username,
                 } => {
-                    let passphrase = rpassword::prompt_password("Passphrase: ")?;
-                    let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
-                    let dav = webdav::WebDavClient::new(
-                        &cfg.server_url,
-                        wdav_user.clone(),
-                        wdav_pass.clone(),
-                    );
-                    let keys_data = dav
-                        .get("/keys.json")
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!("no keys.json on server"))?;
-                    let vault = waystone_core::crypto::Vault::unlock_with_passphrase(
-                        &passphrase,
-                        &keys_data,
-                    )?;
-
-                    let vault_arc = std::sync::Arc::new(vault);
-                    let blocking_dav =
-                        webdav::make_blocking_dav(&cfg.server_url, wdav_user, wdav_pass).await?;
+                    let target = cli_target(&cfg, &source, &adapter, &system);
+                    let cli_session::CliSession {
+                        vault: vault_arc,
+                        blocking: blocking_dav,
+                    } = cli_session::open(&cfg, username, &keychain::OsKeychain).await?;
 
                     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                        let saves = helpers::load_saves(&adapter, &system, &source)?;
+                        let saves = helpers::load_target_saves(&target)?;
 
                         for save in &saves {
                             println!("{} / {}:", save.id.game.display_name, save.id.slot);
-                            let entries =
-                                waystone_sync::list_history(&vault_arc, save, &blocking_dav)?;
+                            let entries = waystone_sync::list_history(
+                                &vault_arc,
+                                save,
+                                blocking_dav.as_ref(),
+                            )?;
                             if entries.is_empty() {
                                 println!("  (no history yet)");
                             } else {
@@ -540,33 +652,20 @@ async fn main() -> Result<()> {
                     game,
                     selector,
                 } => {
-                    let passphrase = rpassword::prompt_password("Passphrase: ")?;
-                    let (wdav_user, wdav_pass) = resolve_webdav_credentials(username, &cfg)?;
-                    let dav = webdav::WebDavClient::new(
-                        &cfg.server_url,
-                        wdav_user.clone(),
-                        wdav_pass.clone(),
-                    );
-                    let keys_data = dav
-                        .get("/keys.json")
-                        .await?
-                        .ok_or_else(|| anyhow::anyhow!("no keys.json on server"))?;
-                    let vault = waystone_core::crypto::Vault::unlock_with_passphrase(
-                        &passphrase,
-                        &keys_data,
-                    )?;
-
-                    let vault_arc = std::sync::Arc::new(vault);
-                    let blocking_dav =
-                        webdav::make_blocking_dav(&cfg.server_url, wdav_user, wdav_pass).await?;
+                    let target = cli_target(&cfg, &dest, &adapter, &system);
+                    let cli_session::CliSession {
+                        vault: vault_arc,
+                        blocking: blocking_dav,
+                    } = cli_session::open(&cfg, username, &keychain::OsKeychain).await?;
                     let safety_backup = cfg.safety_backup;
 
                     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                        let saves = helpers::load_saves(&adapter, &system, &dest)?;
+                        let saves = helpers::load_target_saves(&target)?;
 
                         let save = resolve_save_by_game(&saves, game.as_deref())?;
 
-                        let entries = waystone_sync::list_history(&vault_arc, save, &blocking_dav)?;
+                        let entries =
+                            waystone_sync::list_history(&vault_arc, save, blocking_dav.as_ref())?;
                         let entry = resolve_history_selector(&entries, &selector)?;
 
                         println!(
@@ -577,18 +676,16 @@ async fn main() -> Result<()> {
                             &entry.hash[..12.min(entry.hash.len())]
                         );
 
-                        if let Some(p) = helpers::guarded_restore(
-                            &vault_arc,
-                            &blocking_dav,
-                            save,
-                            &entry.hash,
-                            &dest,
-                            &adapter,
-                            &system,
-                            safety_backup,
-                        )? {
-                            println!("  safety backup -> {}", p.display());
-                        }
+                        save_io::restore_one(&target, &save.group_key, safety_backup, |s, io| {
+                            engine::restore_hash(
+                                &vault_arc,
+                                0,
+                                s,
+                                &entry.hash,
+                                blocking_dav.as_ref(),
+                                io,
+                            )
+                        })?;
                         println!("Restore complete.");
                         Ok(())
                     })
@@ -605,8 +702,9 @@ async fn main() -> Result<()> {
                     adapter,
                     system,
                 } => {
+                    let target = cli_target(&cfg, &source, &adapter, &system);
                     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                        let saves = helpers::load_saves(&adapter, &system, &source)?;
+                        let saves = helpers::load_target_saves(&target)?;
                         for save in &saves {
                             println!("{} / {}:", save.id.game.display_name, save.id.slot);
                             let entries = helpers::list_snapshots(&save.group_key)?;
@@ -637,8 +735,9 @@ async fn main() -> Result<()> {
                     selector,
                 } => {
                     let safety_backup = cfg.safety_backup;
+                    let target = cli_target(&cfg, &dest, &adapter, &system);
                     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-                        let saves = helpers::load_saves(&adapter, &system, &dest)?;
+                        let saves = helpers::load_target_saves(&target)?;
                         if saves.is_empty() {
                             anyhow::bail!(
                                 "no saves found at destination '{}'; nothing to restore",
@@ -652,11 +751,11 @@ async fn main() -> Result<()> {
                             "Restoring: {} / {} <- snapshot {}",
                             save.id.game.display_name, save.id.slot, entry.timestamp
                         );
-                        let target = helpers::restore_target(&adapter, &dest, &save.group_key)?;
+                        let restore = helpers::restore_target_for(&target, &save.group_key)?;
                         if let Some(p) = helpers::restore_from_snapshot(
                             &save.group_key,
                             &entry.timestamp,
-                            &target,
+                            &restore,
                             safety_backup,
                         )? {
                             println!("  safety backup -> {}", p.display());
@@ -852,5 +951,58 @@ mod tests {
         let saves: Vec<NormalizedSave> = vec![];
         let err = resolve_save_by_game(&saves, None).unwrap_err().to_string();
         assert!(err.contains("no saves found"), "got: {err}");
+    }
+
+    #[test]
+    fn app_version_matches_root_version_file() {
+        assert_eq!(APP_VERSION, include_str!("../../VERSION").trim());
+    }
+
+    fn plan_entry(action: PlanAction, error: Option<&str>) -> PlanEntry {
+        let save =
+            waystone_core::adapters::mgba::MgbaAdapter::new(waystone_core::model::SystemId::Gba);
+        use waystone_core::adapters::Adapter;
+        let save = save
+            .normalize(&waystone_core::model::RawTree {
+                files: vec![waystone_core::model::RawFile {
+                    path: "Zelda.sav".into(),
+                    content: b"x".to_vec(),
+                }],
+            })
+            .remove(0);
+        let mut e = engine::forced_push(save).unwrap();
+        e.action = action;
+        e.error = error.map(String::from);
+        e
+    }
+
+    #[test]
+    fn plan_line_format() {
+        let e = plan_entry(PlanAction::Push, None);
+        assert_eq!(
+            format_plan_line(&e, "GBA"),
+            "push     GBA \u{b7} Zelda / battery"
+        );
+        let e = plan_entry(PlanAction::Error, Some("boom"));
+        assert_eq!(
+            format_plan_line(&e, "GBA"),
+            "error    GBA \u{b7} Zelda / battery \u{2014} boom"
+        );
+    }
+
+    #[test]
+    fn progress_line_format() {
+        assert_eq!(
+            progress_line(0, 3, "Zelda", SyncPhase::Pushing),
+            "[1/3] Uploading Zelda"
+        );
+        assert_eq!(
+            progress_line(2, 3, "Zelda", SyncPhase::Pulling),
+            "[3/3] Downloading Zelda"
+        );
+        assert_eq!(
+            progress_line(1, 3, "Zelda", SyncPhase::Restoring),
+            "[2/3] Restoring Zelda"
+        );
     }
 }

@@ -13,6 +13,7 @@ crate-type = ["cdylib", "lib"]
 waystone-core = { path = "../core" }
 waystone-sync = { path = "../sync" }
 uniffi = { version = "=0.32.0", features = ["cli"] }
+log = { version = "0.4", features = ["std"] }
 
 [[bin]]
 name = "uniffi-bindgen"

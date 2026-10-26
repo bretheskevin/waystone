@@ -23,6 +23,30 @@ pub fn remote_path(vault: &Vault, save: &NormalizedSave) -> String {
     format!("{}/{}/{}", sys_seg, game_seg, slot_seg)
 }
 
+pub fn href_last_segment(href: &str) -> &str {
+    href.trim_end_matches('/').rsplit('/').next().unwrap_or("")
+}
+
+/// Save/head mtime form (`2026-01-01T00:00:00Z`), as console `rom_saves_mtime` writes it.
+pub fn format_mtime(t: chrono::DateTime<chrono::Utc>) -> String {
+    t.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
+/// A head needs an mtime for newest-wins; an unknown one is stamped with the current UTC time.
+pub(crate) fn mtime_or_now(mtime: &str) -> String {
+    if mtime.is_empty() {
+        format_mtime(chrono::Utc::now())
+    } else {
+        mtime.to_string()
+    }
+}
+
+pub(crate) fn encode_head(vault: &Vault, head: &DeviceHead) -> Result<(Vec<u8>, Vec<u8>)> {
+    let json = serde_json::to_vec_pretty(head)?;
+    let encrypted = vault.encrypt_heads(&json)?;
+    Ok((json, encrypted))
+}
+
 pub fn push_one(
     vault: &Vault,
     save: &NormalizedSave,
@@ -47,10 +71,9 @@ pub fn push_one(
     let head = DeviceHead {
         device_id: device_id.to_string(),
         hash: entry.content.hash.clone(),
-        mtime: entry.mtime.clone(),
+        mtime: mtime_or_now(&entry.mtime),
     };
-    let head_json = serde_json::to_vec_pretty(&head)?;
-    let encrypted_head = vault.encrypt_heads(&head_json)?;
+    let (head_json, encrypted_head) = encode_head(vault, &head)?;
     let head_path = format!("{}/heads/{}.json", base_path, device_id);
     dav.put(&head_path, encrypted_head)?;
 
@@ -77,7 +100,7 @@ pub fn read_remote_heads(
 
     let mut heads = Vec::new();
     for href in hrefs {
-        let filename = href.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+        let filename = href_last_segment(&href);
         if filename.is_empty() || !filename.ends_with(".json") {
             continue;
         }
@@ -120,7 +143,7 @@ pub fn list_history(
 
     let mut entries = Vec::new();
     for href in hrefs {
-        let filename = href.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+        let filename = href_last_segment(&href);
         if filename.is_empty() || !filename.ends_with(".json") {
             continue;
         }

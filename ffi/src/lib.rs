@@ -59,4 +59,6 @@ pub mod dto;
 pub mod error;
 pub mod packaging_abi;
 pub mod rom_abi;
+pub mod url_abi;
+pub mod version_abi;
 pub mod wire;

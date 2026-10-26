@@ -138,4 +138,30 @@ mod tests {
         assert_eq!(save_dat.path, "Super Mario Odyssey/main/save.dat");
         assert_eq!(save_dat.content, vec![0xDE, 0xAD]);
     }
+
+    #[test]
+    fn jksv_device_slot_is_a_separate_save() {
+        let tree = RawTree {
+            files: vec![
+                RawFile {
+                    path: "Zelda/main/save.dat".into(),
+                    content: vec![1],
+                },
+                RawFile {
+                    path: "Zelda/device/system.dat".into(),
+                    content: vec![2],
+                },
+            ],
+        };
+        let saves = JksvAdapter::new(SystemId::Switch).normalize(&tree);
+        let mut keys: Vec<_> = saves.iter().map(|s| s.group_key.clone()).collect();
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "switch/zelda/device".to_string(),
+                "switch/zelda/main".to_string()
+            ]
+        );
+    }
 }

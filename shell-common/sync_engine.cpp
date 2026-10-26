@@ -4,30 +4,14 @@
 #include "file_tree.h"  // save_list_decode
 #include "snapshot.h"
 #include "snapshot_browse.h"  // history_timestamp
+#include "ffi_err.h"
+#include "wall_clock.h"
 
 #include <cstdio>
 #include <cstring>
 #include <ctime>
-#include <sys/time.h>
-
-extern "C" {
-#include "waystone.h"
-}
 
 static const char* kBackupsRoot = "sdmc:/waystone/backups/";
-
-static const char* ffi_err() {
-    const char* e = ws_last_error();
-    return e ? e : "unknown";
-}
-
-static unsigned long long now_ms() {
-    struct timeval tv;
-    gettimeofday(&tv, 0);
-    return (unsigned long long)tv.tv_sec * 1000ULL + (unsigned long long)(tv.tv_usec / 1000);
-}
-
-static unsigned long long since_ms(unsigned long long t0) { return now_ms() - t0; }
 
 static std::string utc_now() { return utc_iso_from_epoch((long long)time(0)); }
 
@@ -149,26 +133,26 @@ static int put_creating_parent(WebDavSession* dav, const std::string& parent_dir
     bool (*progress)(size_t, size_t, void*) = (report_bytes && prog) ? prog->bytes : 0;
     void* ctx = prog ? prog->ctx : 0;
 
-    unsigned long long t0 = now_ms();
+    unsigned long long t0 = wall_now_ms();
     int rc = webdav_put_s(dav, remote_path.c_str(), data, len, progress, ctx);
-    printf("[sync] PUT %s (%zu bytes) rc=%d in %llu ms\n", remote_path.c_str(), len, rc, since_ms(t0));
+    printf("[sync] PUT %s (%zu bytes) rc=%d in %llu ms\n", remote_path.c_str(), len, rc, wall_ms_since(t0));
     if (!put_needs_parent_dir(rc)) return rc;
 
     report_step(prog, "Preparing server");
     printf("[sync] parent missing (status=%d) -- creating %s\n", rc, parent_dir.c_str());
-    t0 = now_ms();
+    t0 = wall_now_ms();
     int mrc = webdav_mkdir_p_s(dav, parent_dir.c_str());
     if (mrc != 0) {
-        printf("[sync] mkdir_p %s failed (err=%d) in %llu ms\n", parent_dir.c_str(), mrc, since_ms(t0));
+        printf("[sync] mkdir_p %s failed (err=%d) in %llu ms\n", parent_dir.c_str(), mrc, wall_ms_since(t0));
         return mrc;
     }
-    printf("[sync] mkdir_p %s done in %llu ms\n", parent_dir.c_str(), since_ms(t0));
+    printf("[sync] mkdir_p %s done in %llu ms\n", parent_dir.c_str(), wall_ms_since(t0));
 
     report_step(prog, step_label);
     if (progress) progress(0, len, ctx);
-    t0 = now_ms();
+    t0 = wall_now_ms();
     rc = webdav_put_s(dav, remote_path.c_str(), data, len, progress, ctx);
-    printf("[sync] PUT retry %s (%zu bytes) rc=%d in %llu ms\n", remote_path.c_str(), len, rc, since_ms(t0));
+    printf("[sync] PUT retry %s (%zu bytes) rc=%d in %llu ms\n", remote_path.c_str(), len, rc, wall_ms_since(t0));
     return rc;
 }
 
@@ -216,7 +200,7 @@ static void decide_from_heads(const WsVault* vault, SaveDecision& d, int policy,
                               const char* device_id, WebDavSession* dav) {
     std::string heads_path = d.base_path + "/heads";
     std::vector<std::string> hrefs;
-    unsigned long long t0 = now_ms();
+    unsigned long long t0 = wall_now_ms();
     int prc = webdav_propfind_s(dav, heads_path.c_str(), &hrefs);
     if (prc != 0) {
         printf("[sync] decide %s: PROPFIND heads failed (err=%d)\n", d.group_key.c_str(), prc);
@@ -249,7 +233,7 @@ static void decide_from_heads(const WsVault* vault, SaveDecision& d, int policy,
     const bool have_local = !d.local_hash.empty();
     HeadsOutcome ho = classify_heads(json_hrefs, decrypted, have_local);
     printf("[sync] decide %s: %zu head file(s), %zu readable in %llu ms\n", d.group_key.c_str(),
-           json_hrefs, decrypted, since_ms(t0));
+           json_hrefs, decrypted, wall_ms_since(t0));
     if (ho == HeadsOutcome::Push) {
         d.decision_type = "push";
         printf("[sync] decide %s -> push (no remote heads: first upload)\n", d.group_key.c_str());
@@ -328,14 +312,14 @@ static int decide_title(const WsVault* vault, const void* title, const char* nam
                         WebDavSession* dav, const SyncProgress* prog, LocalSaveSet& set,
                         std::vector<SaveDecision>& out) {
     report_step(prog, "Reading save");
-    unsigned long long t0 = now_ms();
+    unsigned long long t0 = wall_now_ms();
     int lrc = ops.list_saves(ops.ctx, title, set);
     if (lrc != 0) {
         printf("[sync] %s: list_saves failed (err=%d)\n", name, lrc);
         return -1;
     }
     printf("[sync] %s: %zu local save(s), raw tree %zu bytes in %llu ms\n", name,
-           set.saves.size(), set.raw_tree.size(), since_ms(t0));
+           set.saves.size(), set.raw_tree.size(), wall_ms_since(t0));
 
     if (!set.saves.empty()) report_step(prog, "Checking server");
     std::vector<std::string> local_gks;
@@ -368,13 +352,13 @@ static int push_save(const WsVault* vault, const LocalSave& s, const SyncEngineC
     report_step(prog, "Encrypting");
     std::string mtime, hash, group_key;
     WsBuf zip = {0, 0};
-    unsigned long long t0 = now_ms();
+    unsigned long long t0 = wall_now_ms();
     if (!package_local(s, mtime, hash, group_key, &zip)) {
         printf("[sync] push: packaging failed\n");
         return -1;
     }
     printf("[sync] push %s hash=%.12s mtime=%s zip=%zu bytes in %llu ms\n", group_key.c_str(),
-           hash.c_str(), mtime.c_str(), (size_t)zip.len, since_ms(t0));
+           hash.c_str(), mtime.c_str(), (size_t)zip.len, wall_ms_since(t0));
 
     std::string base_path = sync_base_path(vault, group_key);
     if (base_path.empty()) {
@@ -384,14 +368,14 @@ static int push_save(const WsVault* vault, const LocalSave& s, const SyncEngineC
     std::string blobs_path = base_path + "/blobs";
 
     size_t zip_len = zip.len;
-    t0 = now_ms();
+    t0 = wall_now_ms();
     WsBuf enc = ws_vault_encrypt_blob(vault, zip.ptr, zip.len);
     ws_buf_free(zip);
     if (!enc.ptr) {
         printf("[sync] push %s: ws_vault_encrypt_blob failed: %s\n", group_key.c_str(), ffi_err());
         return -1;
     }
-    printf("[sync] encrypt done: %zu -> %zu bytes in %llu ms\n", zip_len, (size_t)enc.len, since_ms(t0));
+    printf("[sync] encrypt done: %zu -> %zu bytes in %llu ms\n", zip_len, (size_t)enc.len, wall_ms_since(t0));
 
     char* bn = ws_vault_blob_name(vault, hash.c_str());
     if (!bn) {
@@ -403,9 +387,9 @@ static int push_save(const WsVault* vault, const LocalSave& s, const SyncEngineC
     ws_string_free(bn);
 
     report_step(prog, "Checking server");
-    t0 = now_ms();
+    t0 = wall_now_ms();
     int exists = webdav_exists_s(dav, blob_remote.c_str());
-    printf("[sync] blob exists check rc=%d in %llu ms\n", exists, since_ms(t0));
+    printf("[sync] blob exists check rc=%d in %llu ms\n", exists, wall_ms_since(t0));
     if (exists <= 0) {
         report_step(prog, "Uploading");
         if (prog && prog->bytes) prog->bytes(0, enc.len, prog->ctx);
@@ -447,7 +431,7 @@ int sync_restore_hash(const WsVault* vault, const void* title, const ShellOps& o
 
     report_step(prog, "Downloading");
     std::vector<uint8_t> enc;
-    unsigned long long t0 = now_ms();
+    unsigned long long t0 = wall_now_ms();
     int grc = webdav_get_s(dav, blob_remote.c_str(), &enc, prog ? prog->bytes : 0,
                            prog ? prog->ctx : 0);
     if (grc == 1) {
@@ -458,7 +442,7 @@ int sync_restore_hash(const WsVault* vault, const void* title, const ShellOps& o
         printf("[sync] restore %s: GET blob failed (rc=%d)\n", group_key.c_str(), grc);
         return -1;
     }
-    printf("[sync] download blob done: %zu bytes in %llu ms\n", enc.size(), since_ms(t0));
+    printf("[sync] download blob done: %zu bytes in %llu ms\n", enc.size(), wall_ms_since(t0));
 
     WsBuf dec = ws_vault_decrypt_blob(vault, enc.data(), enc.size());
     std::vector<uint8_t>().swap(enc);
@@ -522,7 +506,7 @@ TitleTally sync_title(const WsVault* vault, const void* title, const char* title
                       const ShellOps& ops, const SyncEngineCfg& cfg, WebDavSession* dav,
                       const SyncProgress* prog) {
     TitleTally t;
-    unsigned long long t0 = now_ms();
+    unsigned long long t0 = wall_now_ms();
     printf("[sync] title '%s' begin (policy=%d safety_backup=%d)\n", title_name,
            cfg.conflict_policy, (int)cfg.safety_backup);
 
@@ -590,7 +574,7 @@ TitleTally sync_title(const WsVault* vault, const void* title, const char* title
         }
     }
     printf("[sync] title '%s' done in %llu ms (up=%d down=%d conflict=%d failed=%d%s%s)\n",
-           title_name, since_ms(t0), (int)t.uploaded, (int)t.downloaded, (int)t.conflict,
+           title_name, wall_ms_since(t0), (int)t.uploaded, (int)t.downloaded, (int)t.conflict,
            (int)t.failed, t.reason.empty() ? "" : " reason=", t.reason.c_str());
     return t;
 }
@@ -642,7 +626,7 @@ int sync_local_keys(const WsVault* vault, const void* title, const ShellOps& ops
                     std::vector<LocalSaveKey>& out, std::vector<uint8_t>* raw_tree) {
     out.clear();
     if (raw_tree) raw_tree->clear();
-    unsigned long long t0 = now_ms();
+    unsigned long long t0 = wall_now_ms();
     LocalSaveSet set;
     int lrc = ops.list_saves(ops.ctx, title, set);
     if (lrc != 0) {
@@ -665,6 +649,6 @@ int sync_local_keys(const WsVault* vault, const void* title, const ShellOps& ops
     const size_t raw_len = set.raw_tree.size();
     if (raw_tree) raw_tree->swap(set.raw_tree);
     printf("[sync] local keys: %zu key(s) from %zu save(s), raw tree %zu bytes in %llu ms\n",
-           out.size(), set.saves.size(), raw_len, since_ms(t0));
+           out.size(), set.saves.size(), raw_len, wall_ms_since(t0));
     return (int)set.saves.size();
 }

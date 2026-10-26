@@ -46,6 +46,16 @@ pub struct DeviceHead {
     pub mtime: String,
 }
 
+impl From<DeviceHead> for waystone_core::conflict::DeviceHead {
+    fn from(h: DeviceHead) -> Self {
+        Self {
+            device_id: h.device_id,
+            hash: h.hash,
+            mtime: h.mtime,
+        }
+    }
+}
+
 impl From<waystone_core::conflict::DeviceHead> for DeviceHead {
     fn from(h: waystone_core::conflict::DeviceHead) -> Self {
         Self {

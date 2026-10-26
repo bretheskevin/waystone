@@ -3,6 +3,11 @@
 #define JSMN_HEADER
 #include "jsmn.h"
 
+struct Vault;
+extern "C" {
+#include "waystone.h"
+}
+
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -40,33 +45,8 @@ void updater_set_self_candidates(const char* argv0, const char* fallback_path) {
 
 // ---- version compare ----
 
-// Parse a numeric component at *p; malformed/empty parses as 0. *p advances
-// past the digits (the caller skips the '.').
-static long ver_component(const char** p) {
-    long v = 0;
-    bool any = false;
-    while (**p >= '0' && **p <= '9') {
-        v = v * 10 + (**p - '0');
-        any = true;
-        (*p)++;
-    }
-    return any ? v : 0;
-}
-
 bool version_newer(const char* latest, const char* current) {
-    const char* l = latest ? latest : "";
-    const char* c = current ? current : "";
-    for (;;) {
-        long lv = ver_component(&l);
-        long cv = ver_component(&c);
-        if (lv > cv) return true;
-        if (lv < cv) return false;
-        if (*l == '\0' && *c == '\0') return false;
-        // Skip one separator char per side ('.' or any stray char); an exhausted
-        // side keeps yielding component 0, so "1.0" == "1.0.0".
-        if (*l) l++;
-        if (*c) c++;
-    }
+    return ws_version_newer(latest, current);
 }
 
 // ---- release JSON parsing (jsmn) ----

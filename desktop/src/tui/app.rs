@@ -1,12 +1,20 @@
 use crate::config::{SyncTarget, WaystoneConfig};
+use crate::net_status::{NoInternetReason, RETRY_SUFFIX};
+use crate::presets::PRESETS;
+use crate::sync_run::{RunMode, Selection};
+use crate::updater::{CheckResult, Release, UpdateError};
 use crate::webdav::{BlockingWebDav, WebDavClient};
 use crossterm::event::KeyEvent;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use waystone_core::crypto::Vault;
+use waystone_sync::engine::{SyncPhase, SyncSummary};
 use zeroize::Zeroize;
 
 const MAX_LOG_LINES: usize = 200;
+/// `App::busy` value while a multi-target sync runs (no target index matches it).
+pub const SYNC_BUSY: usize = usize::MAX;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -19,8 +27,10 @@ pub enum Screen {
 }
 
 pub enum Cmd {
-    SpawnPush(usize),
-    SpawnPull(usize),
+    StartSync {
+        selection: Selection,
+        mode: RunMode,
+    },
     RefreshStatus(usize),
     RefreshAllStatuses,
     AttemptUnlock {
@@ -30,15 +40,14 @@ pub enum Cmd {
     },
     SaveConfig,
     Quit,
-    ResolveKeepLocal {
-        target_id: usize,
-        save_key: String,
+    Resolve(ResolveJob),
+    ScanConflicts,
+    RebuildCreds {
+        password: String,
     },
-    ResolveKeepRemote {
-        target_id: usize,
-        save_key: String,
-        remote_hash: String,
-    },
+    ClearSession,
+    CheckUpdate,
+    InstallUpdate(Release),
     RunSetup {
         server_url: String,
         username: String,
@@ -71,8 +80,11 @@ pub enum Cmd {
 impl std::fmt::Debug for Cmd {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::SpawnPush(id) => f.debug_tuple("SpawnPush").field(id).finish(),
-            Self::SpawnPull(id) => f.debug_tuple("SpawnPull").field(id).finish(),
+            Self::StartSync { selection, mode } => f
+                .debug_struct("StartSync")
+                .field("selection", selection)
+                .field("mode", mode)
+                .finish(),
             Self::RefreshStatus(id) => f.debug_tuple("RefreshStatus").field(id).finish(),
             Self::RefreshAllStatuses => write!(f, "RefreshAllStatuses"),
             Self::AttemptUnlock { recovery, .. } => f
@@ -83,23 +95,15 @@ impl std::fmt::Debug for Cmd {
                 .finish(),
             Self::SaveConfig => write!(f, "SaveConfig"),
             Self::Quit => write!(f, "Quit"),
-            Self::ResolveKeepLocal {
-                target_id,
-                save_key,
-            } => f
-                .debug_struct("ResolveKeepLocal")
-                .field("target_id", target_id)
-                .field("save_key", save_key)
+            Self::Resolve(job) => f.debug_tuple("Resolve").field(job).finish(),
+            Self::ScanConflicts => write!(f, "ScanConflicts"),
+            Self::RebuildCreds { .. } => f
+                .debug_struct("RebuildCreds")
+                .field("password", &"[REDACTED]")
                 .finish(),
-            Self::ResolveKeepRemote {
-                target_id,
-                save_key,
-                ..
-            } => f
-                .debug_struct("ResolveKeepRemote")
-                .field("target_id", target_id)
-                .field("save_key", save_key)
-                .finish(),
+            Self::ClearSession => write!(f, "ClearSession"),
+            Self::CheckUpdate => write!(f, "CheckUpdate"),
+            Self::InstallUpdate(rel) => f.debug_tuple("InstallUpdate").field(&rel.version).finish(),
             Self::RunSetup { server_url, .. } => f
                 .debug_struct("RunSetup")
                 .field("server_url", server_url)
@@ -145,6 +149,36 @@ impl std::fmt::Debug for Cmd {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolveJob {
+    KeepLocal {
+        target_id: usize,
+        group_key: String,
+    },
+    KeepRemote {
+        target_id: usize,
+        group_key: String,
+        hash: String,
+        head_mtime: String,
+    },
+}
+
+impl ResolveJob {
+    pub fn key(&self) -> (usize, &str) {
+        match self {
+            Self::KeepLocal {
+                target_id,
+                group_key,
+            }
+            | Self::KeepRemote {
+                target_id,
+                group_key,
+                ..
+            } => (*target_id, group_key),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum ActionResult {
     Ok(String),
@@ -166,6 +200,9 @@ pub struct ConflictEntry {
     pub local: HeadInfo,
     pub remote: HeadInfo,
     pub remote_hash: String,
+    /// Newest head mtime; becomes this device's base mtime after keep-remote.
+    pub head_mtime: String,
+    pub queued: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -189,6 +226,49 @@ pub struct SnapshotView {
     pub total_bytes: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveRow {
+    pub target_id: usize,
+    pub group_key: String,
+    pub name: String,
+    pub slot: String,
+    pub status: TargetStatus,
+    pub remote_only: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pane {
+    Targets,
+    Saves,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncRunView {
+    pub total: usize,
+    pub index: Option<usize>,
+    pub current: Option<String>,
+    pub phase: Option<SyncPhase>,
+    pub cancelling: bool,
+    pub summary: Option<SyncSummary>,
+}
+
+impl SyncRunView {
+    pub fn running(&self) -> bool {
+        self.summary.is_none()
+    }
+
+    pub fn ratio(&self) -> f64 {
+        if self.summary.is_some() {
+            1.0
+        } else if self.total == 0 {
+            0.0
+        } else {
+            self.index
+                .map_or(0.0, |i| (i + 1) as f64 / self.total as f64)
+        }
+    }
+}
+
 pub enum Msg {
     Key(KeyEvent),
     Tick,
@@ -204,14 +284,51 @@ pub enum Msg {
         target_id: usize,
         status: TargetStatus,
     },
-    Conflicts {
+    /// `target` = the target the scan started for (see `current_target_id`).
+    Rows {
         target_id: usize,
-        entries: Vec<ConflictEntry>,
+        target: SyncTarget,
+        rows: Vec<SaveRow>,
+        conflicts: Vec<ConflictEntry>,
+    },
+    SyncStarted {
+        total: usize,
+    },
+    SyncItem {
+        index: usize,
+        total: usize,
+        name: String,
+        phase: SyncPhase,
+    },
+    SyncFinished(SyncSummary),
+    ConflictFound(ConflictEntry),
+    ConflictScanDone {
+        error: Option<String>,
+    },
+    ResolveDone {
+        target_id: usize,
+        group_key: String,
+        result: Result<(), String>,
+    },
+    UpdateChecked(Result<CheckResult, UpdateError>),
+    UpdateProgress {
+        done: u64,
+        total: Option<u64>,
+    },
+    UpdateInstalled(Result<String, UpdateError>),
+    Offline(Option<NoInternetReason>),
+    CredsRebuilt {
+        dav: Arc<WebDavClient>,
+        blocking_dav: Arc<BlockingWebDav>,
     },
     History {
+        target_id: usize,
+        target: SyncTarget,
         entries: Vec<HistoryView>,
     },
     Snapshots {
+        target_id: usize,
+        target: SyncTarget,
         entries: Vec<SnapshotView>,
     },
     UnlockOk {
@@ -249,6 +366,19 @@ impl TargetStatus {
     }
 }
 
+pub fn worst_status(a: TargetStatus, b: TargetStatus) -> TargetStatus {
+    fn rank(s: &TargetStatus) -> u8 {
+        match s {
+            TargetStatus::Ahead => 1,
+            TargetStatus::Behind => 2,
+            TargetStatus::Conflict => 3,
+            TargetStatus::Error(_) => 4,
+            _ => 0,
+        }
+    }
+    if rank(&b) > rank(&a) { b } else { a }
+}
+
 pub struct SessionCreds {
     pub vault: Arc<Vault>,
     pub dav: Arc<WebDavClient>,
@@ -280,6 +410,9 @@ pub enum Overlay {
         path: String,
         adapter: String,
         system: String,
+        /// 0 = Manual, n = PRESETS[n - 1]
+        preset: usize,
+        save_dir: String,
         field_index: usize,
         error: Option<String>,
     },
@@ -376,14 +509,40 @@ impl Drop for SetupForm {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SettingsForm {
     pub server_url: String,
     pub conflict_policy: waystone_core::conflict::ConflictPolicy,
     pub username: String,
+    /// Empty = unchanged.
+    pub webdav_password: String,
     pub safety_backup: bool,
     pub field: usize,
     pub error: Option<String>,
+}
+
+pub const SETTINGS_FIELD_PASSWORD: usize = 4;
+pub const SETTINGS_FIELD_UPDATE: usize = 5;
+pub const SETTINGS_FIELD_LOGOUT: usize = 6;
+
+impl std::fmt::Debug for SettingsForm {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SettingsForm")
+            .field("server_url", &self.server_url)
+            .field("conflict_policy", &self.conflict_policy)
+            .field("username", &self.username)
+            .field("webdav_password", &"[REDACTED]")
+            .field("safety_backup", &self.safety_backup)
+            .field("field", &self.field)
+            .field("error", &self.error)
+            .finish()
+    }
+}
+
+impl Drop for SettingsForm {
+    fn drop(&mut self) {
+        self.webdav_password.zeroize();
+    }
 }
 
 pub struct SetupOk {
@@ -395,8 +554,10 @@ pub struct SetupOk {
 
 #[derive(Debug, Clone)]
 pub enum PendingCmd {
-    Push(usize),
-    Pull(usize),
+    Sync {
+        selection: Selection,
+        mode: RunMode,
+    },
     RefreshStatus(usize),
     #[allow(dead_code)]
     RefreshAllStatuses,
@@ -409,7 +570,11 @@ pub enum PendingCmd {
         target_id: usize,
         save_key: String,
         remote_hash: String,
+        head_mtime: String,
     },
+    ScanConflicts,
+    Logout,
+    InstallUpdate(Release),
     LoadHistory {
         target_id: usize,
     },
@@ -445,6 +610,19 @@ pub struct App {
     pub history_selected: usize,
     pub snapshot_entries: Vec<SnapshotView>,
     pub snapshot_selected: usize,
+    pub rows: Vec<SaveRow>,
+    pub row_sel: usize,
+    pub pane: Pane,
+    pub sync_run: Option<SyncRunView>,
+    pub sync_cancel: Arc<AtomicBool>,
+    pub resolve_queue: VecDeque<ResolveJob>,
+    pub resolving: bool,
+    pub conflict_scanning: bool,
+    pub conflict_notice: Option<String>,
+    pub offline: Option<NoInternetReason>,
+    pub retry_pending: bool,
+    pub retry_failed: bool,
+    pub update_status: Option<String>,
 }
 
 impl App {
@@ -483,10 +661,51 @@ impl App {
             history_selected: 0,
             snapshot_entries: Vec::new(),
             snapshot_selected: 0,
+            rows: Vec::new(),
+            row_sel: 0,
+            pane: Pane::Targets,
+            sync_run: None,
+            sync_cancel: Arc::new(AtomicBool::new(false)),
+            resolve_queue: VecDeque::new(),
+            resolving: false,
+            conflict_scanning: false,
+            conflict_notice: None,
+            offline: None,
+            retry_pending: false,
+            retry_failed: false,
+            update_status: None,
         }
     }
 
+    /// Red banner text while offline (`r` retries).
+    pub fn offline_banner(&self) -> Option<String> {
+        let reason = self.offline?;
+        let suffix = if self.retry_failed {
+            format!(" {RETRY_SUFFIX}")
+        } else {
+            String::new()
+        };
+        Some(format!(
+            "{} \u{2014} {} (r to retry){suffix}",
+            reason.headline(),
+            reason.detail()
+        ))
+    }
+
+    /// A sync was requested but its run (progress overlay) has not started yet (e.g. probing).
+    pub fn sync_starting(&self) -> bool {
+        self.busy == Some(SYNC_BUSY) && self.sync_run.is_none()
+    }
+
+    pub fn rows_for(&self, target_id: usize) -> Vec<&SaveRow> {
+        self.rows
+            .iter()
+            .filter(|r| r.target_id == target_id)
+            .collect()
+    }
+
     pub fn push_log(&mut self, text: String) {
+        log::info!("[ui] {text}");
         self.log.push_back(LogLine { text });
         while self.log.len() > MAX_LOG_LINES {
             self.log.pop_front();
@@ -494,7 +713,7 @@ impl App {
     }
 
     pub fn needs_webdav_password(&self) -> bool {
-        std::env::var("WAYSTONE_WEBDAV_PASSWORD").is_err()
+        crate::cli_session::env_webdav_password().is_none()
     }
 
     pub fn to_config(&self, _base: &WaystoneConfig) -> WaystoneConfig {
@@ -526,6 +745,68 @@ pub fn setup_decision(keys_json_present: bool) -> SetupDecision {
 }
 
 pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
+    let cmds = update_inner(app, msg);
+    if cmds.iter().any(|c| matches!(c, Cmd::StartSync { .. })) {
+        app.busy = Some(SYNC_BUSY);
+    }
+    cmds
+}
+
+fn set_conflicts(app: &mut App, target_id: usize, mut entries: Vec<ConflictEntry>) {
+    // A refresh landing mid-resolve must not un-queue a pending job (it could be resolved twice).
+    for e in &mut entries {
+        e.queued = app
+            .conflicts
+            .iter()
+            .any(|c| c.target_id == target_id && c.save_key == e.save_key && c.queued);
+    }
+    app.conflicts.retain(|c| c.target_id != target_id);
+    app.conflicts.extend(entries);
+    if app.conflict_sel >= app.conflicts.len() && !app.conflicts.is_empty() {
+        app.conflict_sel = app.conflicts.len() - 1;
+    }
+    if app.conflicts.is_empty() {
+        app.conflict_sel = 0;
+    }
+}
+
+/// Where an in-flight result's target sits now: a reorder/delete/edit while a scan or history
+/// load ran must never route its rows (or a later restore) to whichever target took that index.
+fn current_target_id(app: &mut App, target_id: usize, target: &SyncTarget) -> Option<usize> {
+    if app.targets.get(target_id) == Some(target) {
+        return Some(target_id);
+    }
+    let now = app.targets.iter().position(|t| t == target);
+    log::info!(
+        "[ui] result for target '{}' (was #{target_id}) remapped to {now:?}",
+        target.name
+    );
+    if now.is_none() {
+        app.push_log(format!(
+            "Dropped a stale result for '{}' (target changed).",
+            target.name
+        ));
+    }
+    now
+}
+
+/// Setup + Settings server URL rule.
+fn validate_server_url(url: &str) -> Result<(), &'static str> {
+    if url.trim().is_empty() {
+        Err("Server URL is required.")
+    } else if !url.starts_with("http://") && !url.starts_with("https://") {
+        Err("Server URL must start with http:// or https://")
+    } else {
+        Ok(())
+    }
+}
+
+fn clamp_row_sel(app: &mut App) {
+    let n = app.rows_for(app.selected).len();
+    app.row_sel = app.row_sel.min(n.saturating_sub(1));
+}
+
+fn update_inner(app: &mut App, msg: Msg) -> Vec<Cmd> {
     match msg {
         Msg::Tick => {
             app.spinner = app.spinner.wrapping_add(1);
@@ -544,17 +825,6 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
             match result {
                 ActionResult::Ok(msg) => {
                     app.push_log(format!("[{}] Done: {}", target_id, msg));
-                    if app.screen == Screen::Conflicts {
-                        app.conflicts.retain(|c| c.target_id != target_id);
-                        if app.conflict_sel >= app.conflicts.len() && !app.conflicts.is_empty() {
-                            app.conflict_sel = app.conflicts.len() - 1;
-                        }
-                        if app.conflicts.is_empty() {
-                            app.screen = Screen::Dashboard;
-                            app.conflict_sel = 0;
-                        }
-                        return vec![Cmd::RefreshStatus(target_id)];
-                    }
                 }
                 ActionResult::Err(err) => {
                     app.statuses
@@ -570,26 +840,215 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
             vec![]
         }
 
-        Msg::Conflicts { target_id, entries } => {
-            app.conflicts.retain(|c| c.target_id != target_id);
-            app.conflicts.extend(entries);
-            if app.conflict_sel >= app.conflicts.len() && !app.conflicts.is_empty() {
-                app.conflict_sel = app.conflicts.len() - 1;
-            }
-            if app.conflicts.is_empty() {
-                app.conflict_sel = 0;
+        Msg::Rows {
+            target_id,
+            target,
+            mut rows,
+            mut conflicts,
+        } => {
+            let Some(target_id) = current_target_id(app, target_id, &target) else {
+                return vec![];
+            };
+            rows.iter_mut().for_each(|r| r.target_id = target_id);
+            conflicts.iter_mut().for_each(|c| c.target_id = target_id);
+            let status = rows.iter().fold(TargetStatus::InSync, |acc, r| {
+                worst_status(acc, r.status.clone())
+            });
+            app.rows.retain(|r| r.target_id != target_id);
+            app.rows.extend(rows);
+            app.statuses.insert(target_id, status);
+            set_conflicts(app, target_id, conflicts);
+            clamp_row_sel(app);
+            vec![]
+        }
+
+        // The flag is reset when the sync is requested (Cmd::StartSync), so a cancel pressed
+        // while planning still stops execute before its first item.
+        Msg::SyncStarted { total } => {
+            app.sync_run = Some(SyncRunView {
+                total,
+                ..Default::default()
+            });
+            vec![]
+        }
+
+        Msg::SyncItem {
+            index,
+            total,
+            name,
+            phase,
+        } => {
+            if let Some(run) = app.sync_run.as_mut() {
+                run.total = total;
+                run.index = Some(index);
+                run.current = Some(name);
+                run.phase = Some(phase);
             }
             vec![]
         }
 
-        Msg::History { entries } => {
+        Msg::SyncFinished(summary) => {
+            app.busy = Option::None;
+            app.push_log(summary.headline());
+            for m in &summary.error_messages {
+                app.push_log(format!("  {m}"));
+            }
+            let run = app.sync_run.get_or_insert_with(SyncRunView::default);
+            run.summary = Some(summary);
+            vec![]
+        }
+
+        Msg::ConflictFound(mut entry) => {
+            entry.queued = app
+                .resolve_queue
+                .iter()
+                .any(|j| j.key() == (entry.target_id, entry.save_key.as_str()));
+            match app
+                .conflicts
+                .iter_mut()
+                .find(|c| c.target_id == entry.target_id && c.save_key == entry.save_key)
+            {
+                Some(existing) => *existing = entry,
+                None => app.conflicts.push(entry),
+            }
+            vec![]
+        }
+
+        Msg::ConflictScanDone { error } => {
+            app.conflict_scanning = false;
+            let mut cmds = Vec::new();
+            match error {
+                Some(e) => {
+                    app.push_log(format!("Conflict scan failed: {e}"));
+                    app.conflict_notice = Some(e);
+                }
+                None => finish_inbox_if_empty(app, &mut cmds),
+            }
+            cmds
+        }
+
+        Msg::ResolveDone {
+            target_id,
+            group_key,
+            result,
+        } => {
+            app.resolving = false;
+            match result {
+                Ok(()) => {
+                    app.conflicts
+                        .retain(|c| !(c.target_id == target_id && c.save_key == group_key));
+                    app.conflict_sel = app.conflict_sel.min(app.conflicts.len().saturating_sub(1));
+                    app.push_log(format!("Resolved {group_key}."));
+                }
+                Err(e) => {
+                    if let Some(c) = app
+                        .conflicts
+                        .iter_mut()
+                        .find(|c| c.target_id == target_id && c.save_key == group_key)
+                    {
+                        c.queued = false;
+                    }
+                    app.push_log(format!("Resolve of {group_key} failed: {e}"));
+                    app.conflict_notice = Some(e);
+                }
+            }
+            let mut cmds = start_next_resolve(app);
+            finish_inbox_if_empty(app, &mut cmds);
+            cmds
+        }
+
+        Msg::UpdateChecked(result) => {
+            match result {
+                Ok(CheckResult::UpToDate(v)) => {
+                    app.update_status = Some(format!("Up to date (v{v})"));
+                }
+                Ok(CheckResult::Available(rel)) => {
+                    app.update_status = Some(format!("Update available: v{}", rel.version));
+                    app.overlay = Overlay::Confirm {
+                        message: format!("Install v{}?", rel.version),
+                        action: PendingCmd::InstallUpdate(rel),
+                    };
+                }
+                Err(e) => app.update_status = Some(e.check_message()),
+            }
+            vec![]
+        }
+
+        Msg::UpdateProgress { done, total } => {
+            app.update_status = Some(match total.filter(|t| *t > 0) {
+                Some(t) => format!("Downloading... {}%", done * 100 / t),
+                None => format!("Downloading... {} KiB", done / 1024),
+            });
+            vec![]
+        }
+
+        Msg::UpdateInstalled(result) => {
+            app.update_status = Some(match result {
+                Ok(v) => format!("Updated to v{v} \u{2014} restart waystone to use it"),
+                Err(e) => e.install_message().to_string(),
+            });
+            vec![]
+        }
+
+        Msg::Offline(reason) => {
+            match reason {
+                None => {
+                    app.offline = None;
+                    app.retry_pending = false;
+                    app.retry_failed = false;
+                }
+                Some(r) => {
+                    app.retry_failed = app.retry_pending;
+                    app.retry_pending = false;
+                    app.offline = Some(r);
+                    if app.sync_starting() {
+                        app.busy = None;
+                    }
+                    if let Some(f) = app.setup.as_mut() {
+                        f.busy = false;
+                        f.error = Some(r.headline().into());
+                    }
+                    if let Overlay::Unlock { error, .. } = &mut app.overlay {
+                        *error = Some(r.headline().into());
+                    }
+                }
+            }
+            vec![]
+        }
+
+        Msg::CredsRebuilt { dav, blocking_dav } => {
+            if let Some(c) = app.creds.as_mut() {
+                c.dav = dav;
+                c.blocking_dav = blocking_dav;
+                app.push_log("WebDAV password updated.".into());
+            }
+            vec![]
+        }
+
+        Msg::History {
+            target_id,
+            target,
+            mut entries,
+        } => {
+            let Some(target_id) = current_target_id(app, target_id, &target) else {
+                return vec![];
+            };
+            entries.iter_mut().for_each(|e| e.target_id = target_id);
             app.history_entries = entries;
             app.history_selected = 0;
             app.screen = Screen::History;
             vec![]
         }
 
-        Msg::Snapshots { entries } => {
+        Msg::Snapshots {
+            target_id,
+            target,
+            mut entries,
+        } => {
+            let Some(target_id) = current_target_id(app, target_id, &target) else {
+                return vec![];
+            };
+            entries.iter_mut().for_each(|e| e.target_id = target_id);
             app.snapshot_entries = entries;
             app.snapshot_selected = 0;
             app.screen = Screen::Snapshots;
@@ -612,9 +1071,10 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
             });
             app.overlay = Overlay::None;
             app.push_log("Session unlocked.".into());
-            pending
-                .map(|p| vec![pending_to_cmd(p)])
-                .unwrap_or_else(|| vec![Cmd::RefreshAllStatuses])
+            match pending {
+                Some(p) => run_pending(app, p),
+                None => vec![Cmd::RefreshAllStatuses],
+            }
         }
 
         Msg::UnlockFailed(err) => {
@@ -678,35 +1138,117 @@ pub fn update(app: &mut App, msg: Msg) -> Vec<Cmd> {
     }
 }
 
-fn pending_to_cmd(p: PendingCmd) -> Cmd {
+fn enqueue_resolve(app: &mut App, job: ResolveJob) -> Vec<Cmd> {
+    for c in &mut app.conflicts {
+        if (c.target_id, c.save_key.as_str()) == job.key() {
+            c.queued = true;
+        }
+    }
+    app.conflict_notice = None;
+    app.resolve_queue.push_back(job);
+    start_next_resolve(app)
+}
+
+fn start_next_resolve(app: &mut App) -> Vec<Cmd> {
+    if app.resolving {
+        return vec![];
+    }
+    match app.resolve_queue.pop_front() {
+        Some(job) => {
+            app.resolving = true;
+            vec![Cmd::Resolve(job)]
+        }
+        None => vec![],
+    }
+}
+
+fn finish_inbox_if_empty(app: &mut App, cmds: &mut Vec<Cmd>) {
+    if app.screen == Screen::Conflicts
+        && app.conflicts.is_empty()
+        && app.resolve_queue.is_empty()
+        && !app.resolving
+        && !app.conflict_scanning
+    {
+        app.screen = Screen::Dashboard;
+        app.conflict_sel = 0;
+        cmds.push(Cmd::RefreshAllStatuses);
+    }
+}
+
+fn begin_conflict_scan(app: &mut App) -> Vec<Cmd> {
+    app.conflict_scanning = true;
+    app.conflict_notice = None;
+    app.conflicts.clear();
+    app.conflict_sel = 0;
+    vec![Cmd::ScanConflicts]
+}
+
+/// Runs a pending command once credentials exist; queue-based ones are enqueued, not dispatched.
+fn run_pending(app: &mut App, p: PendingCmd) -> Vec<Cmd> {
     match p {
-        PendingCmd::Push(id) => Cmd::SpawnPush(id),
-        PendingCmd::Pull(id) => Cmd::SpawnPull(id),
-        PendingCmd::RefreshStatus(id) => Cmd::RefreshStatus(id),
-        PendingCmd::RefreshAllStatuses => Cmd::RefreshAllStatuses,
-        // DeleteTarget is handled directly in Confirm overlay; not reachable from unlock flow
-        PendingCmd::DeleteTarget(_) => Cmd::Quit,
+        PendingCmd::Sync { selection, mode } => vec![Cmd::StartSync { selection, mode }],
+        PendingCmd::RefreshStatus(id) => vec![Cmd::RefreshStatus(id)],
+        PendingCmd::RefreshAllStatuses => vec![Cmd::RefreshAllStatuses],
+        PendingCmd::ScanConflicts => begin_conflict_scan(app),
         PendingCmd::ResolveKeepLocal {
             target_id,
             save_key,
-        } => Cmd::ResolveKeepLocal {
-            target_id,
-            save_key,
-        },
+        } => enqueue_resolve(
+            app,
+            ResolveJob::KeepLocal {
+                target_id,
+                group_key: save_key,
+            },
+        ),
         PendingCmd::ResolveKeepRemote {
             target_id,
             save_key,
             remote_hash,
-        } => Cmd::ResolveKeepRemote {
-            target_id,
-            save_key,
-            remote_hash,
-        },
-        PendingCmd::LoadHistory { target_id } => Cmd::LoadHistory { target_id },
+            head_mtime,
+        } => enqueue_resolve(
+            app,
+            ResolveJob::KeepRemote {
+                target_id,
+                group_key: save_key,
+                hash: remote_hash,
+                head_mtime,
+            },
+        ),
+        PendingCmd::InstallUpdate(rel) => vec![Cmd::InstallUpdate(rel)],
+        PendingCmd::LoadHistory { target_id } => vec![Cmd::LoadHistory { target_id }],
+        // handled directly by the confirm overlay; never queued behind an unlock
+        PendingCmd::DeleteTarget(_) | PendingCmd::Logout => vec![],
+    }
+}
+
+fn handle_sync_run_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
+    use crossterm::event::KeyCode;
+
+    let Some(running) = app.sync_run.as_ref().map(SyncRunView::running) else {
+        return vec![];
+    };
+    match key.code {
+        KeyCode::Char('q') => vec![Cmd::Quit],
+        KeyCode::Char('c') | KeyCode::Esc if running => {
+            if let Some(run) = app.sync_run.as_mut() {
+                run.cancelling = true;
+            }
+            app.sync_cancel.store(true, Ordering::SeqCst);
+            app.push_log("Cancelling after the current save...".into());
+            vec![]
+        }
+        KeyCode::Enter | KeyCode::Esc if !running => {
+            app.sync_run = None;
+            vec![Cmd::RefreshAllStatuses]
+        }
+        _ => vec![],
     }
 }
 
 fn handle_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
+    if app.sync_run.is_some() && matches!(app.overlay, Overlay::None) {
+        return handle_sync_run_key(app, key);
+    }
     match &app.overlay {
         Overlay::None => match app.screen {
             Screen::Dashboard => handle_dashboard_key(app, key),
@@ -727,14 +1269,26 @@ fn handle_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     }
 }
 
+/// While busy only quit works, plus cancel while a sync is still planning (before its overlay).
+fn busy_keys(app: &mut App, key: KeyEvent) -> Option<Vec<Cmd>> {
+    use crossterm::event::KeyCode;
+
+    app.busy?;
+    if key.code == KeyCode::Char('q') {
+        return Some(vec![Cmd::Quit]);
+    }
+    if app.sync_starting() && matches!(key.code, KeyCode::Char('c') | KeyCode::Esc) {
+        app.sync_cancel.store(true, Ordering::SeqCst);
+        app.push_log("Cancelling: nothing will be written once planning ends.".into());
+    }
+    Some(vec![])
+}
+
 fn handle_dashboard_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     use crossterm::event::KeyCode;
 
-    if app.busy.is_some() {
-        if key.code == KeyCode::Char('q') {
-            return vec![Cmd::Quit];
-        }
-        return vec![];
+    if let Some(cmds) = busy_keys(app, key) {
+        return cmds;
     }
 
     match key.code {
@@ -743,105 +1297,52 @@ fn handle_dashboard_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             app.overlay = Overlay::Help;
             vec![]
         }
-        KeyCode::Down | KeyCode::Char('j') => {
-            if !app.targets.is_empty() {
-                app.selected = (app.selected + 1).min(app.targets.len() - 1);
-            }
-            vec![]
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            if app.selected > 0 {
-                app.selected -= 1;
-            }
-            vec![]
-        }
-        KeyCode::Char('J') => {
-            if app.selected + 1 < app.targets.len() {
-                app.targets.swap(app.selected, app.selected + 1);
-                app.selected += 1;
-                app.dirty = true;
-            }
-            vec![]
-        }
-        KeyCode::Char('K') => {
-            if app.selected > 0 {
-                app.targets.swap(app.selected, app.selected - 1);
-                app.selected -= 1;
-                app.dirty = true;
-            }
-            vec![]
-        }
-        KeyCode::Char('a') => {
-            app.overlay = Overlay::TargetForm {
-                mode: FormMode::Add,
-                name: String::new(),
-                path: String::new(),
-                adapter: "jksv".into(),
-                system: "switch".into(),
-                field_index: 0,
-                error: Option::None,
+        KeyCode::Tab => {
+            app.pane = match app.pane {
+                Pane::Targets => Pane::Saves,
+                Pane::Saves => Pane::Targets,
             };
             vec![]
         }
-        KeyCode::Char('e') => {
-            if let Some(t) = app.targets.get(app.selected) {
-                app.overlay = Overlay::TargetForm {
-                    mode: FormMode::Edit(app.selected),
-                    name: t.name.clone(),
-                    path: t.path.to_string_lossy().into_owned(),
-                    adapter: t.adapter.clone(),
-                    system: t.system.clone(),
-                    field_index: 0,
-                    error: Option::None,
-                };
-            }
-            vec![]
-        }
-        KeyCode::Char('d') => {
-            if let Some(t) = app.targets.get(app.selected) {
-                app.overlay = Overlay::Confirm {
-                    message: format!("Delete target '{}'?", t.name),
-                    action: PendingCmd::DeleteTarget(app.selected),
-                };
-            }
-            vec![]
-        }
-        KeyCode::Char('p') => {
+        KeyCode::Char('A') => {
             if app.targets.is_empty() {
                 return vec![];
             }
-            ensure_creds_then(app, PendingCmd::Push(app.selected))
-        }
-        KeyCode::Char('P') => {
-            if app.targets.is_empty() {
-                return vec![];
-            }
-            ensure_creds_then(app, PendingCmd::Pull(app.selected))
+            ensure_creds_then(
+                app,
+                PendingCmd::Sync {
+                    selection: Selection::All,
+                    mode: RunMode::Sync,
+                },
+            )
         }
         KeyCode::Char('r') => {
             if app.targets.is_empty() {
                 return vec![];
             }
+            app.retry_pending = app.offline.is_some();
             ensure_creds_then(app, PendingCmd::RefreshStatus(app.selected))
         }
         KeyCode::Char('C') => {
-            if app.conflicts.is_empty() {
-                app.push_log("No conflicts to resolve.".into());
-                return vec![];
-            }
             app.screen = Screen::Conflicts;
             app.conflict_sel = 0;
-            vec![]
+            if app.resolving || !app.resolve_queue.is_empty() {
+                // A rescan would re-list the in-flight save as actionable; keep the current inbox.
+                return vec![];
+            }
+            ensure_creds_then(app, PendingCmd::ScanConflicts)
         }
         KeyCode::Char('S') => {
             app.settings = Some(SettingsForm {
                 server_url: app.server_url.clone(),
                 conflict_policy: app.conflict_policy,
                 username: app.username.clone().unwrap_or_default(),
+                webdav_password: String::new(),
                 safety_backup: app.safety_backup,
                 field: 0,
                 error: None,
             });
+            app.update_status = None;
             app.screen = Screen::Settings;
             vec![]
         }
@@ -864,18 +1365,217 @@ fn handle_dashboard_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                 target_id: app.selected,
             }]
         }
+        _ => match app.pane {
+            Pane::Targets => handle_targets_pane_key(app, key),
+            Pane::Saves => handle_saves_pane_key(app, key),
+        },
+    }
+}
+
+/// Re-keys per-target UI state after the target list changed (`map`: old index -> new, None = removed).
+fn reindex_target_state(app: &mut App, map: impl Fn(usize) -> Option<usize>) {
+    app.rows
+        .retain_mut(|r| map(r.target_id).map(|n| r.target_id = n).is_some());
+    app.conflicts
+        .retain_mut(|c| map(c.target_id).map(|n| c.target_id = n).is_some());
+    app.statuses = std::mem::take(&mut app.statuses)
+        .into_iter()
+        .filter_map(|(id, s)| Some((map(id)?, s)))
+        .collect();
+    app.conflict_sel = app.conflict_sel.min(app.conflicts.len().saturating_sub(1));
+}
+
+fn move_selected_target(app: &mut App, to: usize) {
+    let from = app.selected;
+    app.targets.swap(from, to);
+    reindex_target_state(app, |i| {
+        Some(if i == from {
+            to
+        } else if i == to {
+            from
+        } else {
+            i
+        })
+    });
+    app.selected = to;
+    app.dirty = true;
+}
+
+fn sync_selected_target(app: &mut App, mode: RunMode) -> Vec<Cmd> {
+    if app.targets.is_empty() {
+        return vec![];
+    }
+    ensure_creds_then(
+        app,
+        PendingCmd::Sync {
+            selection: Selection::Target(app.selected),
+            mode,
+        },
+    )
+}
+
+/// Conflict scans and queued resolves carry target indices: reordering, editing or deleting targets
+/// under them would aim a resolve at the wrong target.
+fn target_edits_blocked(app: &mut App) -> bool {
+    let blocked = app.conflict_scanning || app.resolving || !app.resolve_queue.is_empty();
+    if blocked {
+        app.push_log(
+            "Wait for the conflict scan and resolves to finish before changing targets.".into(),
+        );
+    }
+    blocked
+}
+
+fn handle_targets_pane_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
+    use crossterm::event::KeyCode;
+
+    if matches!(key.code, KeyCode::Char('J' | 'K' | 'e' | 'd')) && target_edits_blocked(app) {
+        return vec![];
+    }
+    match key.code {
+        KeyCode::Down | KeyCode::Char('j') => {
+            if !app.targets.is_empty() {
+                app.selected = (app.selected + 1).min(app.targets.len() - 1);
+                app.row_sel = 0;
+            }
+            vec![]
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            if app.selected > 0 {
+                app.selected -= 1;
+                app.row_sel = 0;
+            }
+            vec![]
+        }
+        KeyCode::Char('J') => {
+            if app.selected + 1 < app.targets.len() {
+                move_selected_target(app, app.selected + 1);
+            }
+            vec![]
+        }
+        KeyCode::Char('K') => {
+            if app.selected > 0 {
+                move_selected_target(app, app.selected - 1);
+            }
+            vec![]
+        }
+        KeyCode::Char('a') => {
+            app.overlay = Overlay::TargetForm {
+                mode: FormMode::Add,
+                name: String::new(),
+                path: String::new(),
+                adapter: "jksv".into(),
+                system: "switch".into(),
+                preset: 0,
+                save_dir: String::new(),
+                field_index: 0,
+                error: Option::None,
+            };
+            vec![]
+        }
+        KeyCode::Char('e') => {
+            if let Some(t) = app.targets.get(app.selected) {
+                app.overlay = Overlay::TargetForm {
+                    mode: FormMode::Edit(app.selected),
+                    name: t.name.clone(),
+                    path: t.path.to_string_lossy().into_owned(),
+                    adapter: t.adapter.clone(),
+                    system: t.system.clone(),
+                    preset: preset_index(t.preset.as_deref()),
+                    save_dir: t
+                        .save_dir
+                        .as_ref()
+                        .map(|d| d.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    field_index: 0,
+                    error: Option::None,
+                };
+            }
+            vec![]
+        }
+        KeyCode::Char('d') => {
+            if let Some(t) = app.targets.get(app.selected) {
+                app.overlay = Overlay::Confirm {
+                    message: format!("Delete target '{}'?", t.name),
+                    action: PendingCmd::DeleteTarget(app.selected),
+                };
+            }
+            vec![]
+        }
+        KeyCode::Char('s') => sync_selected_target(app, RunMode::Sync),
+        KeyCode::Char('p') => sync_selected_target(app, RunMode::Push),
+        KeyCode::Char('P') => sync_selected_target(app, RunMode::Pull),
         _ => vec![],
     }
+}
+
+fn handle_saves_pane_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
+    use crossterm::event::KeyCode;
+
+    let count = app.rows_for(app.selected).len();
+    match key.code {
+        KeyCode::Down | KeyCode::Char('j') => {
+            if count > 0 {
+                app.row_sel = (app.row_sel + 1).min(count - 1);
+            }
+            vec![]
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.row_sel = app.row_sel.saturating_sub(1);
+            vec![]
+        }
+        KeyCode::Char(c @ ('s' | 'p' | 'P')) => {
+            let Some(row) = app
+                .rows_for(app.selected)
+                .get(app.row_sel)
+                .copied()
+                .cloned()
+            else {
+                return vec![];
+            };
+            let mode = match c {
+                's' => RunMode::Sync,
+                'p' => RunMode::Push,
+                _ => RunMode::Pull,
+            };
+            if mode == RunMode::Push && row.remote_only {
+                app.push_log("Nothing local to upload \u{2014} restore it with P".into());
+                return vec![];
+            }
+            ensure_creds_then(
+                app,
+                PendingCmd::Sync {
+                    selection: Selection::Save {
+                        target: row.target_id,
+                        group_key: row.group_key,
+                    },
+                    mode,
+                },
+            )
+        }
+        _ => vec![],
+    }
+}
+
+pub fn preset_index(id: Option<&str>) -> usize {
+    id.and_then(|id| PRESETS.iter().position(|p| p.id == id))
+        .map_or(0, |i| i + 1)
+}
+
+/// Inverse of [`preset_index`]: 0 (Manual) and out-of-range indices are None.
+fn preset_at(index: usize) -> Option<&'static crate::presets::EmulatorPreset> {
+    PRESETS.get(index.checked_sub(1)?)
+}
+
+pub fn preset_label(index: usize) -> &'static str {
+    preset_at(index).map_or("Manual", |p| p.label)
 }
 
 fn handle_conflicts_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     use crossterm::event::KeyCode;
 
-    if app.busy.is_some() {
-        if key.code == KeyCode::Char('q') {
-            return vec![Cmd::Quit];
-        }
-        return vec![];
+    if let Some(cmds) = busy_keys(app, key) {
+        return cmds;
     }
 
     match key.code {
@@ -895,32 +1595,37 @@ fn handle_conflicts_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             }
             vec![]
         }
-        KeyCode::Char('l') => {
-            if let Some(entry) = app.conflicts.get(app.conflict_sel) {
-                ensure_creds_then(
-                    app,
-                    PendingCmd::ResolveKeepLocal {
-                        target_id: entry.target_id,
-                        save_key: entry.save_key.clone(),
-                    },
-                )
-            } else {
-                vec![]
+        KeyCode::Char('l') => match app.conflicts.get(app.conflict_sel) {
+            Some(entry) if !entry.queued => {
+                let pending = PendingCmd::ResolveKeepLocal {
+                    target_id: entry.target_id,
+                    save_key: entry.save_key.clone(),
+                };
+                ensure_creds_then(app, pending)
             }
-        }
+            _ => vec![],
+        },
         KeyCode::Char('r') => {
-            if let Some(entry) = app.conflicts.get(app.conflict_sel) {
-                ensure_creds_then(
-                    app,
-                    PendingCmd::ResolveKeepRemote {
+            if let Some(entry) = app.conflicts.get(app.conflict_sel).filter(|e| !e.queued) {
+                app.overlay = Overlay::Confirm {
+                    message: format!(
+                        "Replace your local save of {} with the server copy from {}? A safety backup is taken first.",
+                        entry.label,
+                        entry
+                            .remote
+                            .device_id
+                            .as_deref()
+                            .unwrap_or("another device")
+                    ),
+                    action: PendingCmd::ResolveKeepRemote {
                         target_id: entry.target_id,
                         save_key: entry.save_key.clone(),
                         remote_hash: entry.remote_hash.clone(),
+                        head_mtime: entry.head_mtime.clone(),
                     },
-                )
-            } else {
-                vec![]
+                };
             }
+            vec![]
         }
         _ => vec![],
     }
@@ -929,11 +1634,8 @@ fn handle_conflicts_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
 fn handle_history_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     use crossterm::event::KeyCode;
 
-    if app.busy.is_some() {
-        if key.code == KeyCode::Char('q') {
-            return vec![Cmd::Quit];
-        }
-        return vec![];
+    if let Some(cmds) = busy_keys(app, key) {
+        return cmds;
     }
 
     match key.code {
@@ -972,11 +1674,8 @@ fn handle_history_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
 fn handle_snapshots_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     use crossterm::event::KeyCode;
 
-    if app.busy.is_some() {
-        if key.code == KeyCode::Char('q') {
-            return vec![Cmd::Quit];
-        }
-        return vec![];
+    if let Some(cmds) = busy_keys(app, key) {
+        return cmds;
     }
 
     match key.code {
@@ -1014,7 +1713,7 @@ fn handle_snapshots_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
 
 pub(crate) fn ensure_creds_then(app: &mut App, pending: PendingCmd) -> Vec<Cmd> {
     if app.creds.is_some() {
-        vec![pending_to_cmd(pending)]
+        run_pending(app, pending)
     } else {
         let needs_webdav = app.needs_webdav_password();
         app.overlay = Overlay::Unlock {
@@ -1083,7 +1782,7 @@ fn handle_unlock_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                 *error = Some("WebDAV password is required.".into());
                 return vec![];
             } else {
-                std::env::var("WAYSTONE_WEBDAV_PASSWORD").ok()
+                crate::cli_session::env_webdav_password()
             };
             passphrase.zeroize();
             webdav_password.zeroize();
@@ -1100,22 +1799,13 @@ fn handle_unlock_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             *error = None;
             vec![]
         }
-        KeyCode::Backspace => {
+        KeyCode::Backspace | KeyCode::Char(_) => {
             let field = if *field_index == 0 {
                 passphrase
             } else {
                 webdav_password
             };
-            field.pop();
-            vec![]
-        }
-        KeyCode::Char(c) => {
-            let field = if *field_index == 0 {
-                passphrase
-            } else {
-                webdav_password
-            };
-            field.push(c);
+            edit_text(field, key.code);
             vec![]
         }
         _ => vec![],
@@ -1131,6 +1821,8 @@ fn handle_form_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         ref mut path,
         ref mut adapter,
         ref mut system,
+        ref mut preset,
+        ref mut save_dir,
         ref mut field_index,
         ref mut error,
     } = app.overlay
@@ -1138,6 +1830,8 @@ fn handle_form_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         return vec![];
     };
     let mode = mode.clone();
+    const PRESET_FIELD: usize = 4;
+    let preset_count = PRESETS.len() + 1;
 
     match key.code {
         KeyCode::Esc => {
@@ -1145,11 +1839,22 @@ fn handle_form_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             vec![]
         }
         KeyCode::Tab | KeyCode::Down => {
-            *field_index = (*field_index + 1).min(3);
+            *field_index = (*field_index + 1).min(5);
             vec![]
         }
         KeyCode::BackTab | KeyCode::Up => {
             *field_index = field_index.saturating_sub(1);
+            vec![]
+        }
+        KeyCode::Left | KeyCode::Right if *field_index == PRESET_FIELD => {
+            *preset = if key.code == KeyCode::Right {
+                (*preset + 1) % preset_count
+            } else {
+                (*preset + preset_count - 1) % preset_count
+            };
+            if *preset > 0 {
+                *adapter = "rom_keyed".into();
+            }
             vec![]
         }
         KeyCode::Enter => {
@@ -1158,6 +1863,8 @@ fn handle_form_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                 path: path.clone().into(),
                 adapter: adapter.clone(),
                 system: system.clone(),
+                save_dir: (!save_dir.trim().is_empty()).then(|| save_dir.trim().into()),
+                preset: preset_at(*preset).map(|p| p.id.to_string()),
             };
             match crate::config::validate_sync_target(&target) {
                 Err(e) => {
@@ -1173,6 +1880,8 @@ fn handle_form_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                         FormMode::Edit(idx) => {
                             if idx < app.targets.len() {
                                 app.targets[idx] = target;
+                                reindex_target_state(app, |i| (i != idx).then_some(i));
+                                clamp_row_sel(app);
                             }
                         }
                     }
@@ -1182,24 +1891,18 @@ fn handle_form_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                 }
             }
         }
-        KeyCode::Backspace => {
+        KeyCode::Backspace | KeyCode::Char(_) => {
             let field = match field_index {
-                0 => name,
-                1 => path,
-                2 => adapter,
-                _ => system,
+                0 => Some(name),
+                1 => Some(path),
+                2 => Some(adapter),
+                3 => Some(system),
+                5 => Some(save_dir),
+                _ => None,
             };
-            field.pop();
-            vec![]
-        }
-        KeyCode::Char(c) => {
-            let field = match field_index {
-                0 => name,
-                1 => path,
-                2 => adapter,
-                _ => system,
-            };
-            field.push(c);
+            if let Some(field) = field {
+                edit_text(field, key.code);
+            }
             vec![]
         }
         _ => vec![],
@@ -1220,14 +1923,29 @@ fn handle_confirm_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                 PendingCmd::DeleteTarget(idx) => {
                     if idx < app.targets.len() {
                         app.targets.remove(idx);
+                        reindex_target_state(app, |i| match i.cmp(&idx) {
+                            std::cmp::Ordering::Less => Some(i),
+                            std::cmp::Ordering::Equal => None,
+                            std::cmp::Ordering::Greater => Some(i - 1),
+                        });
                         if app.selected >= app.targets.len() && app.selected > 0 {
                             app.selected -= 1;
                         }
+                        clamp_row_sel(app);
                         app.dirty = true;
                     }
                     vec![Cmd::SaveConfig]
                 }
-                other => vec![pending_to_cmd(other)],
+                PendingCmd::Logout => {
+                    app.creds = None;
+                    app.push_log("Logged out.".into());
+                    vec![Cmd::ClearSession]
+                }
+                PendingCmd::InstallUpdate(rel) => {
+                    app.update_status = Some("Downloading... 0%".into());
+                    vec![Cmd::InstallUpdate(rel)]
+                }
+                other => ensure_creds_then(app, other),
             }
         }
         KeyCode::Char('n') | KeyCode::Esc => {
@@ -1266,12 +1984,8 @@ fn handle_setup_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         }
         KeyCode::Enter => {
             form.error = None;
-            if form.server_url.trim().is_empty() {
-                form.error = Some("Server URL is required.".into());
-                return vec![];
-            }
-            if !form.server_url.starts_with("http://") && !form.server_url.starts_with("https://") {
-                form.error = Some("Server URL must start with http:// or https://".into());
+            if let Err(e) = validate_server_url(&form.server_url) {
+                form.error = Some(e.into());
                 return vec![];
             }
             if form.passphrase.is_empty() {
@@ -1296,7 +2010,7 @@ fn handle_setup_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             form.busy = true;
             vec![cmd]
         }
-        KeyCode::Backspace => {
+        KeyCode::Backspace | KeyCode::Char(_) => {
             let field = match form.field {
                 0 => &mut form.server_url,
                 1 => &mut form.username,
@@ -1304,18 +2018,7 @@ fn handle_setup_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                 3 => &mut form.passphrase,
                 _ => &mut form.confirm,
             };
-            field.pop();
-            vec![]
-        }
-        KeyCode::Char(c) => {
-            let field = match form.field {
-                0 => &mut form.server_url,
-                1 => &mut form.username,
-                2 => &mut form.password,
-                3 => &mut form.passphrase,
-                _ => &mut form.confirm,
-            };
-            field.push(c);
+            edit_text(field, key.code);
             vec![]
         }
         _ => vec![],
@@ -1326,19 +2029,22 @@ fn submit_settings(app: &mut App) -> Vec<Cmd> {
     let Some(ref form) = app.settings else {
         return vec![];
     };
-    if form.server_url.trim().is_empty() {
+    if let Err(e) = validate_server_url(&form.server_url) {
         if let Some(ref mut f) = app.settings {
-            f.error = Some("Server URL is required.".into());
-        }
-        return vec![];
-    }
-    if !form.server_url.starts_with("http://") && !form.server_url.starts_with("https://") {
-        if let Some(ref mut f) = app.settings {
-            f.error = Some("Server URL must start with http:// or https://".into());
+            f.error = Some(e.into());
         }
         return vec![];
     }
     let server_changed = form.server_url != app.server_url;
+    let username_changed = form.username != app.username.clone().unwrap_or_default();
+    let mut new_password = app
+        .settings
+        .as_mut()
+        .map(|f| std::mem::take(&mut f.webdav_password))
+        .unwrap_or_default();
+    let Some(ref form) = app.settings else {
+        return vec![];
+    };
     app.server_url = form.server_url.clone();
     app.username = if form.username.is_empty() {
         None
@@ -1355,15 +2061,31 @@ fn submit_settings(app: &mut App) -> Vec<Cmd> {
         targets: app.targets.clone(),
         safety_backup: app.safety_backup,
     };
+    let mut cmds = vec![Cmd::SaveSettings(cfg)];
     if server_changed {
         app.creds = None;
         app.statuses.clear();
+        app.rows.clear();
+        app.conflicts.clear();
+        app.conflict_sel = 0;
         app.push_log("Server URL changed -- session invalidated.".into());
+        cmds.push(Cmd::ClearSession);
+    } else if !new_password.is_empty() && app.creds.is_some() {
+        cmds.push(Cmd::RebuildCreds {
+            password: std::mem::take(&mut new_password),
+        });
+    } else if username_changed {
+        app.creds = None;
+        app.push_log("Username changed -- unlock again with its WebDAV password.".into());
+        cmds.push(Cmd::ClearSession);
+    } else if !new_password.is_empty() {
+        app.push_log("WebDAV password not applied -- unlock first.".into());
     }
+    new_password.zeroize();
     app.settings = None;
     app.screen = Screen::Dashboard;
     app.push_log("Settings saved.".into());
-    vec![Cmd::SaveSettings(cfg)]
+    cmds
 }
 
 fn handle_settings_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
@@ -1372,9 +2094,9 @@ fn handle_settings_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     let Some(ref mut form) = app.settings else {
         return vec![];
     };
-    // Fields: 0=server_url, 1=conflict_policy, 2=safety_backup, 3=username
-    // Device ID is read-only and not a field index
-    let max_field: usize = 3;
+    // Fields: 0=server_url, 1=conflict_policy, 2=safety_backup, 3=username, 4=webdav password,
+    // 5=check for updates, 6=log out. Device ID is read-only and not a field index.
+    let max_field: usize = SETTINGS_FIELD_LOGOUT;
 
     match key.code {
         KeyCode::Esc => {
@@ -1391,19 +2113,24 @@ fn handle_settings_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             form.field = form.field.saturating_sub(1);
             vec![]
         }
-        KeyCode::Enter => submit_settings(app),
-        KeyCode::Backspace => {
-            match form.field {
-                0 => {
-                    form.server_url.pop();
-                }
-                1 | 2 => {}
-                _ => {
-                    form.username.pop();
-                }
+        KeyCode::Enter => match form.field {
+            SETTINGS_FIELD_UPDATE => {
+                app.update_status = Some("Checking for updates...".into());
+                vec![Cmd::CheckUpdate]
             }
-            vec![]
-        }
+            SETTINGS_FIELD_LOGOUT => {
+                if app.creds.is_some() {
+                    app.overlay = Overlay::Confirm {
+                        message: "Log out and forget the saved session?".into(),
+                        action: PendingCmd::Logout,
+                    };
+                } else {
+                    app.update_status = Some("Not logged in.".into());
+                }
+                vec![]
+            }
+            _ => submit_settings(app),
+        },
         KeyCode::Char(' ') if form.field == 1 => {
             form.conflict_policy = match form.conflict_policy {
                 waystone_core::conflict::ConflictPolicy::NewestWins => {
@@ -1419,15 +2146,31 @@ fn handle_settings_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             form.safety_backup = !form.safety_backup;
             vec![]
         }
-        KeyCode::Char(c) => {
-            match form.field {
-                0 => form.server_url.push(c),
-                1 | 2 => {}
-                _ => form.username.push(c),
+        KeyCode::Backspace | KeyCode::Char(_) => {
+            let field = match form.field {
+                0 => Some(&mut form.server_url),
+                3 => Some(&mut form.username),
+                SETTINGS_FIELD_PASSWORD => Some(&mut form.webdav_password),
+                _ => None,
+            };
+            if let Some(field) = field {
+                edit_text(field, key.code);
             }
             vec![]
         }
         _ => vec![],
+    }
+}
+
+/// Backspace pops, a character appends; other keys are ignored.
+fn edit_text(field: &mut String, code: crossterm::event::KeyCode) {
+    use crossterm::event::KeyCode;
+    match code {
+        KeyCode::Backspace => {
+            field.pop();
+        }
+        KeyCode::Char(c) => field.push(c),
+        _ => {}
     }
 }
 
@@ -1472,24 +2215,24 @@ mod tests {
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
             username: Option::None,
             targets: vec![
-                SyncTarget {
-                    name: "Switch JKSV".into(),
-                    path: "/saves/jksv".into(),
-                    adapter: "jksv".into(),
-                    system: "switch".into(),
-                },
-                SyncTarget {
-                    name: "GBA mGBA".into(),
-                    path: "/saves/mgba".into(),
-                    adapter: "mgba".into(),
-                    system: "gba".into(),
-                },
-                SyncTarget {
-                    name: "NDS Twilight".into(),
-                    path: "/saves/twilight".into(),
-                    adapter: "twilight".into(),
-                    system: "nds".into(),
-                },
+                SyncTarget::plain(
+                    "Switch JKSV",
+                    std::path::Path::new("/saves/jksv"),
+                    "jksv",
+                    "switch",
+                ),
+                SyncTarget::plain(
+                    "GBA mGBA",
+                    std::path::Path::new("/saves/mgba"),
+                    "mgba",
+                    "gba",
+                ),
+                SyncTarget::plain(
+                    "NDS Twilight",
+                    std::path::Path::new("/saves/twilight"),
+                    "twilight",
+                    "nds",
+                ),
             ],
             safety_backup: true,
         };
@@ -1512,6 +2255,8 @@ mod tests {
                 device_id: Some("other-dev".into()),
             },
             remote_hash: "remote_hash".into(),
+            head_mtime: "2026-01-02T00:00:00Z".into(),
+            queued: false,
         }
     }
 
@@ -1741,15 +2486,6 @@ mod tests {
     }
 
     #[test]
-    fn screen_switch_to_conflicts_noop_when_empty() {
-        let mut app = test_app();
-        assert!(app.conflicts.is_empty());
-        update(&mut app, key(KeyCode::Char('C')));
-        assert_eq!(app.screen, Screen::Dashboard);
-        assert!(app.log.back().unwrap().text.contains("No conflicts"));
-    }
-
-    #[test]
     fn conflict_sel_nav_clamps() {
         let mut app = test_app();
         app.screen = Screen::Conflicts;
@@ -1784,27 +2520,6 @@ mod tests {
     }
 
     #[test]
-    fn keep_remote_emits_resolve_cmd_with_creds() {
-        let mut app = test_app();
-        app.screen = Screen::Conflicts;
-        let (vault, _) = waystone_core::crypto::Vault::init("test").unwrap();
-        let dav = crate::webdav::WebDavClient::new("http://localhost", None, None);
-        app.creds = Some(SessionCreds {
-            vault: Arc::new(vault),
-            dav: Arc::new(dav),
-            blocking_dav: Arc::new(BlockingWebDav::new("http://localhost", None, None)),
-        });
-        let mut entry = make_conflict_entry(0);
-        entry.remote_hash = "rh123".into();
-        app.conflicts.push(entry);
-        let cmds = update(&mut app, key(KeyCode::Char('r')));
-        assert!(cmds.iter().any(|c| matches!(
-            c,
-            Cmd::ResolveKeepRemote { remote_hash, .. } if remote_hash == "rh123"
-        )));
-    }
-
-    #[test]
     fn conflicts_msg_merges_by_target_id() {
         let mut app = test_app();
         app.conflicts = vec![make_conflict_entry(0), make_conflict_entry(1)];
@@ -1824,12 +2539,17 @@ mod tests {
                 device_id: Some("d2".into()),
             },
             remote_hash: "r2".into(),
+            head_mtime: "t2".into(),
+            queued: false,
         };
+        let target = app.targets[0].clone();
         update(
             &mut app,
-            Msg::Conflicts {
+            Msg::Rows {
                 target_id: 0,
-                entries: vec![new_entry],
+                target,
+                rows: vec![],
+                conflicts: vec![new_entry],
             },
         );
 
@@ -1858,11 +2578,14 @@ mod tests {
         let mut app = test_app();
         app.conflicts = vec![make_conflict_entry(0)];
 
+        let target = app.targets[0].clone();
         update(
             &mut app,
-            Msg::Conflicts {
+            Msg::Rows {
                 target_id: 0,
-                entries: vec![],
+                target,
+                rows: vec![],
+                conflicts: vec![],
             },
         );
 
@@ -1870,32 +2593,73 @@ mod tests {
     }
 
     #[test]
-    fn action_done_on_conflicts_screen_removes_entry_and_refreshes() {
+    fn refresh_keeps_a_queued_conflict_queued() {
         let mut app = test_app();
-        app.screen = Screen::Conflicts;
-        app.busy = Some(0);
-        app.conflicts.push(make_conflict_entry(0));
-
-        let cmds = update(
+        let mut queued = make_conflict_entry(0);
+        queued.queued = true;
+        app.conflicts = vec![queued];
+        let target = app.targets[0].clone();
+        update(
             &mut app,
-            Msg::ActionDone {
+            Msg::Rows {
                 target_id: 0,
-                result: ActionResult::Ok("resolved".into()),
+                target,
+                rows: vec![],
+                conflicts: vec![make_conflict_entry(0)],
             },
         );
-
-        assert!(app.conflicts.is_empty());
-        assert_eq!(app.screen, Screen::Dashboard);
-        assert!(cmds.iter().any(|c| matches!(c, Cmd::RefreshStatus(0))));
+        assert_eq!(app.conflicts.len(), 1);
+        assert!(app.conflicts[0].queued);
     }
-    // --- Setup / Settings / first-run tests ---
+
+    #[test]
+    fn stale_results_follow_their_target_after_a_reorder_or_are_dropped() {
+        let mut app = test_app();
+        let first = app.targets[0].clone();
+        app.targets.swap(0, 1);
+        update(
+            &mut app,
+            Msg::Rows {
+                target_id: 0,
+                target: first.clone(),
+                rows: vec![row(0, "nds/A/battery", false)],
+                conflicts: vec![make_conflict_entry(0)],
+            },
+        );
+        assert!(app.rows_for(0).is_empty());
+        assert_eq!(app.rows_for(1).len(), 1);
+        assert!(app.conflicts.iter().all(|c| c.target_id == 1));
+
+        update(
+            &mut app,
+            Msg::History {
+                target_id: 0,
+                target: first.clone(),
+                entries: vec![make_history_view(0, 0)],
+            },
+        );
+        assert_eq!(app.history_entries[0].target_id, 1);
+
+        app.targets.retain(|t| *t != first);
+        app.screen = Screen::Dashboard;
+        update(
+            &mut app,
+            Msg::Snapshots {
+                target_id: 1,
+                target: first,
+                entries: vec![make_snapshot_view(1, 0)],
+            },
+        );
+        assert_eq!(app.screen, Screen::Dashboard);
+        assert!(app.snapshot_entries.is_empty());
+    }
 
     fn setup_config() -> WaystoneConfig {
         WaystoneConfig {
-            device_id: "dev".into(),
+            device_id: "test-dev".into(),
             server_url: String::new(),
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
-            username: None,
+            username: Option::None,
             targets: vec![],
             safety_backup: true,
         }
@@ -2074,6 +2838,7 @@ mod tests {
             server_url: "http://changed".into(),
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
             username: "bob".into(),
+            webdav_password: String::new(),
             safety_backup: true,
             field: 0,
             error: None,
@@ -2092,6 +2857,7 @@ mod tests {
             server_url: "http://localhost".into(),
             conflict_policy: waystone_core::conflict::ConflictPolicy::Prompt,
             username: "alice".into(),
+            webdav_password: String::new(),
             safety_backup: true,
             field: 0,
             error: None,
@@ -2118,6 +2884,7 @@ mod tests {
             server_url: "http://different-server".into(),
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
             username: String::new(),
+            webdav_password: String::new(),
             safety_backup: true,
             field: 0,
             error: None,
@@ -2136,6 +2903,7 @@ mod tests {
             server_url: "http://localhost".into(),
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
             username: String::new(),
+            webdav_password: String::new(),
             safety_backup: true,
             field: 1,
             error: None,
@@ -2167,6 +2935,7 @@ mod tests {
             server_url: "http://localhost".into(),
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
             username: String::new(),
+            webdav_password: String::new(),
             safety_backup: true,
             field: 2,
             error: None,
@@ -2185,6 +2954,7 @@ mod tests {
             server_url: "http://localhost".into(),
             conflict_policy: waystone_core::conflict::ConflictPolicy::NewestWins,
             username: String::new(),
+            webdav_password: String::new(),
             safety_backup: false,
             field: 0,
             error: None,
@@ -2251,9 +3021,12 @@ mod tests {
     fn history_msg_populates_entries_and_switches_screen() {
         let mut app = test_app();
         let entries = vec![make_history_view(0, 0), make_history_view(0, 1)];
+        let target = app.targets[0].clone();
         update(
             &mut app,
             Msg::History {
+                target_id: 0,
+                target,
                 entries: entries.clone(),
             },
         );
@@ -2308,7 +3081,15 @@ mod tests {
     #[test]
     fn history_empty_msg_stays_on_history_screen() {
         let mut app = test_app();
-        update(&mut app, Msg::History { entries: vec![] });
+        let target = app.targets[0].clone();
+        update(
+            &mut app,
+            Msg::History {
+                target_id: 0,
+                target,
+                entries: vec![],
+            },
+        );
         assert_eq!(app.screen, Screen::History);
         assert!(app.history_entries.is_empty());
     }
@@ -2340,9 +3121,12 @@ mod tests {
     #[test]
     fn snapshots_msg_populates_entries_and_switches_screen() {
         let mut app = test_app();
+        let target = app.targets[0].clone();
         update(
             &mut app,
             Msg::Snapshots {
+                target_id: 0,
+                target,
                 entries: vec![make_snapshot_view(0, 0), make_snapshot_view(0, 1)],
             },
         );
@@ -2390,7 +3174,15 @@ mod tests {
     #[test]
     fn snapshots_empty_msg_stays_on_snapshots_screen() {
         let mut app = test_app();
-        update(&mut app, Msg::Snapshots { entries: vec![] });
+        let target = app.targets[0].clone();
+        update(
+            &mut app,
+            Msg::Snapshots {
+                target_id: 0,
+                target,
+                entries: vec![],
+            },
+        );
         assert_eq!(app.screen, Screen::Snapshots);
         assert!(app.snapshot_entries.is_empty());
     }
@@ -2494,5 +3286,645 @@ mod tests {
                 .unwrap_or(false),
             "error should mention Recovery key"
         );
+    }
+
+    fn row(target_id: usize, key: &str, remote_only: bool) -> SaveRow {
+        SaveRow {
+            target_id,
+            group_key: key.into(),
+            name: key.into(),
+            slot: "battery".into(),
+            status: TargetStatus::InSync,
+            remote_only,
+        }
+    }
+
+    fn test_app_with_creds() -> App {
+        let mut app = test_app();
+        let blocking =
+            std::thread::spawn(|| Arc::new(BlockingWebDav::new("http://localhost:1", None, None)))
+                .join()
+                .unwrap();
+        app.creds = Some(SessionCreds {
+            vault: Arc::new(Vault::from_mdk([7; 32])),
+            dav: Arc::new(WebDavClient::new("http://localhost:1", None, None)),
+            blocking_dav: blocking,
+        });
+        app
+    }
+
+    #[test]
+    fn moving_a_target_moves_its_rows_and_status() {
+        let mut app = test_app();
+        app.rows = vec![row(0, "a", false), row(1, "b", false)];
+        app.statuses.insert(0, TargetStatus::Ahead);
+        update(&mut app, key(KeyCode::Char('J')));
+        assert_eq!(app.selected, 1);
+        assert_eq!(app.targets[1].name, "Switch JKSV");
+        assert_eq!(app.rows_for(1)[0].group_key, "a");
+        assert_eq!(app.rows_for(0)[0].group_key, "b");
+        assert_eq!(app.statuses.get(&1), Some(&TargetStatus::Ahead));
+        assert!(!app.statuses.contains_key(&0));
+    }
+
+    #[test]
+    fn deleting_a_target_drops_its_rows_and_shifts_later_ones() {
+        let mut app = test_app();
+        app.rows = vec![row(0, "a", false), row(1, "b", false), row(2, "c", false)];
+        app.statuses.insert(2, TargetStatus::Behind);
+        app.overlay = Overlay::Confirm {
+            message: String::new(),
+            action: PendingCmd::DeleteTarget(1),
+        };
+        update(&mut app, key(KeyCode::Char('y')));
+        let keys: Vec<_> = app
+            .rows
+            .iter()
+            .map(|r| (r.target_id, r.group_key.as_str()))
+            .collect();
+        assert_eq!(keys, vec![(0, "a"), (1, "c")]);
+        assert_eq!(app.statuses.get(&1), Some(&TargetStatus::Behind));
+    }
+
+    #[test]
+    fn tab_toggles_pane_and_s_in_saves_pane_syncs_selected_save() {
+        let mut app = test_app_with_creds();
+        app.rows = vec![
+            row(0, "nds/A/battery", false),
+            row(0, "nds/B/battery", false),
+        ];
+        update(&mut app, key(KeyCode::Tab));
+        assert_eq!(app.pane, Pane::Saves);
+        update(&mut app, key(KeyCode::Down));
+        let cmds = update(&mut app, key(KeyCode::Char('s')));
+        assert!(matches!(
+            &cmds[..],
+            [Cmd::StartSync { selection: Selection::Save { target: 0, group_key }, mode: RunMode::Sync }]
+                if group_key == "nds/B/battery"
+        ));
+        assert_eq!(app.busy, Some(SYNC_BUSY));
+    }
+
+    #[test]
+    fn push_on_remote_only_row_is_refused_but_pull_is_allowed() {
+        let mut app = test_app_with_creds();
+        app.rows = vec![row(0, "nds/A/slot-1", true)];
+        app.pane = Pane::Saves;
+        assert!(update(&mut app, key(KeyCode::Char('p'))).is_empty());
+        assert!(
+            app.log
+                .back()
+                .unwrap()
+                .text
+                .contains("Nothing local to upload")
+        );
+        let cmds = update(&mut app, key(KeyCode::Char('P')));
+        assert!(matches!(
+            &cmds[..],
+            [Cmd::StartSync {
+                mode: RunMode::Pull,
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn target_pane_keys_map_to_target_selection_modes() {
+        let mut app = test_app_with_creds();
+        app.selected = 1;
+        for (c, mode) in [
+            ('s', RunMode::Sync),
+            ('p', RunMode::Push),
+            ('P', RunMode::Pull),
+        ] {
+            app.busy = None;
+            let cmds = update(&mut app, key(KeyCode::Char(c)));
+            assert!(matches!(
+                &cmds[..],
+                [Cmd::StartSync { selection: Selection::Target(1), mode: m }] if *m == mode
+            ));
+        }
+    }
+
+    #[test]
+    fn a_syncs_all_and_without_creds_opens_unlock_with_pending_sync_all() {
+        let mut app = test_app_with_creds();
+        let cmds = update(&mut app, key(KeyCode::Char('A')));
+        assert!(matches!(
+            &cmds[..],
+            [Cmd::StartSync {
+                selection: Selection::All,
+                mode: RunMode::Sync
+            }]
+        ));
+        let mut app = test_app();
+        assert!(update(&mut app, key(KeyCode::Char('A'))).is_empty());
+        assert!(matches!(
+            &app.overlay,
+            Overlay::Unlock {
+                then: Some(PendingCmd::Sync {
+                    selection: Selection::All,
+                    ..
+                }),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn sync_progress_messages_drive_the_overlay_and_cancel() {
+        let mut app = test_app_with_creds();
+        update(&mut app, Msg::SyncStarted { total: 2 });
+        update(
+            &mut app,
+            Msg::SyncItem {
+                index: 0,
+                total: 2,
+                name: "Zelda".into(),
+                phase: SyncPhase::Pulling,
+            },
+        );
+        assert_eq!(app.sync_run.as_ref().unwrap().ratio(), 0.5);
+        update(&mut app, key(KeyCode::Char('c')));
+        assert!(app.sync_cancel.load(Ordering::SeqCst));
+        assert!(app.sync_run.as_ref().unwrap().cancelling);
+        app.busy = Some(SYNC_BUSY);
+        update(
+            &mut app,
+            Msg::SyncFinished(SyncSummary {
+                pulled: 1,
+                cancelled: true,
+                ..Default::default()
+            }),
+        );
+        assert!(app.busy.is_none());
+        assert!(!app.sync_run.as_ref().unwrap().running());
+        assert_eq!(app.sync_run.as_ref().unwrap().ratio(), 1.0);
+        assert_eq!(update(&mut app, key(KeyCode::Enter)).len(), 1);
+        assert!(app.sync_run.is_none());
+    }
+
+    #[test]
+    fn cancel_while_planning_survives_sync_started() {
+        let mut app = test_app_with_creds();
+        app.busy = Some(SYNC_BUSY);
+        assert!(app.sync_starting());
+        update(&mut app, key(KeyCode::Char('c')));
+        assert!(app.sync_cancel.load(Ordering::SeqCst));
+        update(&mut app, Msg::SyncStarted { total: 1 });
+        assert!(app.sync_cancel.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn sync_finished_without_started_still_shows_summary() {
+        let mut app = test_app_with_creds();
+        app.busy = Some(SYNC_BUSY);
+        update(
+            &mut app,
+            Msg::SyncFinished(SyncSummary {
+                errors: 1,
+                error_messages: vec!["boom".into()],
+                ..Default::default()
+            }),
+        );
+        assert!(app.busy.is_none());
+        assert!(app.sync_run.as_ref().is_some_and(|r| !r.running()));
+        assert!(app.log.iter().any(|l| l.text.contains("boom")));
+    }
+
+    #[test]
+    fn rows_message_sets_rows_conflicts_and_worst_status() {
+        let mut app = test_app();
+        let mut behind = row(0, "nds/B/battery", false);
+        behind.status = TargetStatus::Behind;
+        let target = app.targets[0].clone();
+        update(
+            &mut app,
+            Msg::Rows {
+                target_id: 0,
+                target,
+                rows: vec![row(0, "nds/A/battery", false), behind],
+                conflicts: vec![make_conflict_entry(0)],
+            },
+        );
+        assert_eq!(app.statuses[&0], TargetStatus::Behind);
+        assert_eq!(app.rows_for(0).len(), 2);
+        assert_eq!(app.conflicts.len(), 1);
+        let target = app.targets[0].clone();
+        update(
+            &mut app,
+            Msg::Rows {
+                target_id: 0,
+                target,
+                rows: vec![row(0, "nds/A/battery", false)],
+                conflicts: vec![],
+            },
+        );
+        assert_eq!(app.statuses[&0], TargetStatus::InSync);
+        assert_eq!(app.rows_for(0).len(), 1);
+        assert!(app.conflicts.is_empty());
+    }
+
+    #[test]
+    fn form_preset_cycles_and_forces_rom_keyed() {
+        let mut app = test_app();
+        update(&mut app, key(KeyCode::Char('a')));
+        for _ in 0..4 {
+            update(&mut app, key(KeyCode::Tab));
+        }
+        update(&mut app, key(KeyCode::Right));
+        let Overlay::TargetForm {
+            preset, adapter, ..
+        } = &app.overlay
+        else {
+            panic!("form expected");
+        };
+        assert_eq!((*preset, adapter.as_str()), (1, "rom_keyed"));
+        assert_eq!(preset_label(*preset), "RetroArch");
+    }
+
+    #[test]
+    fn form_retroarch_without_save_dir_shows_validation_error() {
+        let mut app = test_app();
+        update(&mut app, key(KeyCode::Char('a')));
+        for c in "Roms".chars() {
+            update(&mut app, key(KeyCode::Char(c)));
+        }
+        for _ in 0..4 {
+            update(&mut app, key(KeyCode::Tab));
+        }
+        update(&mut app, key(KeyCode::Right));
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(cmds.is_empty());
+        let Overlay::TargetForm { error, .. } = &app.overlay else {
+            panic!("form expected");
+        };
+        assert!(error.as_deref().unwrap().contains("save directory"));
+    }
+
+    #[test]
+    fn form_with_preset_and_save_dir_persists_both() {
+        let mut app = test_app();
+        update(&mut app, key(KeyCode::Char('a')));
+        for c in "Roms".chars() {
+            update(&mut app, key(KeyCode::Char(c)));
+        }
+        for _ in 0..4 {
+            update(&mut app, key(KeyCode::Tab));
+        }
+        update(&mut app, key(KeyCode::Right));
+        update(&mut app, key(KeyCode::Tab));
+        for c in "/ra/saves".chars() {
+            update(&mut app, key(KeyCode::Char(c)));
+        }
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(matches!(&cmds[..], [Cmd::SaveConfig]));
+        let t = app.targets.last().unwrap();
+        assert_eq!(t.preset.as_deref(), Some("retroarch"));
+        assert_eq!(
+            t.save_dir.as_deref(),
+            Some(std::path::Path::new("/ra/saves"))
+        );
+    }
+
+    fn found(target_id: usize, key: &str) -> ConflictEntry {
+        ConflictEntry {
+            save_key: key.into(),
+            label: format!("T \u{b7} {key}"),
+            remote_hash: format!("rh-{key}"),
+            ..make_conflict_entry(target_id)
+        }
+    }
+
+    #[test]
+    fn conflict_found_streams_in_and_scan_done_with_empty_inbox_returns_to_dashboard() {
+        let mut app = test_app_with_creds();
+        let cmds = update(&mut app, key(KeyCode::Char('C')));
+        assert!(matches!(&cmds[..], [Cmd::ScanConflicts]));
+        assert_eq!(app.screen, Screen::Conflicts);
+        assert!(app.conflict_scanning);
+        update(&mut app, Msg::ConflictFound(found(0, "a")));
+        update(&mut app, Msg::ConflictFound(found(0, "a")));
+        update(&mut app, Msg::ConflictFound(found(1, "b")));
+        assert_eq!(app.conflicts.len(), 2);
+        let cmds = update(&mut app, Msg::ConflictScanDone { error: None });
+        assert!(cmds.is_empty() && app.screen == Screen::Conflicts);
+
+        let mut app = test_app_with_creds();
+        update(&mut app, key(KeyCode::Char('C')));
+        let cmds = update(&mut app, Msg::ConflictScanDone { error: None });
+        assert_eq!(app.screen, Screen::Dashboard);
+        assert!(matches!(&cmds[..], [Cmd::RefreshAllStatuses]));
+    }
+
+    #[test]
+    fn scan_error_keeps_inbox_open_with_notice() {
+        let mut app = test_app_with_creds();
+        update(&mut app, key(KeyCode::Char('C')));
+        update(
+            &mut app,
+            Msg::ConflictScanDone {
+                error: Some("boom".into()),
+            },
+        );
+        assert_eq!(app.screen, Screen::Conflicts);
+        assert_eq!(app.conflict_notice.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn keep_remote_confirms_then_enqueues_exactly_one_job() {
+        let mut app = test_app_with_creds();
+        app.screen = Screen::Conflicts;
+        app.conflicts.push(found(0, "a"));
+        assert!(update(&mut app, key(KeyCode::Char('r'))).is_empty());
+        let Overlay::Confirm { message, .. } = &app.overlay else {
+            panic!("confirm expected");
+        };
+        assert!(message.contains("Replace your local save") && message.contains("other-dev"));
+        assert!(message.contains("safety backup"));
+        let cmds = update(&mut app, key(KeyCode::Char('y')));
+        assert!(matches!(
+            &cmds[..],
+            [Cmd::Resolve(ResolveJob::KeepRemote { hash, head_mtime, .. })]
+                if hash == "rh-a" && head_mtime == "2026-01-02T00:00:00Z"
+        ));
+        assert!(app.conflicts[0].queued && app.resolving);
+        assert!(update(&mut app, key(KeyCode::Char('r'))).is_empty());
+        assert!(
+            matches!(app.overlay, Overlay::None),
+            "queued entry cannot be re-resolved"
+        );
+    }
+
+    #[test]
+    fn keep_remote_cancel_enqueues_nothing() {
+        let mut app = test_app_with_creds();
+        app.screen = Screen::Conflicts;
+        app.conflicts.push(found(0, "a"));
+        update(&mut app, key(KeyCode::Char('r')));
+        assert!(update(&mut app, key(KeyCode::Esc)).is_empty());
+        assert!(app.resolve_queue.is_empty() && !app.resolving);
+    }
+
+    #[test]
+    fn keep_local_enqueues_only_that_save_and_second_resolve_queues() {
+        let mut app = test_app_with_creds();
+        app.screen = Screen::Conflicts;
+        app.conflicts = vec![found(0, "a"), found(0, "b")];
+        let cmds = update(&mut app, key(KeyCode::Char('l')));
+        assert!(matches!(
+            &cmds[..],
+            [Cmd::Resolve(ResolveJob::KeepLocal { target_id: 0, group_key })] if group_key == "a"
+        ));
+        update(&mut app, key(KeyCode::Down));
+        assert!(update(&mut app, key(KeyCode::Char('l'))).is_empty());
+        assert_eq!(app.resolve_queue.len(), 1);
+        assert!(app.conflicts.iter().all(|c| c.queued));
+    }
+
+    #[test]
+    fn resolve_done_removes_by_group_key_even_after_mid_flight_append_and_starts_next() {
+        let mut app = test_app_with_creds();
+        app.screen = Screen::Conflicts;
+        app.conflicts = vec![found(0, "a"), found(0, "b")];
+        update(&mut app, key(KeyCode::Char('l')));
+        update(&mut app, key(KeyCode::Down));
+        update(&mut app, key(KeyCode::Char('l')));
+        app.conflicts.insert(0, found(1, "zzz"));
+        let cmds = update(
+            &mut app,
+            Msg::ResolveDone {
+                target_id: 0,
+                group_key: "a".into(),
+                result: Ok(()),
+            },
+        );
+        assert!(app.conflicts.iter().all(|c| c.save_key != "a"));
+        assert_eq!(app.conflicts.len(), 2);
+        assert!(matches!(
+            &cmds[..],
+            [Cmd::Resolve(ResolveJob::KeepLocal { group_key, .. })] if group_key == "b"
+        ));
+    }
+
+    #[test]
+    fn resolve_failure_keeps_entry_clears_queued_and_shows_error() {
+        let mut app = test_app_with_creds();
+        app.screen = Screen::Conflicts;
+        app.conflicts = vec![found(0, "a")];
+        update(&mut app, key(KeyCode::Char('l')));
+        let cmds = update(
+            &mut app,
+            Msg::ResolveDone {
+                target_id: 0,
+                group_key: "a".into(),
+                result: Err("disk full".into()),
+            },
+        );
+        assert!(cmds.is_empty());
+        assert!(!app.conflicts[0].queued && !app.resolving);
+        assert_eq!(app.conflict_notice.as_deref(), Some("disk full"));
+    }
+
+    #[test]
+    fn last_resolve_done_empties_inbox_and_returns_to_dashboard() {
+        let mut app = test_app_with_creds();
+        app.screen = Screen::Conflicts;
+        app.conflicts = vec![found(0, "a")];
+        update(&mut app, key(KeyCode::Char('l')));
+        let cmds = update(
+            &mut app,
+            Msg::ResolveDone {
+                target_id: 0,
+                group_key: "a".into(),
+                result: Ok(()),
+            },
+        );
+        assert_eq!(app.screen, Screen::Dashboard);
+        assert!(matches!(&cmds[..], [Cmd::RefreshAllStatuses]));
+    }
+
+    fn settings_app(field: usize) -> App {
+        let mut app = test_app_with_creds();
+        update(&mut app, key(KeyCode::Char('S')));
+        app.settings.as_mut().unwrap().field = field;
+        app
+    }
+
+    #[test]
+    fn settings_password_save_emits_rebuild_creds_and_never_debug_prints_it() {
+        let mut app = settings_app(SETTINGS_FIELD_PASSWORD);
+        for c in "hunter2".chars() {
+            update(&mut app, key(KeyCode::Char(c)));
+        }
+        assert!(!format!("{:?}", app.settings).contains("hunter2"));
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        let rebuild = cmds
+            .iter()
+            .find(|c| matches!(c, Cmd::RebuildCreds { .. }))
+            .expect("rebuild cmd");
+        assert!(!format!("{rebuild:?}").contains("hunter2"));
+        assert!(matches!(rebuild, Cmd::RebuildCreds { password } if password == "hunter2"));
+        assert!(app.creds.is_some());
+    }
+
+    #[test]
+    fn settings_empty_password_leaves_creds_alone() {
+        let mut app = settings_app(0);
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(cmds.iter().all(|c| !matches!(c, Cmd::RebuildCreds { .. })));
+    }
+
+    #[test]
+    fn settings_server_change_clears_creds_and_keychain_session() {
+        let mut app = settings_app(0);
+        for c in "x".chars() {
+            update(&mut app, key(KeyCode::Char(c)));
+        }
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(app.creds.is_none());
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::ClearSession)));
+    }
+
+    #[test]
+    fn settings_username_change_without_password_invalidates_session() {
+        let mut app = settings_app(3);
+        update(&mut app, key(KeyCode::Char('z')));
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(app.creds.is_none());
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::ClearSession)));
+        assert_eq!(app.username.as_deref(), Some("z"));
+    }
+
+    #[test]
+    fn target_edits_are_blocked_while_resolves_are_pending() {
+        let mut app = test_app_with_creds();
+        app.resolving = true;
+        app.statuses.insert(0, TargetStatus::Ahead);
+        update(&mut app, key(KeyCode::Char('J')));
+        assert_eq!(app.selected, 0);
+        assert_eq!(app.targets[0].name, "Switch JKSV");
+        update(&mut app, key(KeyCode::Char('d')));
+        assert!(matches!(app.overlay, Overlay::None));
+        assert!(app.log.back().unwrap().text.contains("Wait for"));
+        app.resolving = false;
+        update(&mut app, key(KeyCode::Char('J')));
+        assert_eq!(app.selected, 1);
+    }
+
+    #[test]
+    fn reopening_the_inbox_while_resolving_keeps_it_instead_of_rescanning() {
+        let mut app = test_app_with_creds();
+        app.conflicts = vec![found(0, "a")];
+        app.resolving = true;
+        assert!(update(&mut app, key(KeyCode::Char('C'))).is_empty());
+        assert_eq!(app.screen, Screen::Conflicts);
+        assert_eq!(app.conflicts.len(), 1);
+        assert!(!app.conflict_scanning);
+    }
+
+    #[test]
+    fn editing_a_target_drops_its_rows_status_and_conflicts() {
+        let mut app = test_app();
+        app.rows = vec![row(0, "a", false), row(1, "b", false)];
+        app.statuses.insert(0, TargetStatus::Ahead);
+        app.conflicts = vec![make_conflict_entry(0), make_conflict_entry(1)];
+        update(&mut app, key(KeyCode::Char('e')));
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(matches!(&cmds[..], [Cmd::SaveConfig]));
+        assert!(app.rows_for(0).is_empty() && app.rows_for(1).len() == 1);
+        assert!(!app.statuses.contains_key(&0));
+        assert!(app.conflicts.iter().all(|c| c.target_id == 1));
+    }
+
+    #[test]
+    fn logout_confirms_then_clears_creds_and_session() {
+        let mut app = settings_app(SETTINGS_FIELD_LOGOUT);
+        assert!(update(&mut app, key(KeyCode::Enter)).is_empty());
+        assert!(matches!(app.overlay, Overlay::Confirm { .. }));
+        let cmds = update(&mut app, key(KeyCode::Char('y')));
+        assert!(app.creds.is_none());
+        assert!(matches!(&cmds[..], [Cmd::ClearSession]));
+        assert!(app.log.back().unwrap().text.contains("Logged out."));
+    }
+
+    #[test]
+    fn update_check_flow() {
+        let mut app = settings_app(SETTINGS_FIELD_UPDATE);
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(matches!(&cmds[..], [Cmd::CheckUpdate]));
+        update(
+            &mut app,
+            Msg::UpdateChecked(Ok(CheckResult::UpToDate("0.5.4".into()))),
+        );
+        assert_eq!(app.update_status.as_deref(), Some("Up to date (v0.5.4)"));
+        let rel = Release {
+            version: "9.9.9".into(),
+            asset_url: "u".into(),
+        };
+        update(
+            &mut app,
+            Msg::UpdateChecked(Ok(CheckResult::Available(rel))),
+        );
+        let Overlay::Confirm { message, .. } = &app.overlay else {
+            panic!("confirm expected");
+        };
+        assert_eq!(message, "Install v9.9.9?");
+        let cmds = update(&mut app, key(KeyCode::Char('y')));
+        assert!(matches!(&cmds[..], [Cmd::InstallUpdate(r)] if r.version == "9.9.9"));
+        update(&mut app, Msg::UpdateInstalled(Ok("9.9.9".into())));
+        assert!(
+            app.update_status
+                .as_deref()
+                .unwrap()
+                .starts_with("Updated to v9.9.9")
+        );
+        update(&mut app, Msg::UpdateInstalled(Err(UpdateError::Install)));
+        assert_eq!(
+            app.update_status.as_deref(),
+            Some(UpdateError::Install.install_message())
+        );
+    }
+
+    #[test]
+    fn offline_message_sets_banner_releases_sync_busy_and_retry_suffix_appears_on_second_failure() {
+        let mut app = test_app_with_creds();
+        let cmds = update(&mut app, key(KeyCode::Char('A')));
+        assert!(matches!(&cmds[..], [Cmd::StartSync { .. }]));
+        assert_eq!(app.busy, Some(SYNC_BUSY));
+        update(&mut app, Msg::Offline(Some(NoInternetReason::NoNetwork)));
+        assert!(app.busy.is_none());
+        let banner = app.offline_banner().unwrap();
+        assert!(banner.starts_with("No internet connection detected."));
+        assert!(banner.contains("(r to retry)") && !banner.contains(RETRY_SUFFIX));
+        update(&mut app, key(KeyCode::Char('r')));
+        update(&mut app, Msg::Offline(Some(NoInternetReason::NoNetwork)));
+        assert!(app.offline_banner().unwrap().ends_with(RETRY_SUFFIX));
+        update(&mut app, Msg::Offline(None));
+        assert!(app.offline_banner().is_none());
+    }
+
+    #[test]
+    fn offline_resets_setup_busy_flag() {
+        let mut app = test_app();
+        app.setup = Some(SetupForm::default());
+        app.setup.as_mut().unwrap().busy = true;
+        update(
+            &mut app,
+            Msg::Offline(Some(NoInternetReason::ServerUnreachable)),
+        );
+        let form = app.setup.as_ref().unwrap();
+        assert!(!form.busy);
+        assert_eq!(
+            form.error.as_deref(),
+            Some("Can't reach your Waystone server.")
+        );
+    }
+
+    #[test]
+    fn push_log_writes_ui_tagged_line_without_a_logger() {
+        let mut app = test_app();
+        app.push_log("hello".into());
+        assert_eq!(app.log.back().unwrap().text, "hello");
     }
 }

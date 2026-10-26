@@ -16,6 +16,7 @@ import uniffi.waystone_mobile.ConflictPolicy
 import uniffi.waystone_mobile.DeviceHead
 import uniffi.waystone_mobile.FileEntry
 import uniffi.waystone_mobile.NormalizedSave
+import uniffi.waystone_mobile.PlanAction
 import uniffi.waystone_mobile.PushOutcome
 import uniffi.waystone_mobile.SyncDecision
 import uniffi.waystone_mobile.Vault
@@ -60,12 +61,13 @@ class SyncRepositoryTest {
     }
 
     @Test
-    fun `keepRemoteFiles round-trips content through the real vault`() = runBlocking {
+    fun `restoreHash round-trips content through the real vault`() = runBlocking {
         val repo = SyncRepository(newVault("t2"), FakeWebDav(), "dev1")
         val save = makeSave("remote-content".toByteArray(), "2026-01-01T00:00:00Z")
         repo.pushOne(save)
 
-        val files = repo.keepRemoteFiles(save, repo.hashOf(save))
+        var files = emptyList<FileEntry>()
+        assertTrue(repo.restoreHash(save, repo.hashOf(save)) { files = it; true })
 
         assertEquals(1, files.size)
         assertEquals("save.dat", files[0].path)
@@ -87,14 +89,7 @@ class SyncRepositoryTest {
 
         assertEquals(SourceStatus.Conflict, repo.planOne(save, ConflictPolicy.PROMPT).status)
 
-        val decision = decidePull(
-            localHash(save), save.mtime, readRemoteHeads(vault, save, dav), "dev1",
-            ConflictPolicy.PROMPT,
-        )
-        val entry = repo.conflictEntry(
-            save, readRemoteHeads(vault, save, dav),
-            decision as SyncDecision.ConflictNeedsInput,
-        )
+        val entry = repo.conflictEntry(repo.planOne(save, ConflictPolicy.PROMPT))
         assertNotNull(entry)
         assertEquals(localHash(save), entry!!.localHash)
         assertEquals(foreignHash, entry.remoteHash)
@@ -107,7 +102,7 @@ class SyncRepositoryTest {
         val repo = SyncRepository(newVault("t5"), FakeWebDav(), "dev1")
         val bad = makeSave("x".toByteArray(), "2026-01-01T00:00:00Z").copy(system = "megadrive")
 
-        assertEquals(PlanAction.Error, repo.planOne(bad, ConflictPolicy.PROMPT).action)
+        assertEquals(PlanAction.ERROR, repo.planOne(bad, ConflictPolicy.PROMPT).action)
     }
 
     @Test

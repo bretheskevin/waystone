@@ -1,33 +1,22 @@
 #include "sync.h"
 #include "rom_saves.h"
 #include "rom_parse.h"
+#include "rom_io.h"
 #include "file_tree.h"
 
-#include <chrono>
 #include <cstdio>
 #include <set>
 #include <string>
 #include <vector>
 
-struct Vault;
-extern "C" {
-#include "waystone.h"
-}
-
-static const char* ffi_err() { return ws_last_error() ? ws_last_error() : "unknown"; }
-
-static unsigned long long now_ms() {
-    return (unsigned long long)std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::steady_clock::now().time_since_epoch())
-        .count();
-}
-static unsigned long long ms_since(unsigned long long t0) { return now_ms() - t0; }
+#include "ffi_err.h"
+#include "wall_clock.h"
 
 static int nx_list_saves(void* ctx, const void* tp, LocalSaveSet& out) {
     const AccountUid* uid = static_cast<const AccountUid*>(ctx);
     const TitleInfo& title = *static_cast<const TitleInfo*>(tp);
     if (title.source == SourceRom) {
-        std::vector<uint8_t> raw = extract_rom_saves(title);
+        std::vector<uint8_t> raw = rom_extract_saves(title.system, title.save_paths);
         if (raw.empty()) {
             printf("[saves] %s: no local ROM save files\n", title.name.c_str());
             return 0;
@@ -91,7 +80,7 @@ static int nx_list_remote_only(void*, const WsVault* vault, WebDavSession* dav, 
     }
     std::string game_dir = probe.substr(0, probe.rfind('/'));
     std::vector<std::string> hrefs;
-    unsigned long long t0 = now_ms();
+    unsigned long long t0 = wall_now_ms();
     int rc = webdav_propfind_s(dav, game_dir.c_str(), &hrefs);
     if (rc != 0) {
         printf("[sync] remote-only %s: PROPFIND failed rc=%d\n", game_key.c_str(), rc);
@@ -100,7 +89,7 @@ static int nx_list_remote_only(void*, const WsVault* vault, WebDavSession* dav, 
     std::set<std::string> remote_slots;
     for (size_t i = 0; i < hrefs.size(); i++) remote_slots.insert(href_last_segment(hrefs[i]));
     printf("[sync] remote-only %s: %zu remote entries in %llu ms\n", game_key.c_str(),
-           hrefs.size(), ms_since(t0));
+           hrefs.size(), wall_ms_since(t0));
 
     size_t start = 0;
     while (start < slots.size()) {
@@ -126,10 +115,10 @@ static int nx_write_save(void* ctx, const void* tp, const std::string& group_key
                          const uint8_t* tree, size_t tree_len) {
     const AccountUid* uid = static_cast<const AccountUid*>(ctx);
     const TitleInfo& title = *static_cast<const TitleInfo*>(tp);
+    std::string slot;
+    size_t last_slash = group_key.rfind('/');
+    if (last_slash != std::string::npos) slot = group_key.substr(last_slash + 1);
     if (title.source == SourceRom) {
-        std::string slot;
-        size_t last_slash = group_key.rfind('/');
-        if (last_slash != std::string::npos) slot = group_key.substr(last_slash + 1);
         WsBuf native = {nullptr, 0};
         int nrc = ws_rom_keyed_to_native(title.system.c_str(), slot.c_str(),
                                          title.rom_file_name.c_str(), tree, tree_len, &native);
@@ -146,13 +135,14 @@ static int nx_write_save(void* ctx, const void* tp, const std::string& group_key
         }
         printf("[saves] rom restore %s -> dir=%s (%zu file(s))\n", group_key.c_str(),
                title.save_dir.c_str(), entries.size());
-        int rrc = write_rom_saves(title, entries);
+        int rrc = rom_write_saves(title.save_dir, entries);
         printf("[saves] rom restore %s rc=%d\n", group_key.c_str(), rrc);
         return rrc;
     }
-    printf("[saves] write %s -> tid=%016lX (%zu bytes)\n", group_key.c_str(),
-           (unsigned long)title.title_id, tree_len);
-    int rc = write_save_files(title.title_id, *uid, tree, tree_len);
+    const SwitchSaveKind kind = save_kind_for_slot(slot);
+    printf("[saves] write %s -> tid=%016lX slot=%s (%zu bytes)\n", group_key.c_str(),
+           (unsigned long)title.title_id, slot.c_str(), tree_len);
+    int rc = write_save_files(title.title_id, *uid, kind, tree, tree_len);
     printf("[saves] write %s rc=%d\n", group_key.c_str(), rc);
     return rc;
 }

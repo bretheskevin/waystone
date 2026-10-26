@@ -29,7 +29,7 @@ std::string snapshot_sanitize_key(const std::string& key) {
 
 // Create each directory component along path, ignoring EEXIST.
 // The first slash-delimited component is treated as a device prefix (e.g. "sdmc:") and skipped.
-// Returns false on the first mkdir failure that is NOT EEXIST.
+// Returns false on the first mkdir failure that is NOT EEXIST, or when the leaf is not a directory.
 bool fs_mkdir_p(const std::string& path) {
     std::string current;
     bool first = true;
@@ -43,11 +43,19 @@ bool fs_mkdir_p(const std::string& path) {
             first = false;
         } else if (!component.empty()) {
             current += "/" + component;
-            int r = mkdir(current.c_str(), 0777);
-            if (r != 0 && errno != EEXIST) return false;
+            if (mkdir(current.c_str(), 0777) != 0 && errno != EEXIST) {
+                printf("[saves] mkdir %s failed (errno %d)\n", current.c_str(), errno);
+                return false;
+            }
         }
         if (slash >= path.size()) break;
         start = slash + 1;
+    }
+    struct stat st;
+    if (current.find('/') != std::string::npos &&
+        (stat(current.c_str(), &st) != 0 || !S_ISDIR(st.st_mode))) {
+        printf("[saves] mkdir %s: exists but is not a directory\n", current.c_str());
+        return false;
     }
     return true;
 }

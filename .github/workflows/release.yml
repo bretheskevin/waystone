@@ -1,8 +1,9 @@
 name: Release
 
-# Build the 3DS shell (.3dsx + installable .cia), the Switch shell (.nro) and the Android shell
-# (waystone.apk) from one vX.Y.Z tag and publish them as one GitHub Release. Each in-app updater
-# picks its asset by suffix (.3dsx / .cia / .nro / .apk), so asset names must not change.
+# Build the 3DS shell (.3dsx + installable .cia), the Switch shell (.nro), the Android shell
+# (waystone.apk) and the desktop binaries (waystone-desktop-<target triple>[.exe]) from one vX.Y.Z
+# tag and publish them as one GitHub Release. Each in-app updater picks its asset by suffix
+# (.3dsx / .cia / .nro / .apk) or exact name (desktop), so asset names must not change.
 
 on:
   push:
@@ -251,8 +252,53 @@ jobs:
           path: dist-android/waystone.apk
           if-no-files-found: error
 
+  build-desktop:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin, ext: "", run_check: true }
+          - { os: macos-14, target: x86_64-apple-darwin, ext: "", run_check: false }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu, ext: "", run_check: true }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc, ext: ".exe", run_check: true }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Secret Service build deps (keyring)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -y && sudo apt-get install -y --no-install-recommends libdbus-1-dev pkg-config
+
+      - name: Build desktop
+        shell: bash
+        run: cargo build --release --locked -p waystone-desktop --target ${{ matrix.target }}
+
+      - name: Stage asset (+ version check)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-desktop
+          DST="dist-desktop/waystone-desktop-${{ matrix.target }}${{ matrix.ext }}"
+          cp "target/${{ matrix.target }}/release/waystone-desktop${{ matrix.ext }}" "$DST"
+          if [ "${{ matrix.run_check }}" = "true" ]; then
+            OUT=$("$DST" --version); echo "$OUT"
+            echo "$OUT" | grep -F "${{ needs.version.outputs.version }}"
+          fi
+
+      - name: Upload desktop artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: waystone-desktop-${{ matrix.target }}
+          path: dist-desktop/*
+          if-no-files-found: error
+
   publish:
-    needs: [build-3ds, build-switch, build-android]
+    needs: [build-3ds, build-switch, build-android, build-desktop]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
@@ -270,6 +316,7 @@ jobs:
             dist/waystone-3ds/waystone-3ds-spike.cia
             dist/waystone-switch/waystone.nro
             dist/waystone-android/waystone.apk
+            dist/waystone-desktop-*/waystone-desktop-*
           fail_on_unmatched_files: true
           generate_release_notes: true
         env:

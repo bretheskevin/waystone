@@ -1,30 +1,41 @@
 package dev.waystone.data.sync
 
+import dev.waystone.data.roms.RemoteOnlyProbe
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Level
 import java.util.logging.Logger
-import dev.waystone.data.roms.RemoteOnlyProbe
 import kotlin.coroutines.CoroutineContext
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.buffer
+import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import uniffi.waystone_mobile.ConflictPolicy
-import uniffi.waystone_mobile.DeviceHead
 import uniffi.waystone_mobile.FileEntry
 import uniffi.waystone_mobile.HistoryEntry
 import uniffi.waystone_mobile.NormalizedSave
+import uniffi.waystone_mobile.PlanAction
 import uniffi.waystone_mobile.PushOutcome
+import uniffi.waystone_mobile.SaveIo
 import uniffi.waystone_mobile.SyncDecision
+import uniffi.waystone_mobile.SyncPhase
+import uniffi.waystone_mobile.SyncPlanEntry
+import uniffi.waystone_mobile.SyncProgressSink
 import uniffi.waystone_mobile.Vault
 import uniffi.waystone_mobile.WebDav
-import uniffi.waystone_mobile.WaystoneException
-import uniffi.waystone_mobile.decidePull as ffiDecidePull
-import uniffi.waystone_mobile.fetchBlob as ffiFetchBlob
-import uniffi.waystone_mobile.foldHeads as ffiFoldHeads
+import uniffi.waystone_mobile.engineExecute
+import uniffi.waystone_mobile.enginePlan
+import uniffi.waystone_mobile.enginePlanOne
+import uniffi.waystone_mobile.enginePullHash
+import uniffi.waystone_mobile.engineRestoreHash
 import uniffi.waystone_mobile.listHistory as ffiListHistory
 import uniffi.waystone_mobile.localHash as ffiLocalHash
 import uniffi.waystone_mobile.pushOne as ffiPushOne
-import uniffi.waystone_mobile.readRemoteHeads as ffiReadRemoteHeads
 
 enum class SourceStatus(val rank: Int) {
     InSync(0),
@@ -45,6 +56,7 @@ data class ConflictEntry(
     val remoteHash: String,
     val remoteDeviceId: String,
     val remoteMtime: String,
+    val headMtime: String,
 )
 
 /** Mirrors desktop/src/tui/action.rs sync flows over the UniFFI binding. */
@@ -62,133 +74,102 @@ class SyncRepository(
     suspend fun hashOf(save: NormalizedSave): String = withContext(io) { ffiLocalHash(save) }
 
     /** Newest head from another device, for inbox display on ConflictNeedsInput. */
-    fun conflictEntry(
-        save: NormalizedSave,
-        heads: List<DeviceHead>,
-        decision: SyncDecision.ConflictNeedsInput,
-    ): ConflictEntry? {
-        val other = heads.filter { it.deviceId != deviceId }.maxByOrNull { it.mtime }
+    fun conflictEntry(entry: SyncPlanEntry): ConflictEntry? {
+        val d = entry.decision as? SyncDecision.ConflictNeedsInput ?: return null
+        val other = entry.heads.filter { it.deviceId != deviceId }.maxByOrNull { it.mtime }
         if (other == null) {
-            log.warning("no foreign head for conflict on ${save.groupKey}")
+            log.warning("no foreign head for conflict on ${entry.save.groupKey}")
             return null
         }
-        return ConflictEntry(save, decision.localHash, decision.remoteHash, other.deviceId, other.mtime)
+        return ConflictEntry(entry.save, d.localHash, d.remoteHash, other.deviceId, other.mtime, entry.headMtime)
     }
 
     suspend fun pushOne(save: NormalizedSave): PushOutcome = withContext(io) {
         ffiPushOne(vault, save, deviceId, dav).also { log.info("push ${save.groupKey} -> $it") }
     }
 
-    /** fetch_blob already returns decrypted plaintext zip bytes — no decryptBlob here. */
-    suspend fun keepRemoteFiles(save: NormalizedSave, remoteHash: String): List<FileEntry> =
-        withContext(io) {
-            val zip = ffiFetchBlob(vault, save, remoteHash, dav)
-            log.info("fetched remote blob for ${save.groupKey} (${zip.size}B)")
-            CanonicalUnzip.unzip(zip)
-        }
+    /** History restore through [write] (engine restore_hash); this device's head is left untouched. */
+    suspend fun restoreHash(
+        save: NormalizedSave,
+        hash: String,
+        write: suspend (List<FileEntry>) -> Boolean,
+    ): Boolean = withContext(io) {
+        engineRestoreHash(vault, save, hash, dav, saveIo { _, _, files -> write(files) })
+            .also { log.info("history restore ${save.groupKey} @ ${hash.take(12)} -> $it") }
+    }
 
     suspend fun history(save: NormalizedSave): List<HistoryEntry> = withContext(io) {
         ffiListHistory(vault, save, dav).also { log.info("history ${save.groupKey}: ${it.size} entries") }
     }
 
     suspend fun planOne(save: NormalizedSave, policy: ConflictPolicy): SyncPlanEntry = withContext(io) {
-        runCatchingCancellable {
-            val local = if (save.isRemoteOnly) null else ffiLocalHash(save)
-            val heads = ffiReadRemoteHeads(vault, save, dav)
-            val d = ffiDecidePull(local, save.mtime, heads, deviceId, policy)
-            val entry = when (d) {
-                SyncDecision.InSync -> SyncPlanEntry(save, PlanAction.InSync, d, heads = heads)
-                SyncDecision.Push -> SyncPlanEntry(save, PlanAction.Push, d, heads = heads)
-                is SyncDecision.Pull -> SyncPlanEntry(save, PlanAction.Pull, d, d.headHash, heads)
-                is SyncDecision.ConflictResolved ->
-                    if (d.winner == "remote") {
-                        val hash = ffiFoldHeads(heads)?.hash
-                        if (hash == null) SyncPlanEntry(save, PlanAction.Error, d, heads = heads, error = "no remote head to pull")
-                        else SyncPlanEntry(save, PlanAction.Pull, d, hash, heads)
-                    } else {
-                        SyncPlanEntry(save, PlanAction.Push, d, heads = heads)
-                    }
-                is SyncDecision.ConflictNeedsInput -> SyncPlanEntry(save, PlanAction.Conflict, d, heads = heads)
-            }
-            log.info("plan ${save.groupKey}: ${entry.action} (decision=$d, remoteOnly=${save.isRemoteOnly})")
-            entry
-        }.getOrElse { e ->
+        runCatchingCancellable { enginePlanOne(vault, save, deviceId, policy, dav) }.getOrElse { e ->
             log.log(Level.WARNING, "plan failed for ${save.groupKey}", e)
-            SyncPlanEntry(save, PlanAction.Error, error = e.message ?: e.javaClass.simpleName)
+            SyncPlanEntry(
+                save = save, action = PlanAction.ERROR, decision = null, localHash = null, ownHeadHash = null,
+                pullHash = null, headMtime = "", heads = emptyList(), error = e.message ?: e.javaClass.simpleName,
+            )
         }
     }
 
-    suspend fun plan(saves: List<NormalizedSave>, policy: ConflictPolicy): SyncPlan {
-        val started = System.currentTimeMillis()
-        log.info("plan start: ${saves.size} saves, policy=$policy")
-        return SyncPlan(saves.map { planOne(it, policy) }).also {
-            log.info("plan done in ${System.currentTimeMillis() - started} ms: ${it.describe()}")
-        }
+    /** The engine logs plan start/done (`[sync]`, counts + timing) through the shared log sink. */
+    suspend fun plan(saves: List<NormalizedSave>, policy: ConflictPolicy): List<SyncPlanEntry> = withContext(io) {
+        enginePlan(vault, saves, deviceId, policy, dav)
+    }
+
+    /** Keep-remote: restore through [write] then record this device's head (engine pull_hash). */
+    suspend fun keepRemote(
+        save: NormalizedSave,
+        hash: String,
+        headMtime: String,
+        write: suspend (List<FileEntry>) -> Boolean,
+    ): Boolean = withContext(io) {
+        enginePullHash(vault, save, hash, headMtime, deviceId, dav, saveIo { _, _, files -> write(files) })
+            .also { log.info("keep-remote ${save.groupKey} -> $it") }
     }
 
     /**
-     * Acts on a decided plan, mirroring shell-common sync_engine: never aborts, every failure lands in the
-     * summary. [restore] writes pulled files (guarded restore); false = aborted (e.g. safety snapshot failed).
-     * [isCancelled] is checked before each item, so a cancel takes effect after the current save.
+     * Never aborts; cancel takes effect after the current save (engine semantics). A collector
+     * that goes away also cancels: the blocking engine call cannot be interrupted otherwise.
      */
     fun execute(
-        plan: SyncPlan,
-        restore: suspend (SyncPlanEntry, List<FileEntry>) -> Boolean,
-        isCancelled: () -> Boolean = { false },
-    ): Flow<SyncProgress> = flow {
-        val total = plan.entries.size
-        emit(SyncProgress.Started(total))
-        log.info("execute start: $total entries (${plan.describe()})")
-        var s = SyncSummary()
-        val errors = mutableListOf<String>()
-        fun fail(entry: SyncPlanEntry, why: String, cause: Throwable? = null) {
-            log.log(Level.WARNING, "execute ${entry.save.groupKey} failed: $why", cause)
-            errors += "${entry.save.displayName}: $why"
-            s = s.copy(errors = s.errors + 1)
-        }
-        for ((index, entry) in plan.entries.withIndex()) {
-            if (isCancelled()) {
-                log.info("execute cancelled before item ${index + 1}/$total")
-                s = s.copy(cancelled = true)
-                break
+        plan: List<SyncPlanEntry>,
+        write: suspend (index: Int, save: NormalizedSave, files: List<FileEntry>) -> Boolean,
+        cancelled: () -> Boolean = { false },
+    ): Flow<SyncProgress> = callbackFlow {
+        val closed = AtomicBoolean(false)
+        val sink = object : SyncProgressSink {
+            override fun started(total: UInt) { trySendBlocking(SyncProgress.Started(total.toInt())) }
+            override fun item(index: UInt, total: UInt, groupKey: String, displayName: String, phase: SyncPhase) {
+                trySendBlocking(SyncProgress.Item(index.toInt(), total.toInt(), groupKey, displayName, phase))
             }
-            when (entry.action) {
-                PlanAction.InSync -> s = s.copy(inSync = s.inSync + 1)
-                PlanAction.Conflict -> s = s.copy(conflicts = s.conflicts + 1)
-                PlanAction.Error -> fail(entry, entry.error ?: "unknown error")
-                PlanAction.Push -> {
-                    emit(SyncProgress.Item(index, total, entry.save, SyncPhase.Pushing))
-                    runCatchingCancellable { pushOne(entry.save) }
-                        .onSuccess { s = s.copy(pushed = s.pushed + 1) }
-                        .onFailure { e -> fail(entry, e.message ?: "push failed", e) }
-                }
-                PlanAction.Pull -> {
-                    emit(SyncProgress.Item(index, total, entry.save, SyncPhase.Pulling))
-                    val hash = entry.pullHash
-                    val files = if (hash == null) {
-                        fail(entry, "no head hash"); null
-                    } else {
-                        runCatchingCancellable { keepRemoteFiles(entry.save, hash) }
-                            .onFailure { e -> fail(entry, e.message ?: "download failed", e) }
-                            .getOrNull()
-                    }
-                    if (files != null) {
-                        emit(SyncProgress.Item(index, total, entry.save, SyncPhase.Restoring))
-                        val restored = runCatchingCancellable { restore(entry, files) }
-                        if (restored.getOrDefault(false)) s = s.copy(pulled = s.pulled + 1)
-                        else fail(entry, "restore aborted", restored.exceptionOrNull())
-                    }
-                }
-            }
+            override fun isCancelled(): Boolean = closed.get() || cancelled()
         }
-        val summary = s.copy(errorMessages = errors.take(SyncSummary.MAX_ERROR_MESSAGES))
-        log.info("execute done: ${summary.headline()}")
-        emit(SyncProgress.Done(summary))
+        launch(io) {
+            val summary = runCatchingCancellable { engineExecute(vault, plan, deviceId, dav, saveIo(write), sink) }
+                .getOrElse { e ->
+                    log.log(Level.WARNING, "execute failed", e)
+                    failedSummary(e.message ?: "Sync failed")
+                }
+            send(SyncProgress.Done(summary))
+            close()
+        }
+        awaitClose { closed.set(true) }
+    }.buffer(Channel.UNLIMITED)
+
+    /** Called on the engine thread; a throw reaches Rust as a per-save error, so log the trace here. */
+    private fun saveIo(write: suspend (Int, NormalizedSave, List<FileEntry>) -> Boolean) = object : SaveIo {
+        override fun restore(index: UInt, save: NormalizedSave, files: List<FileEntry>): Boolean = try {
+            runBlocking { write(index.toInt(), save, files) }
+                .also { log.info("restore #$index ${save.groupKey} (${files.size} file(s)) -> $it") }
+        } catch (e: Exception) {
+            log.log(Level.WARNING, "restore #$index ${save.groupKey} failed", e)
+            throw e
+        }
     }
 
     /**
-     * Safety snapshot FIRST (abort on failure when enabled), then write, then
-     * prune — mirrors desktop helpers::guarded_restore ordering.
+     * Safety snapshot FIRST (abort on failure when enabled), then write, then prune.
      * Snapshot ops are injected so app-layer callers can route them through their
      * provider seam instead of a concrete SnapshotStore.
      */

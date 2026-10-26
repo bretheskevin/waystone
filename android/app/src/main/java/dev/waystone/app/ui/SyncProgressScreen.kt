@@ -14,7 +14,8 @@ import dev.waystone.app.ui.theme.LocalWaystoneColors
 import dev.waystone.app.ui.theme.LocalWaystoneSpacing
 import dev.waystone.app.ui.theme.LocalWaystoneTypography
 import dev.waystone.app.vm.SyncRunState
-import dev.waystone.data.sync.SyncPhase
+import dev.waystone.data.sync.headline
+import uniffi.waystone_mobile.SyncPhase
 
 /** Back while running = cancel after the current save; Back/Close after Done = dismiss. */
 @Composable
@@ -38,7 +39,7 @@ fun SyncProgressDialog(run: SyncRunState, onCancel: () -> Unit, onClose: () -> U
                     summary.errorMessages.forEach {
                         Text(it, style = LocalWaystoneTypography.current.sm, color = LocalWaystoneColors.current.error)
                     }
-                    if (summary.conflicts > 0) Text("Resolve conflicts from the Conflicts inbox.", style = LocalWaystoneTypography.current.sm)
+                    if (summary.conflicts > 0u) Text("Resolve conflicts from the Conflicts inbox.", style = LocalWaystoneTypography.current.sm)
                 }
             }
         },
@@ -50,8 +51,8 @@ fun SyncProgressDialog(run: SyncRunState, onCancel: () -> Unit, onClose: () -> U
 }
 
 private fun phaseLabel(phase: SyncPhase?): String = when (phase) {
-    SyncPhase.Pushing -> "Uploading"
-    SyncPhase.Pulling -> "Downloading"
-    SyncPhase.Restoring -> "Restoring"
+    SyncPhase.PUSHING -> "Uploading"
+    SyncPhase.PULLING -> "Downloading"
+    SyncPhase.RESTORING -> "Restoring"
     null -> ""
 }

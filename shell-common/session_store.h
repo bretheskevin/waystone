@@ -3,7 +3,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <string>
+#include "secure_clear.h"
 
 // Platform-specific device key accessor.
 // Switch: splGetConfig(SplConfigItem_DeviceId) -> 8-byte hardware ID.
@@ -37,8 +39,31 @@ void session_store_clear();
 extern "C" { struct Vault; }
 typedef Vault WsVault;
 
-// Export the MDK from vault and persist it to session.bin for auto-unlock.
-void persist_session(WsVault* vault, const std::string& webdav_pass);
+// Export the MDK from vault and persist it to session.bin for auto-unlock. false on failure.
+bool persist_session(WsVault* vault, const std::string& webdav_pass);
+
+// Settings "WebDAV password" row text: masked, never the secret itself.
+inline std::string webdav_pass_label(const std::string& pass) {
+    return std::string("WebDAV password: ") +
+           (pass.empty() ? "not set" : "\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2");
+}
+
+// Settings "WebDAV password" edit: replaces `current` in place (old bytes wiped) with `entered`,
+// re-persists session.bin when a vault is unlocked, then wipes `entered`. Empty input changes
+// nothing. Returns true when the password changed.
+inline bool update_webdav_pass(WsVault* vault, std::string& current, std::string& entered) {
+    if (entered.empty()) {
+        printf("[vault] webdav password unchanged (empty input)\n");
+        return false;
+    }
+    if (!current.empty()) secure_clear(&current[0], current.size());
+    current = entered;
+    secure_clear(&entered[0], entered.size());
+    entered.clear();
+    bool persisted = vault && persist_session(vault, current);
+    printf("[vault] webdav password updated (persisted=%d)\n", persisted ? 1 : 0);
+    return true;
+}
 
 // Load the persisted session and reconstruct the runtime vault in one step.
 // On success: returns a WsVault* (caller owns → ws_vault_free) and fills pass_out

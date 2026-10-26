@@ -5,6 +5,7 @@
 #include "snapshot_browse.h"
 #include "rom_saves.h"
 #include "rom_parse.h"
+#include "rom_io.h"
 #include "sync_summary.h"
 #include "remote_set.h"
 #include <algorithm>
@@ -762,7 +763,7 @@ static void walk_archive(FS_Archive archive, const char* rel,
 }
 
 std::vector<uint8_t> extract_save_json(const TitleInfo& title) {
-    if (title.source == SourceRom) return extract_rom_saves(title);
+    if (title.source == SourceRom) return rom_extract_saves(title.system, title.save_paths);
     // -- Phase 1: user/TWL savedata (routed by title origin) --
     std::vector<std::pair<std::string, std::vector<uint8_t>>> files;
     {
@@ -881,7 +882,7 @@ int write_save_files(const TitleInfo& title, const uint8_t* ft_ptr, size_t ft_le
                (int)title.source, save_kind_name(kind));
         return -1;
     }
-    if (kind == SaveRomFile) return write_rom_saves(title, entries);
+    if (kind == SaveRomFile) return rom_write_saves(title.save_dir, entries);
     const u64 title_id = title.title_id;
     FS_Archive archive;
     // Path prefix inside the archive for TWL saves ("" for all other kinds).

@@ -3,9 +3,10 @@ package dev.waystone.app.vm
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
-import android.util.Log
+import dev.waystone.app.log.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import dev.waystone.app.log.LogShare
 import dev.waystone.app.update.ApkInstaller
 import dev.waystone.app.update.InstallEvents
 import dev.waystone.data.config.Settings
@@ -15,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import uniffi.waystone_mobile.redactUrl
 
 data class SettingsReady(
     val serverUrl: String,
@@ -40,6 +42,11 @@ class SettingsViewModel(
     private val _navigateTo = MutableStateFlow<String?>(null)
     val navigateTo: StateFlow<String?> = _navigateTo.asStateFlow()
 
+    private val _shareLogsIntent = MutableStateFlow<Intent?>(null)
+    val shareLogsIntent: StateFlow<Intent?> = _shareLogsIntent.asStateFlow()
+    private val _logsStatus = MutableStateFlow<String?>(null)
+    val logsStatus: StateFlow<String?> = _logsStatus.asStateFlow()
+
     private val releases = Updater()
 
     val updater = UpdateController(
@@ -64,6 +71,23 @@ class SettingsViewModel(
                 }
             }
         }
+    }
+
+    fun shareLogs() {
+        val app = getApplication<Application>()
+        val files = LogShare.filesToShare(LogShare.logDir(app))
+        Log.i(TAG, "share logs (${files.size} file(s))")
+        val intent = LogShare.intent(app, files)
+        if (intent == null) {
+            _logsStatus.value = "No logs yet"
+        } else {
+            _logsStatus.value = null
+            _shareLogsIntent.value = intent
+        }
+    }
+
+    fun consumeShareLogs() {
+        _shareLogsIntent.value = null
     }
 
     fun openInstallPermissionSettings() {
@@ -95,7 +119,7 @@ class SettingsViewModel(
                 if (dev.waystone.data.config.SettingsStore.serverChanged(old, new)) {
                     sessionVaultStore.clear()
                     session.clear()
-                    Log.i(TAG, "server changed: ${old.serverUrl} -> ${new.serverUrl}; session credentials cleared")
+                    Log.i(TAG, "server changed: ${redactUrl(old.serverUrl)} -> ${redactUrl(new.serverUrl)}; session credentials cleared")
                 }
                 settings.save(new)
                 new.toReady()

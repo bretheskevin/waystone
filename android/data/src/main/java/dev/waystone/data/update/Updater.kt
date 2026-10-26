@@ -1,5 +1,6 @@
 package dev.waystone.data.update
 
+import uniffi.waystone_mobile.versionNewer
 import java.io.File
 import java.util.concurrent.TimeUnit
 import java.util.logging.Level
@@ -133,33 +134,6 @@ class Updater(
                         ?.takeIf { it.endsWith(suffix) }
                 } ?: return ParseResult.NoAsset
             return ParseResult.Ok(ReleaseInfo(tag.removePrefix("v"), url))
-        }
-
-        /** Per-character port of shell-common version_newer: numeric components, malformed = 0. */
-        fun versionNewer(latest: String, current: String): Boolean {
-            var l = 0
-            var c = 0
-            while (true) {
-                val (lv, ln) = component(latest, l)
-                val (cv, cn) = component(current, c)
-                l = ln
-                c = cn
-                if (lv > cv) return true
-                if (lv < cv) return false
-                if (l >= latest.length && c >= current.length) return false
-                if (l < latest.length) l++
-                if (c < current.length) c++
-            }
-        }
-
-        private fun component(s: String, start: Int): Pair<Long, Int> {
-            var i = start
-            var v = 0L
-            while (i < s.length && s[i] in '0'..'9') {
-                v = v * 10 + (s[i] - '0')
-                i++
-            }
-            return v to i
         }
     }
 }

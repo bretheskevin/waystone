@@ -70,7 +70,7 @@ class RomScanner(private val source: RomFileSource, private val externalFlavor: 
     }
 
     private fun identify(p: RomPairing): LocalRom {
-        val header = source.open(p.romPath)?.use { readUpTo(it, HEADER_LEN) }
+        val header = source.open(p.romPath)?.use { it.readUpTo(ROM_HEADER_LEN) }
             ?: error("cannot open ${p.romPath}")
         val crc: UInt? = if (romNeedsFullHash(p.system, header)) {
             source.open(p.romPath)?.use { input ->
@@ -95,18 +95,20 @@ class RomScanner(private val source: RomFileSource, private val externalFlavor: 
 
     companion object {
         const val MAX_DEPTH = 6
-        private const val HEADER_LEN = 0x200
         private const val CHUNK = 64 * 1024
-
-        private fun readUpTo(input: InputStream, n: Int): ByteArray {
-            val out = ByteArray(n)
-            var off = 0
-            while (off < n) {
-                val r = input.read(out, off, n - off)
-                if (r < 0) break
-                off += r
-            }
-            return out.copyOf(off)
-        }
     }
+}
+
+internal const val ROM_HEADER_LEN = 0x200
+
+/** Reads until [n] bytes or EOF (a single read() may return fewer bytes than available). */
+internal fun InputStream.readUpTo(n: Int): ByteArray {
+    val out = ByteArray(n)
+    var off = 0
+    while (off < n) {
+        val r = read(out, off, n - off)
+        if (r < 0) break
+        off += r
+    }
+    return out.copyOf(off)
 }
