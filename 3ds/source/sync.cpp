@@ -3,7 +3,6 @@
 #include "sync_summary.h"  // href_last_segment
 #include "rom_parse.h"
 #include "rom_io.h"
-#include "file_tree.h"
 
 #include <3ds.h>
 #include <sys/stat.h>
@@ -128,27 +127,9 @@ static int ctr_write_save(void*, const void* tp, const std::string& group_key,
     size_t last_slash = group_key.rfind('/');
     if (last_slash != std::string::npos) slot = group_key.substr(last_slash + 1);
 
-    if (title.source == SourceRom) {
-        WsBuf native = {nullptr, 0};
-        std::vector<FileTreeEntry> current;
-        rom_read_save_entries(title.save_paths, "", false, &current);
-        std::vector<uint8_t> existing = file_tree_encode(current);
-        printf("[sync] rom flavor=%s restore %s existing=%zu file(s)\n", title.flavor.c_str(),
-               group_key.c_str(), current.size());
-        int nrc = ws_rom_keyed_to_native_flavored(title.system.c_str(), slot.c_str(),
-                                                  title.rom_file_name.c_str(), title.flavor.c_str(),
-                                                  tree, tree_len, existing.data(), existing.size(), &native);
-        if (nrc != 0) {
-            printf("[sync] ws_rom_keyed_to_native_flavored failed for %s: %s\n", group_key.c_str(), ffi_err());
-            return -1;
-        }
-        printf("[saves] rom restore %s -> dir=%s (%zu bytes native tree)\n", group_key.c_str(),
-               title.save_dir.c_str(), (size_t)native.len);
-        int rrc = write_save_files(title, native.ptr, native.len, SaveRomFile);
-        ws_buf_free(native);
-        printf("[saves] rom restore %s rc=%d\n", group_key.c_str(), rrc);
-        return rrc;
-    }
+    if (title.source == SourceRom)
+        return rom_keyed_restore(title.system, slot, title.rom_file_name, title.flavor,
+                                 title.save_paths, title.save_dir, tree, tree_len);
 
     SaveArchiveKind kind = (slot == "extdata") ? SaveExtdata : main_save_kind(title);
     printf("[saves] restore routing group_key=%s -> kind=%s\n", group_key.c_str(), save_kind_name(kind));

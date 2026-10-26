@@ -3,8 +3,12 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::model::SystemId;
+use crate::retroarch::{
+    CoreInfo, SaveLayout, SaveRoot, core_save_folder, is_foreign_core_folder, ranked_cores,
+    sorted_save_dir,
+};
 use crate::rom_flavor::{EXTERNAL_SAVE_ROOT, SaveFlavor, classify_flavored};
-use crate::rom_systems::{GLOBAL_SAVE_DIR, base_name, rom_system, rom_system_for_file};
+use crate::rom_systems::{GLOBAL_SAVE_DIR, base_name, parent_dir, rom_system, rom_system_for_file};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RomPairing {
@@ -13,10 +17,6 @@ pub struct RomPairing {
     pub save_dir: String,
     pub save_paths: Vec<String>,
     pub flavor: SaveFlavor,
-}
-
-fn parent_dir(path: &str) -> &str {
-    path.rfind('/').map_or("", |i| &path[..i])
 }
 
 fn join(dir: &str, name: &str) -> String {
@@ -73,35 +73,35 @@ fn external_for(external: Option<SaveFlavor>, system: SystemId) -> Option<SaveFl
     external.filter(|f| f.supports(system))
 }
 
-fn candidates(
-    system: SystemId,
-    rom: &str,
-    external: Option<SaveFlavor>,
-    subdirs: &BTreeSet<String>,
-) -> Vec<Candidate> {
-    let mut out = Vec::new();
-    if let Some(flavor) = external_for(external, system) {
-        out.push(Candidate {
-            dir: EXTERNAL_SAVE_ROOT.to_string(),
-            flavor,
-            external_sub: false,
-        });
-        out.extend(subdirs.iter().map(|d| Candidate {
-            dir: d.clone(),
-            flavor,
-            external_sub: true,
-        }));
-    }
-    out.extend(
-        save_dir_candidates(system, rom)
-            .into_iter()
-            .map(|dir| Candidate {
-                dir,
-                flavor: SaveFlavor::Native,
-                external_sub: false,
-            }),
-    );
+fn external_candidates(flavor: SaveFlavor, subdirs: &BTreeSet<String>) -> Vec<Candidate> {
+    let mut out = vec![Candidate {
+        dir: EXTERNAL_SAVE_ROOT.to_string(),
+        flavor,
+        external_sub: false,
+    }];
+    out.extend(subdirs.iter().map(|d| Candidate {
+        dir: d.clone(),
+        flavor,
+        external_sub: true,
+    }));
     out
+}
+
+fn native_candidates(system: SystemId, rom: &str) -> impl Iterator<Item = Candidate> {
+    save_dir_candidates(system, rom)
+        .into_iter()
+        .map(|dir| Candidate {
+            dir,
+            flavor: SaveFlavor::Native,
+            external_sub: false,
+        })
+}
+
+fn native_restore_target(system: SystemId, rom: &str) -> (String, SaveFlavor) {
+    (
+        save_dir_candidates(system, rom).swap_remove(0),
+        SaveFlavor::Native,
+    )
 }
 
 pub fn pair_roms(paths: &[String]) -> Vec<RomPairing> {
@@ -113,6 +113,149 @@ pub fn pair_roms(paths: &[String]) -> Vec<RomPairing> {
 /// (none chosen). With no save, the restore target is the external root when the flavor supports
 /// the system.
 pub fn pair_roms_external(paths: &[String], external: Option<SaveFlavor>) -> Vec<RomPairing> {
+    pair_with(
+        paths,
+        1,
+        |system, rom, subdirs| {
+            let mut out = external_for(external, system)
+                .map(|f| external_candidates(f, subdirs))
+                .unwrap_or_default();
+            out.extend(native_candidates(system, rom));
+            out
+        },
+        |system, rom, _| match external_for(external, system) {
+            Some(f) => (EXTERNAL_SAVE_ROOT.to_string(), f),
+            None => native_restore_target(system, rom),
+        },
+    )
+}
+
+/// RetroArch pairing driven by the parsed `retroarch.cfg` layout and installed cores. A `Dir`
+/// save root is listed by the shell under `@saves/` (sub-folders up to depth 2); `ContentDir`
+/// looks next to the ROM (and in its sorted sub-folders). Native candidates stay as fallback.
+/// With no save, the restore target is where RetroArch itself would write it.
+pub fn pair_roms_retroarch(
+    paths: &[String],
+    layout: &SaveLayout,
+    installed: &[CoreInfo],
+) -> Vec<RomPairing> {
+    let ra = SaveFlavor::RetroArch;
+    fn base<'a>(layout: &SaveLayout, rom: &'a str) -> &'a str {
+        match layout.root {
+            SaveRoot::Dir(_) => EXTERNAL_SAVE_ROOT,
+            SaveRoot::ContentDir => parent_dir(rom),
+        }
+    }
+    pair_with(
+        paths,
+        2,
+        |system, rom, subdirs| {
+            let mut out = Vec::new();
+            if ra.supports(system) {
+                out = match layout.root {
+                    SaveRoot::Dir(_) => {
+                        retroarch_dir_candidates(layout, installed, system, rom, subdirs)
+                    }
+                    SaveRoot::ContentDir => {
+                        retroarch_content_candidates(layout, installed, system, rom)
+                    }
+                };
+            }
+            out.extend(native_candidates(system, rom));
+            out
+        },
+        |system, rom, dirs| {
+            if !ra.supports(system) {
+                return native_restore_target(system, rom);
+            }
+            let parent = sorted_save_dir(layout, base(layout, rom), None, rom);
+            let existing: Vec<String> = dirs
+                .iter()
+                .filter(|d| parent_dir(d).eq_ignore_ascii_case(&parent))
+                .map(|d| base_name(d).to_string())
+                .collect();
+            let core = core_save_folder(system, installed, &existing);
+            (
+                sorted_save_dir(layout, base(layout, rom), core.as_deref(), rom),
+                ra,
+            )
+        },
+    )
+}
+
+/// `@saves/` tree candidates; with sorting on, the sub-folders RetroArch reads come before the
+/// flat root, and folders it cannot use for this ROM are skipped: installed cores that cannot
+/// run `system`, and (content sorting) folders outside the ROM's content-dir folder.
+fn retroarch_dir_candidates(
+    layout: &SaveLayout,
+    installed: &[CoreInfo],
+    system: SystemId,
+    rom: &str,
+    subdirs: &BTreeSet<String>,
+) -> Vec<Candidate> {
+    let content = sorted_save_dir(layout, EXTERNAL_SAVE_ROOT, None, rom);
+    let mut out = external_candidates(SaveFlavor::RetroArch, subdirs);
+    out.retain(|c| {
+        let foreign_core =
+            layout.sort_by_core && is_foreign_core_folder(system, installed, base_name(&c.dir));
+        let other_content = layout.sort_by_content
+            && !c.dir.eq_ignore_ascii_case(&content)
+            && !parent_dir(&c.dir).eq_ignore_ascii_case(&content);
+        !c.external_sub || !(foreign_core || other_content)
+    });
+    if layout.sort_by_core || layout.sort_by_content {
+        out.rotate_left(1);
+    }
+    out
+}
+
+/// Content-dir candidates: each installed core's sorted folder, the content-sorted folder, then
+/// the ROM's own folder.
+fn retroarch_content_candidates(
+    layout: &SaveLayout,
+    installed: &[CoreInfo],
+    system: SystemId,
+    rom: &str,
+) -> Vec<Candidate> {
+    let ra = SaveFlavor::RetroArch;
+    let dir = parent_dir(rom);
+    let mut out: Vec<Candidate> = Vec::new();
+    if layout.sort_by_core {
+        out.extend(
+            ranked_cores(system, installed)
+                .into_iter()
+                .map(|core| Candidate {
+                    dir: sorted_save_dir(layout, dir, Some(core), rom),
+                    flavor: ra,
+                    external_sub: true,
+                }),
+        );
+    }
+    let by_content = sorted_save_dir(layout, dir, None, rom);
+    if by_content != dir {
+        out.push(Candidate {
+            dir: by_content,
+            flavor: ra,
+            external_sub: false,
+        });
+    }
+    out.push(Candidate {
+        dir: dir.to_string(),
+        flavor: ra,
+        external_sub: false,
+    });
+    out
+}
+
+/// Shared pairing: `candidates` lists save dirs per ROM in priority order, `restore` picks the
+/// target when none holds a save (given every listed folder, on-disk spelling). External
+/// sub-folders are collected up to `max_sub_depth`.
+fn pair_with(
+    paths: &[String],
+    max_sub_depth: usize,
+    candidates: impl Fn(SystemId, &str, &BTreeSet<String>) -> Vec<Candidate>,
+    restore: impl Fn(SystemId, &str, &[&str]) -> (String, SaveFlavor),
+) -> Vec<RomPairing> {
     let mut by_dir: BTreeMap<String, Vec<&str>> = BTreeMap::new();
     let mut roms: Vec<(SystemId, &str)> = Vec::new();
     let mut subdirs: BTreeSet<String> = BTreeSet::new();
@@ -124,7 +267,7 @@ pub fn pair_roms_external(paths: &[String], external: Option<SaveFlavor>) -> Vec
         let dir = parent_dir(p);
         by_dir.entry(dir.to_ascii_lowercase()).or_default().push(p);
         if is_external(p) {
-            if dir.matches('/').count() == 1 {
+            if (1..=max_sub_depth).contains(&dir.matches('/').count()) {
                 subdirs.insert(dir.to_string());
             }
             continue;
@@ -143,7 +286,8 @@ pub fn pair_roms_external(paths: &[String], external: Option<SaveFlavor>) -> Vec
     for &(system, rom) in &roms {
         let rom_name = base_name(rom);
         let mut per_dir = Vec::new();
-        for c in candidates(system, rom, external, &subdirs) {
+        let mut claimed: BTreeSet<String> = BTreeSet::new();
+        for c in candidates(system, rom, &subdirs) {
             let mut hits: Vec<String> = by_dir
                 .get(&c.dir.to_ascii_lowercase())
                 .map(|files| {
@@ -160,13 +304,15 @@ pub fn pair_roms_external(paths: &[String], external: Option<SaveFlavor>) -> Vec
                 .unwrap_or_default();
             hits.sort();
             hits.dedup();
-            for h in &hits {
-                *claims.entry(h.to_ascii_lowercase()).or_insert(0) += 1;
-            }
+            claimed.extend(hits.iter().map(|h| h.to_ascii_lowercase()));
             per_dir.push((c, hits));
+        }
+        for h in claimed {
+            *claims.entry(h).or_insert(0) += 1;
         }
         found.push(per_dir);
     }
+    let dirs: Vec<&str> = by_dir.values().map(|files| parent_dir(files[0])).collect();
 
     roms.iter()
         .zip(found)
@@ -197,13 +343,7 @@ pub fn pair_roms_external(paths: &[String], external: Option<SaveFlavor>) -> Vec
                     flavor: c.flavor,
                 },
                 None => {
-                    let (save_dir, flavor) = match external_for(external, system) {
-                        Some(f) => (EXTERNAL_SAVE_ROOT.to_string(), f),
-                        None => (
-                            save_dir_candidates(system, rom).swap_remove(0),
-                            SaveFlavor::Native,
-                        ),
-                    };
+                    let (save_dir, flavor) = restore(system, rom, &dirs);
                     RomPairing {
                         system,
                         rom_path: rom.to_string(),
@@ -364,18 +504,211 @@ mod tests {
     }
 
     #[test]
-    fn retroarch_global_saves_mode() {
-        // Under --features switch the global dir is retroarch/saves; otherwise TWiLight.
+    fn retroarch_saves_dir_is_not_a_native_candidate() {
         let r = p(&["roms/psx/Crash.cue", "retroarch/saves/Crash.srm"]);
-        #[cfg(feature = "switch")]
-        {
-            assert_eq!(r[0].save_dir, "retroarch/saves");
-            assert_eq!(r[0].save_paths, vec!["retroarch/saves/Crash.srm"]);
+        assert!(r[0].save_paths.is_empty());
+        assert_eq!(GLOBAL_SAVE_DIR, "_nds/TWiLightMenu/saves");
+    }
+
+    fn ra_layout(root: SaveRoot, by_core: bool, by_content: bool) -> SaveLayout {
+        SaveLayout {
+            root,
+            sort_by_core: by_core,
+            sort_by_content: by_content,
+            cores_dir: "retroarch/cores".to_string(),
+            info_dir: "retroarch/info".to_string(),
         }
-        #[cfg(not(feature = "switch"))]
-        {
-            assert!(r[0].save_paths.is_empty());
-        }
+    }
+
+    fn user_layout() -> SaveLayout {
+        ra_layout(
+            SaveRoot::Dir("retroarch/cores/savefiles".to_string()),
+            true,
+            false,
+        )
+    }
+
+    fn ra_cores() -> Vec<CoreInfo> {
+        [("mGBA", "gba|gb|gbc"), ("melonDS", "nds|ids|dsi")]
+            .iter()
+            .map(|(n, e)| CoreInfo {
+                library_name: n.to_string(),
+                extensions: e.split('|').map(String::from).collect(),
+            })
+            .collect()
+    }
+
+    fn pra(list: &[&str], layout: &SaveLayout) -> Vec<RomPairing> {
+        pair_roms_retroarch(
+            &list.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            layout,
+            &ra_cores(),
+        )
+    }
+
+    #[test]
+    fn retroarch_layout_finds_core_sorted_save() {
+        let r = pra(
+            &[
+                "roms/gba/Pokemon CHROME.gba",
+                "@saves/mGBA/Pokemon CHROME.srm",
+                "@saves/mGBA/._Pokemon CHROME.srm",
+            ],
+            &user_layout(),
+        );
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].save_paths, vec!["@saves/mGBA/Pokemon CHROME.srm"]);
+        assert_eq!(r[0].save_dir, "@saves/mGBA");
+        assert_eq!(r[0].flavor, SaveFlavor::RetroArch);
+    }
+
+    #[test]
+    fn retroarch_layout_restore_targets_core_folder() {
+        let gba = pra(&["roms/gba/Pokemon CHROME.gba"], &user_layout());
+        assert!(gba[0].save_paths.is_empty());
+        assert_eq!(gba[0].save_dir, "@saves/mGBA");
+        assert_eq!(gba[0].flavor, SaveFlavor::RetroArch);
+        let nds = pra(&["roms/nds/Mario.nds"], &user_layout());
+        assert_eq!(nds[0].save_dir, "@saves/melonDS");
+        let flat = ra_layout(SaveRoot::Dir("ra/saves".to_string()), false, false);
+        assert_eq!(pra(&["roms/gba/X.gba"], &flat)[0].save_dir, "@saves");
+    }
+
+    #[test]
+    fn retroarch_layout_core_and_content_sorting() {
+        let l = ra_layout(SaveRoot::Dir("ra/saves".to_string()), true, true);
+        let none = pra(&["roms/gba/X.gba"], &l);
+        assert_eq!(none[0].save_dir, "@saves/gba/mGBA");
+        let found = pra(&["roms/gba/X.gba", "@saves/gba/mGBA/X.srm"], &l);
+        assert_eq!(found[0].save_paths, vec!["@saves/gba/mGBA/X.srm"]);
+        assert_eq!(found[0].save_dir, "@saves/gba/mGBA");
+        let spelled = pra(&["roms/gba/X.gba", "@saves/gba/mgba/Other.srm"], &l);
+        assert_eq!(spelled[0].save_dir, "@saves/gba/mgba");
+    }
+
+    #[test]
+    fn retroarch_sorted_folder_wins_over_stale_flat_save() {
+        let r = pra(
+            &["roms/gba/X.gba", "@saves/X.srm", "@saves/mGBA/X.srm"],
+            &user_layout(),
+        );
+        assert_eq!(r[0].save_paths, vec!["@saves/mGBA/X.srm"]);
+        let flat = ra_layout(SaveRoot::Dir("ra/saves".to_string()), false, false);
+        let r = pra(
+            &["roms/gba/X.gba", "@saves/X.srm", "@saves/mGBA/X.srm"],
+            &flat,
+        );
+        assert_eq!(r[0].save_paths, vec!["@saves/X.srm"]);
+    }
+
+    #[test]
+    fn retroarch_same_stem_other_system_core_folder_is_not_ambiguous() {
+        let cores = vec![
+            CoreInfo {
+                library_name: "Gambatte".to_string(),
+                extensions: vec!["gb".to_string()],
+            },
+            CoreInfo {
+                library_name: "Nestopia".to_string(),
+                extensions: vec!["nes".to_string()],
+            },
+        ];
+        let list: Vec<String> = [
+            "roms/gb/Tetris.gb",
+            "roms/nes/Tetris.nes",
+            "@saves/Gambatte/Tetris.srm",
+            "@saves/Nestopia/Tetris.srm",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let r = pair_roms_retroarch(&list, &user_layout(), &cores);
+        assert_eq!(r[0].save_paths, vec!["@saves/Gambatte/Tetris.srm"]);
+        assert_eq!(r[1].save_paths, vec!["@saves/Nestopia/Tetris.srm"]);
+    }
+
+    #[test]
+    fn retroarch_content_sorted_folders_of_other_systems_are_skipped() {
+        let l = ra_layout(SaveRoot::Dir("ra/saves".to_string()), false, true);
+        let r = pra(
+            &[
+                "roms/gb/Tetris.gb",
+                "roms/nes/Tetris.nes",
+                "@saves/gb/Tetris.srm",
+                "@saves/nes/Tetris.srm",
+            ],
+            &l,
+        );
+        assert_eq!(r[0].save_paths, vec!["@saves/gb/Tetris.srm"]);
+        assert_eq!(r[1].save_paths, vec!["@saves/nes/Tetris.srm"]);
+    }
+
+    #[test]
+    fn retroarch_content_dir_restore_reuses_existing_core_folder() {
+        let cores = vec![
+            CoreInfo {
+                library_name: "mGBA".to_string(),
+                extensions: vec!["gba".to_string()],
+            },
+            CoreInfo {
+                library_name: "gpSP".to_string(),
+                extensions: vec!["gba".to_string()],
+            },
+        ];
+        let list: Vec<String> = ["roms/gba/X.gba", "roms/gba/gpsp/Other.srm"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let l = ra_layout(SaveRoot::ContentDir, true, false);
+        let r = pair_roms_retroarch(&list, &l, &cores);
+        assert_eq!(r[0].save_dir, "roms/gba/gpsp");
+        assert_eq!(r[0].flavor, SaveFlavor::RetroArch);
+    }
+
+    #[test]
+    fn retroarch_content_dir_is_sorted_too() {
+        let l = ra_layout(SaveRoot::ContentDir, true, false);
+        let r = pra(&["roms/gba/X.gba", "roms/gba/mGBA/X.srm"], &l);
+        assert_eq!(r[0].save_paths, vec!["roms/gba/mGBA/X.srm"]);
+        assert_eq!(r[0].flavor, SaveFlavor::RetroArch);
+        assert_eq!(pra(&["roms/gba/X.gba"], &l)[0].save_dir, "roms/gba/mGBA");
+        let both = ra_layout(SaveRoot::ContentDir, true, true);
+        let r = pra(&["roms/gba/X.gba", "roms/gba/gba/mGBA/X.srm"], &both);
+        assert_eq!(r[0].save_paths, vec!["roms/gba/gba/mGBA/X.srm"]);
+        assert_eq!(
+            pra(&["roms/gba/Y.gba"], &both)[0].save_dir,
+            "roms/gba/gba/mGBA"
+        );
+    }
+
+    #[test]
+    fn retroarch_content_dir_pairs_next_to_rom() {
+        let l = ra_layout(SaveRoot::ContentDir, false, false);
+        let r = pra(
+            &["roms/gba/X.gba", "roms/gba/X.srm", "roms/gba/._X.srm"],
+            &l,
+        );
+        assert_eq!(r[0].save_paths, vec!["roms/gba/X.srm"]);
+        assert_eq!(r[0].flavor, SaveFlavor::RetroArch);
+        let none = pra(&["roms/gba/X.gba"], &l);
+        assert_eq!(none[0].save_dir, "roms/gba");
+        assert_eq!(none[0].flavor, SaveFlavor::RetroArch);
+    }
+
+    #[test]
+    fn retroarch_content_dir_native_sav_fallback_reports_native() {
+        let l = ra_layout(SaveRoot::ContentDir, false, false);
+        let r = pra(&["roms/gba/X.gba", "roms/gba/X.sav"], &l);
+        assert_eq!(r[0].save_paths, vec!["roms/gba/X.sav"]);
+        assert_eq!(r[0].flavor, SaveFlavor::Native);
+    }
+
+    #[test]
+    fn retroarch_content_dir_srm_shared_with_native_naming_is_not_ambiguous() {
+        let l = ra_layout(SaveRoot::ContentDir, false, false);
+        let r = pra(&["roms/snes/Mario.sfc", "roms/snes/Mario.srm"], &l);
+        assert_eq!(r[0].save_paths, vec!["roms/snes/Mario.srm"]);
+        assert_eq!(r[0].flavor, SaveFlavor::RetroArch);
     }
 
     fn px(list: &[&str], flavor: Option<SaveFlavor>) -> Vec<RomPairing> {

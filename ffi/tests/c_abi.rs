@@ -875,6 +875,139 @@ fn rom_pair_null_input_returns_null() {
     assert!(buf.ptr.is_null());
 }
 
+fn take_buf_string(buf: WsBuf) -> String {
+    assert!(!buf.ptr.is_null());
+    let s = if buf.len == 0 {
+        String::new()
+    } else {
+        std::str::from_utf8(unsafe { std::slice::from_raw_parts(buf.ptr, buf.len) })
+            .unwrap()
+            .to_string()
+    };
+    unsafe { ws_buf_free(buf) };
+    s
+}
+
+const RA_CFG: &[u8] = b"savefile_directory = \"/retroarch/cores/savefiles\"\n\
+savefiles_in_content_dir = \"false\"\nsort_savefiles_enable = \"true\"\n\
+libretro_directory = \"/retroarch/cores\"\n";
+
+fn ra_platform(p: &str) -> CString {
+    CString::new(p).unwrap()
+}
+
+#[test]
+fn retroarch_dirs_through_ffi() {
+    let sw = ra_platform("switch");
+    let ctr = ra_platform("3ds");
+    let out =
+        take_buf_string(unsafe { ws_retroarch_dirs(RA_CFG.as_ptr(), RA_CFG.len(), sw.as_ptr()) });
+    assert_eq!(
+        out,
+        "retroarch/cores/savefiles\tretroarch/cores\tretroarch/info"
+    );
+    let empty = take_buf_string(unsafe { ws_retroarch_dirs(std::ptr::null(), 0, sw.as_ptr()) });
+    assert_eq!(
+        empty,
+        "retroarch/cores/savefiles\tretroarch/cores\tretroarch/info"
+    );
+    let ctr_empty =
+        take_buf_string(unsafe { ws_retroarch_dirs(std::ptr::null(), 0, ctr.as_ptr()) });
+    assert_eq!(
+        ctr_empty,
+        "retroarch/cores/savefiles\tretroarch/cores\tretroarch/cores/info"
+    );
+    let content = b"savefiles_in_content_dir = \"true\"";
+    let cd =
+        take_buf_string(unsafe { ws_retroarch_dirs(content.as_ptr(), content.len(), sw.as_ptr()) });
+    assert_eq!(cd, "\tretroarch/cores\tretroarch/info");
+}
+
+#[test]
+fn retroarch_dirs_bad_args_return_null() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
+    let sw = ra_platform("switch");
+    let buf = unsafe { ws_retroarch_dirs(std::ptr::null(), 4, sw.as_ptr()) };
+    assert!(buf.ptr.is_null());
+    let no_platform = unsafe { ws_retroarch_dirs(std::ptr::null(), 0, std::ptr::null()) };
+    assert!(no_platform.ptr.is_null());
+    let wii = ra_platform("wii");
+    let bad = unsafe { ws_retroarch_dirs(std::ptr::null(), 0, wii.as_ptr()) };
+    assert!(bad.ptr.is_null());
+    let err = unsafe { CStr::from_ptr(ws_last_error()) }.to_str().unwrap();
+    assert!(err.contains("platform"), "{err}");
+}
+
+#[test]
+fn rom_pair_retroarch_through_ffi() {
+    let sw = ra_platform("switch");
+    let paths =
+        b"roms/gba/Pokemon CHROME.gba\n@saves/mGBA/Pokemon CHROME.srm\nroms/nds/Mario.nds\n";
+    let infos = b"corename = \"mGBA\"\nsupported_extensions = \"gba|gb\"\n\x1e\
+corename = \"melonDS\"\nsupported_extensions = \"nds\"\n\x1egarbage";
+    let out = take_buf_string(unsafe {
+        ws_rom_pair_retroarch(
+            paths.as_ptr(),
+            paths.len(),
+            RA_CFG.as_ptr(),
+            RA_CFG.len(),
+            infos.as_ptr(),
+            infos.len(),
+            sw.as_ptr(),
+        )
+    });
+    assert_eq!(
+        out,
+        "retroarch\tgba\troms/gba/Pokemon CHROME.gba\t@saves/mGBA\t@saves/mGBA/Pokemon CHROME.srm\n\
+retroarch\tnds\troms/nds/Mario.nds\t@saves/melonDS\n"
+    );
+
+    let content_cfg = b"savefiles_in_content_dir = \"true\"";
+    let content = b"roms/gba/X.gba\nroms/gba/Y.gba\nroms/gba/Y.sav\n";
+    let out = take_buf_string(unsafe {
+        ws_rom_pair_retroarch(
+            content.as_ptr(),
+            content.len(),
+            content_cfg.as_ptr(),
+            content_cfg.len(),
+            std::ptr::null(),
+            0,
+            sw.as_ptr(),
+        )
+    });
+    assert_eq!(
+        out,
+        "retroarch\tgba\troms/gba/X.gba\troms/gba\n\
+native\tgba\troms/gba/Y.gba\troms/gba\troms/gba/Y.sav\n"
+    );
+}
+
+#[test]
+fn rom_pair_retroarch_null_args_return_null() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
+    let sw = ra_platform("switch");
+    let p = b"roms/gba/X.gba";
+    let call = |paths: *const u8, plen, cfg_len, infos_len, platform: *const std::ffi::c_char| unsafe {
+        ws_rom_pair_retroarch(
+            paths,
+            plen,
+            std::ptr::null(),
+            cfg_len,
+            std::ptr::null(),
+            infos_len,
+            platform,
+        )
+    };
+    assert!(call(std::ptr::null(), 0, 0, 0, sw.as_ptr()).ptr.is_null());
+    assert!(call(p.as_ptr(), p.len(), 3, 0, sw.as_ptr()).ptr.is_null());
+    assert!(call(p.as_ptr(), p.len(), 0, 3, sw.as_ptr()).ptr.is_null());
+    assert!(
+        call(p.as_ptr(), p.len(), 0, 0, std::ptr::null())
+            .ptr
+            .is_null()
+    );
+}
+
 #[test]
 fn rom_keyed_slots_through_ffi() {
     let nds = CString::new("nds").unwrap();

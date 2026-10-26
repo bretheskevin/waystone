@@ -12,15 +12,42 @@ static void test_pair_tsv() {
     const char* tsv = "nds\troms/nds/A.nds\troms/nds/saves\troms/nds/saves/A.sav\troms/nds/saves/A.sav1\n"
                       "gb\troms/gb/B.gb\troms/gb/saves\n";
     std::vector<RomPairingRow> rows;
-    assert(parse_rom_pair_tsv(tsv, strlen(tsv), &rows));
+    assert(parse_rom_pair_tsv(tsv, strlen(tsv), false, "native", &rows));
     assert(rows.size() == 2);
+    assert(rows[0].flavor == "native" && rows[1].flavor == "native");
     assert(rows[0].system == "nds" && rows[0].rom_path == "roms/nds/A.nds");
     assert(rows[0].save_dir == "roms/nds/saves" && rows[0].save_paths.size() == 2);
     assert(rows[1].save_paths.empty());
     std::vector<RomPairingRow> none;
-    assert(parse_rom_pair_tsv("", 0, &none) && none.empty());
-    assert(!parse_rom_pair_tsv("nds\tonly-two\n", 13, &none));
+    assert(parse_rom_pair_tsv("", 0, false, "native", &none) && none.empty());
+    assert(!parse_rom_pair_tsv("nds\tonly-two\n", 13, false, "native", &none));
     printf("test_pair_tsv PASSED\n");
+}
+
+static void test_pair_tsv_leading_flavor() {
+    const char* tsv = "retroarch\tgba\troms/gba/A.gba\t@saves/mGBA\t@saves/mGBA/A.srm\n"
+                      "native\tgba\troms/gba/B.gba\troms/gba\troms/gba/B.sav\n";
+    std::vector<RomPairingRow> rows;
+    assert(parse_rom_pair_tsv(tsv, strlen(tsv), true, "retroarch", &rows));
+    assert(rows.size() == 2);
+    assert(rows[0].flavor == "retroarch" && rows[0].system == "gba" && rows[0].rom_path == "roms/gba/A.gba");
+    assert(rows[0].save_dir == "@saves/mGBA" && rows[0].save_paths.size() == 1);
+    assert(rows[1].flavor == "native" && rows[1].save_paths[0] == "roms/gba/B.sav");
+    const char* short_row = "retroarch\tgba\troms/gba/A.gba\n";
+    assert(!parse_rom_pair_tsv(short_row, strlen(short_row), true, "retroarch", &rows));
+    const char* no_flavor = "\tgba\troms/gba/A.gba\troms/gba\n";
+    assert(!parse_rom_pair_tsv(no_flavor, strlen(no_flavor), true, "retroarch", &rows));
+    printf("test_pair_tsv_leading_flavor PASSED\n");
+}
+
+static void test_join() {
+    std::vector<std::string> items;
+    assert(rom_join(items, '\n') == "");
+    items.push_back("corename = \"mGBA\"\n");
+    assert(rom_join(items, '\x1e') == "corename = \"mGBA\"\n");
+    items.push_back("corename = \"melonDS\"\n");
+    assert(rom_join(items, '\x1e') == "corename = \"mGBA\"\n\x1e" "corename = \"melonDS\"\n");
+    printf("test_join PASSED\n");
 }
 
 static void test_cache_line_round_trip() {
@@ -67,6 +94,8 @@ static void test_hidden_names() {
 
 int main() {
     test_pair_tsv();
+    test_pair_tsv_leading_flavor();
+    test_join();
     test_cache_line_round_trip();
     test_misc();
     test_hidden_names();

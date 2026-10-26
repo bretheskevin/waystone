@@ -9,10 +9,12 @@ use waystone_core::crc32::crc32_update;
 use waystone_core::iso9660::{cue_first_data_file, psx_boot_serial, psx_fallback_id};
 use waystone_core::model::SystemId;
 use waystone_core::nds_banner::{nds_banner_icon_rgba, nds_banner_offset, nds_banner_title};
+use waystone_core::retroarch::{
+    CoreInfo, RetroArchPlatform, SaveLayout, SaveRoot, parse_core_info, parse_save_layout,
+};
 use waystone_core::rom_art::{retroarch_boxart_path, twilight_boxart_paths};
-use waystone_core::rom_flavor::SaveFlavor;
 use waystone_core::rom_id::{display_name, needs_full_hash, rom_identity};
-use waystone_core::rom_pair::pair_roms_external;
+use waystone_core::rom_pair::{RomPairing, pair_roms_external, pair_roms_retroarch};
 use waystone_core::rom_systems::{rom_system, slot_names};
 
 unsafe fn bytes_arg<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
@@ -96,13 +98,25 @@ pub unsafe extern "C" fn ws_rom_display_name(
     .unwrap_or(core::ptr::null_mut())
 }
 
+type AbiResult<T> = Result<T, Box<dyn core::error::Error>>;
+
+/// UTF-8 text argument; NULL is only accepted with a zero length.
+fn text_arg<'a>(ptr: *const u8, len: usize) -> AbiResult<&'a str> {
+    if ptr.is_null() && len != 0 {
+        return Err("null pointer argument".into());
+    }
+    core::str::from_utf8(unsafe { bytes_arg(ptr, len) })
+        .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)
+}
+
+/// `sys\trom\tsave_dir[\tsave]*\n` per ROM, prefixed by `flavor\t` when `with_flavor`.
 fn pairs_tsv(
     paths: *const u8,
     paths_len: usize,
-    external: Option<SaveFlavor>,
-) -> Result<WsBuf, Box<dyn core::error::Error>> {
-    let text = core::str::from_utf8(unsafe { bytes_arg(paths, paths_len) })
-        .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)?;
+    with_flavor: bool,
+    pair: impl FnOnce(&[String]) -> Vec<RomPairing>,
+) -> AbiResult<WsBuf> {
+    let text = text_arg(paths, paths_len)?;
     let list: Vec<String> = text
         .split('\n')
         .map(|l| l.trim_end_matches('\r'))
@@ -110,7 +124,11 @@ fn pairs_tsv(
         .map(String::from)
         .collect();
     let mut out = String::new();
-    for p in pair_roms_external(&list, external) {
+    for p in pair(&list) {
+        if with_flavor {
+            out.push_str(p.flavor.as_str());
+            out.push('\t');
+        }
         out.push_str(p.system.as_str());
         out.push('\t');
         out.push_str(&p.rom_path);
@@ -131,7 +149,8 @@ pub unsafe extern "C" fn ws_rom_pair(paths: *const u8, paths_len: usize) -> WsBu
         set_last_error("null pointer argument");
         return WsBuf::null();
     }
-    catch_and_set_error(|| pairs_tsv(paths, paths_len, None)).unwrap_or_else(WsBuf::null)
+    catch_and_set_error(|| pairs_tsv(paths, paths_len, false, |l| pair_roms_external(l, None)))
+        .unwrap_or_else(WsBuf::null)
 }
 
 /// Like `ws_rom_pair`, also mapping `@saves/` entries for an external flavor
@@ -146,8 +165,78 @@ pub unsafe extern "C" fn ws_rom_pair_flavored(
         set_last_error("null pointer argument");
         return WsBuf::null();
     }
-    catch_and_set_error(|| pairs_tsv(paths, paths_len, unsafe { flavor_arg(external_flavor)? }))
-        .unwrap_or_else(WsBuf::null)
+    catch_and_set_error(|| {
+        let external = unsafe { flavor_arg(external_flavor)? };
+        pairs_tsv(paths, paths_len, false, |l| pair_roms_external(l, external))
+    })
+    .unwrap_or_else(WsBuf::null)
+}
+
+/// `retroarch.cfg` text (NULL ok with len 0) parsed for `platform` ("switch" | "3ds").
+unsafe fn retroarch_layout_arg(
+    cfg: *const u8,
+    cfg_len: usize,
+    platform: *const c_char,
+) -> AbiResult<SaveLayout> {
+    let platform = (!platform.is_null())
+        .then(|| unsafe { cstr_arg(platform) }.ok())
+        .flatten()
+        .and_then(RetroArchPlatform::parse)
+        .ok_or("unknown retroarch platform (expected \"switch\" or \"3ds\")")?;
+    Ok(parse_save_layout(text_arg(cfg, cfg_len)?, platform))
+}
+
+/// Parse `retroarch.cfg` text for `platform` ("switch" | "3ds") → UTF-8
+/// `save_root\tcores_dir\tinfo_dir` (SD-root-relative, no trailing newline); an empty
+/// `save_root` means saves live next to the content. `cfg_len == 0` yields the platform defaults.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_retroarch_dirs(
+    cfg: *const u8,
+    cfg_len: usize,
+    platform: *const c_char,
+) -> WsBuf {
+    catch_and_set_error(|| {
+        let layout = unsafe { retroarch_layout_arg(cfg, cfg_len, platform)? };
+        let root = match &layout.root {
+            SaveRoot::Dir(d) => d.as_str(),
+            SaveRoot::ContentDir => "",
+        };
+        let out = alloc::format!("{}\t{}\t{}", root, layout.cores_dir, layout.info_dir);
+        Ok(WsBuf::from_vec(out.into_bytes()))
+    })
+    .unwrap_or_else(WsBuf::null)
+}
+
+/// RetroArch pairing → `flavor\tsys\trom\tsave_dir[\tsave]*\n` (flavor = the naming the row's
+/// save uses: "retroarch", or "native" for a native-named fallback). `cfg` = `retroarch.cfg`
+/// text (may be empty → platform defaults), `infos` = installed cores' `.info` texts joined by
+/// `\x1e` (unparseable ones skipped), `platform` = "switch" | "3ds". A directory save root is
+/// listed under `@saves/`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_rom_pair_retroarch(
+    paths: *const u8,
+    paths_len: usize,
+    cfg: *const u8,
+    cfg_len: usize,
+    infos: *const u8,
+    infos_len: usize,
+    platform: *const c_char,
+) -> WsBuf {
+    if paths.is_null() {
+        set_last_error("null pointer argument");
+        return WsBuf::null();
+    }
+    catch_and_set_error(|| {
+        let layout = unsafe { retroarch_layout_arg(cfg, cfg_len, platform)? };
+        let installed: Vec<CoreInfo> = text_arg(infos, infos_len)?
+            .split('\x1e')
+            .filter_map(parse_core_info)
+            .collect();
+        pairs_tsv(paths, paths_len, true, |l| {
+            pair_roms_retroarch(l, &layout, &installed)
+        })
+    })
+    .unwrap_or_else(WsBuf::null)
 }
 
 #[unsafe(no_mangle)]

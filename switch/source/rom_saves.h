@@ -6,7 +6,7 @@
 #include <vector>
 #include "saves.h"     // TitleInfo
 
-// Scan RetroArch/mGBA ROMs and pair their battery saves via ws_rom_pair.
+// Scan RetroArch ROMs and pair their battery saves via the retroarch.cfg layout (rom_retroarch_rows).
 // Pure POSIX FS walk — safe on the LoadingActivity worker thread, borealis-free.
 // Maintains the identity cache at sdmc:/waystone/rom_ids (TSV: path size mtime
 // system rom_id; a hit requires identical size+mtime+system).

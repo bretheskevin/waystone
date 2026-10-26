@@ -27,10 +27,7 @@ pub struct RomSystem {
     pub id_scheme: IdScheme,
 }
 
-// Platform-specific central save dir: RetroArch on Switch, TWiLight Menu++ elsewhere.
-#[cfg(feature = "switch")]
-pub const GLOBAL_SAVE_DIR: &str = "retroarch/saves";
-#[cfg(not(feature = "switch"))]
+// TWiLight Menu++ central save dir (RetroArch layouts go through `rom_pair::pair_roms_retroarch`).
 pub const GLOBAL_SAVE_DIR: &str = "_nds/TWiLightMenu/saves";
 pub const NGP_SAVE_DIR: &str = "data/ngpds";
 
@@ -121,6 +118,10 @@ pub fn rom_system(system: SystemId) -> Option<&'static RomSystem> {
 
 pub fn base_name(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
+}
+
+pub fn parent_dir(path: &str) -> &str {
+    path.rfind('/').map_or("", |i| &path[..i])
 }
 
 pub fn file_stem(file_name: &str) -> &str {

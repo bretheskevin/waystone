@@ -12,6 +12,7 @@ pub mod iso9660;
 pub mod model;
 pub mod nds_banner;
 pub mod packaging;
+pub mod retroarch;
 pub mod rom_art;
 pub mod rom_flavor;
 pub mod rom_id;

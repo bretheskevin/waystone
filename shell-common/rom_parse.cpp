@@ -13,7 +13,9 @@ static void split_tabs(const std::string& line, std::vector<std::string>* out) {
     }
 }
 
-bool parse_rom_pair_tsv(const char* data, size_t len, std::vector<RomPairingRow>* out) {
+bool parse_rom_pair_tsv(const char* data, size_t len, bool leading_flavor, const char* flavor,
+                        std::vector<RomPairingRow>* out) {
+    const size_t first = leading_flavor ? 1 : 0;
     out->clear();
     std::string all(data ? data : "", data ? len : 0);
     size_t start = 0;
@@ -25,10 +27,11 @@ bool parse_rom_pair_tsv(const char* data, size_t len, std::vector<RomPairingRow>
         start = nl + 1;
         if (line.empty()) continue;
         split_tabs(line, &f);
-        if (f.size() < 3) { out->clear(); return false; }
+        if (f.size() < first + 3 || (leading_flavor && f[0].empty())) { out->clear(); return false; }
         RomPairingRow r;
-        r.system = f[0]; r.rom_path = f[1]; r.save_dir = f[2];
-        for (size_t i = 3; i < f.size(); i++) r.save_paths.push_back(f[i]);
+        r.flavor = leading_flavor ? f[0] : std::string(flavor ? flavor : "");
+        r.system = f[first]; r.rom_path = f[first + 1]; r.save_dir = f[first + 2];
+        for (size_t i = first + 3; i < f.size(); i++) r.save_paths.push_back(f[i]);
         out->push_back(r);
     }
     return true;
@@ -102,6 +105,15 @@ bool title_name_less(const std::string& a, const std::string& b) {
         if (ca != cb) return (unsigned char)ca < (unsigned char)cb;
     }
     return a.size() < b.size();
+}
+
+std::string rom_join(const std::vector<std::string>& items, char sep) {
+    std::string joined;
+    for (size_t i = 0; i < items.size(); i++) {
+        if (i > 0) joined += sep;
+        joined += items[i];
+    }
+    return joined;
 }
 
 bool rom_hidden_name(const char* name) { return name && name[0] == '.'; }

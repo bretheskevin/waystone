@@ -2,16 +2,17 @@
 #include "rom_parse.h"
 #include "rom_io.h"
 #include "rom_art.h"
+#include "rom_retroarch.h"
 #include "rom_icons.h"
 #include "wall_clock.h"
 
 #include <cstdio>
-#include <cstring>
 #include <set>
 #include <sys/stat.h>
 
 static const char* GLOBAL_SAVES  = "_nds/TWiLightMenu/saves";
 static const char* NGP_SAVES     = "data/ngpds";
+static const char RETROARCH_PLATFORM[] = "3ds";
 
 static void read_nds_banner(const std::string& abs, const std::vector<uint8_t>& header,
                             std::string* name, std::vector<uint8_t>* icon) {
@@ -46,7 +47,7 @@ struct ScanState {
 };
 }
 
-static void scan_rows(char pass, const char* flavor, const std::vector<RomPairingRow>& rows,
+static void scan_rows(char pass, const std::vector<RomPairingRow>& rows,
                       ScanState& state, std::vector<TitleInfo>& out) {
     for (size_t i = 0; i < rows.size(); i++) {
         const RomPairingRow& row = rows[i];
@@ -70,14 +71,13 @@ static void scan_rows(char pass, const char* flavor, const std::vector<RomPairin
         t.rom_id = rom_id;
         t.rom_path = abs;
         t.rom_file_name = rom_file_name;
-        t.flavor = flavor;
-        t.save_dir = rom_sd_abs(rom_external_rel(row.save_dir, ROM_RETROARCH_SAVES));
-        for (size_t s = 0; s < row.save_paths.size(); s++)
-            t.save_paths.push_back(rom_sd_abs(rom_external_rel(row.save_paths[s], ROM_RETROARCH_SAVES)));
+        t.flavor = row.flavor;
+        t.save_dir = rom_sd_abs(row.save_dir);
+        for (size_t s = 0; s < row.save_paths.size(); s++) t.save_paths.push_back(rom_sd_abs(row.save_paths[s]));
         if (row.system == "nds") read_nds_banner(abs, header, &t.name, &t.icon);
         else if (pass == 'A') read_boxart_icon(rom_file_name, &t.icon);
         if (t.name.empty()) t.name = rom_display_name(row.system, header, rom_file_name);
-        printf("[roms] pass=%c flavor=%s %s -> [%s] '%s' id=%s saves=%zu save_dir=%s\n", pass, flavor,
+        printf("[roms] pass=%c flavor=%s %s -> [%s] '%s' id=%s saves=%zu save_dir=%s\n", pass, t.flavor.c_str(),
                row.rom_path.c_str(), row.system.c_str(), t.name.c_str(), t.rom_id.c_str(),
                t.save_paths.size(), t.save_dir.c_str());
         out.push_back(t);
@@ -87,24 +87,20 @@ static void scan_rows(char pass, const char* flavor, const std::vector<RomPairin
 std::vector<TitleInfo> scan_rom_titles() {
     unsigned long long t0 = wall_now_ms();
     std::vector<TitleInfo> out;
-    std::vector<std::string> rels_a, rels_b, saves_b;
+    std::vector<std::string> rels_a;
     rom_walk_rel(ROM_NATIVE_ROMS, 0, ROM_SCAN_MAX_DEPTH, rels_a);
     rom_walk_rel(GLOBAL_SAVES, 0, 0, rels_a);
     rom_walk_rel(NGP_SAVES, 0, 0, rels_a);
-    rom_walk_rel(ROM_RETROARCH_ROMS, 0, ROM_SCAN_MAX_DEPTH, rels_b);
-    rom_walk_rel(ROM_RETROARCH_SAVES, 0, 0, saves_b);
-    for (size_t i = 0; i < saves_b.size(); i++)
-        rels_b.push_back(ROM_EXTERNAL_SAVES + saves_b[i].substr(strlen(ROM_RETROARCH_SAVES)));
-    printf("[roms] walked %zu native + %zu retroarch file(s) in %llu ms\n", rels_a.size(),
-           rels_b.size(), wall_ms_since(t0));
-    if (rels_a.empty() && rels_b.empty()) return out;
+    printf("[roms] walked %zu native file(s) in %llu ms\n", rels_a.size(), wall_ms_since(t0));
 
     ScanState state;
     rom_id_scan_begin(state.ids);
     std::vector<RomPairingRow> rows;
-    if (!rels_a.empty() && rom_pair_rows(rels_a, "native", &rows)) scan_rows('A', "native", rows, state, out);
+    if (!rels_a.empty() && rom_pair_rows(rels_a, "native", &rows)) scan_rows('A', rows, state, out);
     rows.clear();
-    if (!rels_b.empty() && rom_pair_rows(rels_b, "retroarch", &rows)) scan_rows('B', "retroarch", rows, state, out);
+    std::vector<const char*> roots_b(1, ROM_RETROARCH_ROMS);
+    std::string save_root;
+    if (rom_retroarch_rows(RETROARCH_PLATFORM, roots_b, &rows, &save_root)) scan_rows('B', rows, state, out);
     rom_id_scan_end(state.ids);
     printf("[roms] scan done: %zu ROM title(s), %d cache hit(s), %d hashed, %d failed in %llu ms\n",
            out.size(), state.ids.hits, state.ids.computed, state.ids.failed, wall_ms_since(t0));

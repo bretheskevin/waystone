@@ -341,15 +341,23 @@ void rom_id_scan_end(const RomIdScan& scan) {
 
 bool rom_pair_rows(const std::vector<std::string>& rels, const char* flavor,
                    std::vector<RomPairingRow>* rows) {
-    std::string joined;
-    for (size_t i = 0; i < rels.size(); i++) { joined += rels[i]; joined += '\n'; }
+    std::string joined = rom_join(rels, '\n');
     WsBuf pairs = ws_rom_pair_flavored(reinterpret_cast<const uint8_t*>(joined.data()), joined.size(), flavor);
+    return rom_pair_rows_from_buf(pairs, flavor, false, rows);
+}
+
+bool rom_pair_rows_from_buf(WsBuf pairs, const char* flavor, bool leading_flavor,
+                            std::vector<RomPairingRow>* rows) {
     if (!pairs.ptr) { printf("[roms] pairing (flavor=%s) failed: %s\n", flavor, ffi_err()); return false; }
-    bool parsed = parse_rom_pair_tsv(reinterpret_cast<const char*>(pairs.ptr), pairs.len, rows);
+    bool parsed = parse_rom_pair_tsv(reinterpret_cast<const char*>(pairs.ptr), pairs.len, leading_flavor,
+                                     flavor, rows);
     ws_buf_free(pairs);
-    if (parsed) printf("[roms] flavor=%s: %zu ROM(s) paired\n", flavor, rows->size());
-    else printf("[roms] malformed pairing output (flavor=%s)\n", flavor);
-    return parsed;
+    if (!parsed) { printf("[roms] malformed pairing output (flavor=%s)\n", flavor); return false; }
+    size_t other = 0;
+    for (size_t i = 0; i < rows->size(); i++)
+        if ((*rows)[i].flavor != flavor) other++;
+    printf("[roms] flavor=%s: %zu ROM(s) paired (%zu with another flavor)\n", flavor, rows->size(), other);
+    return true;
 }
 
 bool rom_read_save_entries(const std::vector<std::string>& save_paths, const std::string& prefix,
@@ -394,4 +402,43 @@ int rom_write_saves(const std::string& save_dir, const std::vector<FileTreeEntry
         if (!ok) ret = -1;
     }
     return ret;
+}
+
+int rom_keyed_to_native_local(const std::string& system, const std::string& slot,
+                              const std::string& rom_file_name, const std::string& flavor,
+                              const std::vector<std::string>& save_paths, const uint8_t* tree,
+                              size_t tree_len, std::vector<FileTreeEntry>* out) {
+    std::vector<FileTreeEntry> current;
+    rom_read_save_entries(save_paths, "", false, &current);
+    std::vector<uint8_t> existing = file_tree_encode(current);
+    printf("[sync] rom to_native system=%s slot=%s file=%s flavor=%s existing=%zu file(s)\n",
+           system.c_str(), slot.c_str(), rom_file_name.c_str(), flavor.c_str(), current.size());
+    WsBuf native = {0, 0};
+    int nrc = ws_rom_keyed_to_native_flavored(system.c_str(), slot.c_str(), rom_file_name.c_str(),
+                                              flavor.c_str(), tree, tree_len, existing.data(),
+                                              existing.size(), &native);
+    if (nrc != 0) {
+        printf("[sync] ws_rom_keyed_to_native_flavored failed (%s/%s): %s\n", system.c_str(),
+               slot.c_str(), ffi_err());
+        return -1;
+    }
+    bool ok = file_tree_decode(native.ptr, native.len, out);
+    ws_buf_free(native);
+    if (!ok) { printf("[saves] rom to_native %s/%s: native tree decode failed\n", system.c_str(), slot.c_str()); return -1; }
+    return 0;
+}
+
+int rom_keyed_restore(const std::string& system, const std::string& slot,
+                      const std::string& rom_file_name, const std::string& flavor,
+                      const std::vector<std::string>& save_paths, const std::string& save_dir,
+                      const uint8_t* tree, size_t tree_len) {
+    std::vector<FileTreeEntry> entries;
+    if (rom_keyed_to_native_local(system, slot, rom_file_name, flavor, save_paths, tree, tree_len,
+                                  &entries) != 0)
+        return -1;
+    printf("[saves] rom restore %s/%s -> dir=%s (%zu file(s))\n", system.c_str(), slot.c_str(),
+           save_dir.c_str(), entries.size());
+    int rc = rom_write_saves(save_dir, entries);
+    printf("[saves] rom restore %s/%s rc=%d\n", system.c_str(), slot.c_str(), rc);
+    return rc;
 }

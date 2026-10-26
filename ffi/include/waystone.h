@@ -197,6 +197,29 @@ struct WsBuf ws_rom_pair_flavored(const uint8_t *paths,
                                   uintptr_t paths_len,
                                   const char *external_flavor);
 
+/**
+ * Parse `retroarch.cfg` text for `platform` ("switch" | "3ds") → UTF-8
+ * `save_root\tcores_dir\tinfo_dir` (SD-root-relative, no trailing newline); an empty
+ * `save_root` means saves live next to the content. `cfg_len == 0` yields the platform defaults.
+ */
+ struct WsBuf ws_retroarch_dirs(const uint8_t *cfg, uintptr_t cfg_len, const char *platform);
+
+/**
+ * RetroArch pairing → `flavor\tsys\trom\tsave_dir[\tsave]*\n` (flavor = the naming the row's
+ * save uses: "retroarch", or "native" for a native-named fallback). `cfg` = `retroarch.cfg`
+ * text (may be empty → platform defaults), `infos` = installed cores' `.info` texts joined by
+ * `\x1e` (unparseable ones skipped), `platform` = "switch" | "3ds". A directory save root is
+ * listed under `@saves/`.
+ */
+
+struct WsBuf ws_rom_pair_retroarch(const uint8_t *paths,
+                                   uintptr_t paths_len,
+                                   const uint8_t *cfg,
+                                   uintptr_t cfg_len,
+                                   const uint8_t *infos,
+                                   uintptr_t infos_len,
+                                   const char *platform);
+
  uint32_t ws_nds_banner_offset(const uint8_t *header, uintptr_t len);
 
  struct WsBuf ws_nds_banner_icon_rgba(const uint8_t *banner, uintptr_t len);

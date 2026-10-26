@@ -32,6 +32,7 @@ struct TitleInfo {
     std::string rom_id;                  // core ROM identity (group_key game segment)
     std::string rom_path;                // absolute "sdmc:/..." ROM path
     std::string rom_file_name;           // ROM file name, drives native save names on restore
+    std::string flavor = "native";       // save flavor: "native" | "retroarch" (.srm)
     std::string save_dir;                // absolute save dir; restore target when no save exists
     std::vector<std::string> save_paths; // absolute paths of the ROM's existing saves
 };

@@ -2,7 +2,6 @@
 #include "rom_saves.h"
 #include "rom_parse.h"
 #include "rom_io.h"
-#include "file_tree.h"
 
 #include <cstdio>
 #include <set>
@@ -21,13 +20,13 @@ static int nx_list_saves(void* ctx, const void* tp, LocalSaveSet& out) {
             printf("[saves] %s: no local ROM save files\n", title.name.c_str());
             return 0;
         }
-        printf("[sync] normalize rom system=%s rom_id=%s file=%s\n", title.system.c_str(),
-               title.rom_id.c_str(), title.rom_file_name.c_str());
-        WsBuf sl = ws_rom_keyed_normalize(title.system.c_str(), title.rom_id.c_str(),
-                                          title.name.c_str(), title.rom_file_name.c_str(),
-                                          raw.data(), raw.size());
+        printf("[sync] normalize rom system=%s rom_id=%s file=%s flavor=%s\n", title.system.c_str(),
+               title.rom_id.c_str(), title.rom_file_name.c_str(), title.flavor.c_str());
+        WsBuf sl = ws_rom_keyed_normalize_flavored(title.system.c_str(), title.rom_id.c_str(),
+                                                   title.name.c_str(), title.rom_file_name.c_str(),
+                                                   title.flavor.c_str(), raw.data(), raw.size());
         if (!sl.ptr) {
-            printf("[sync] %s: ws_rom_keyed_normalize failed: %s\n", title.name.c_str(), ffi_err());
+            printf("[sync] %s: ws_rom_keyed_normalize_flavored failed: %s\n", title.name.c_str(), ffi_err());
             return -1;
         }
         // adopt_normalized takes ownership of sl.ptr (freed there on decode failure too).
@@ -118,27 +117,9 @@ static int nx_write_save(void* ctx, const void* tp, const std::string& group_key
     std::string slot;
     size_t last_slash = group_key.rfind('/');
     if (last_slash != std::string::npos) slot = group_key.substr(last_slash + 1);
-    if (title.source == SourceRom) {
-        WsBuf native = {nullptr, 0};
-        int nrc = ws_rom_keyed_to_native(title.system.c_str(), slot.c_str(),
-                                         title.rom_file_name.c_str(), tree, tree_len, &native);
-        if (nrc != 0) {
-            printf("[sync] ws_rom_keyed_to_native failed for %s: %s\n", group_key.c_str(), ffi_err());
-            return -1;
-        }
-        std::vector<FileTreeEntry> entries;
-        bool ok = file_tree_decode(native.ptr, native.len, &entries);
-        ws_buf_free(native);
-        if (!ok) {
-            printf("[saves] rom restore %s: native tree decode failed\n", group_key.c_str());
-            return -1;
-        }
-        printf("[saves] rom restore %s -> dir=%s (%zu file(s))\n", group_key.c_str(),
-               title.save_dir.c_str(), entries.size());
-        int rrc = rom_write_saves(title.save_dir, entries);
-        printf("[saves] rom restore %s rc=%d\n", group_key.c_str(), rrc);
-        return rrc;
-    }
+    if (title.source == SourceRom)
+        return rom_keyed_restore(title.system, slot, title.rom_file_name, title.flavor,
+                                 title.save_paths, title.save_dir, tree, tree_len);
     const SwitchSaveKind kind = save_kind_for_slot(slot);
     printf("[saves] write %s -> tid=%016lX slot=%s (%zu bytes)\n", group_key.c_str(),
            (unsigned long)title.title_id, slot.c_str(), tree_len);

@@ -10,14 +10,17 @@
 static const size_t ROM_HEADER_BYTES = 0x200;   // == core rom_id::ROM_HEADER_LEN
 
 struct RomPairingRow {
+    std::string flavor;     // save naming: "native" | "retroarch" | "drastic"
     std::string system;
     std::string rom_path;   // SD-root-relative
     std::string save_dir;   // SD-root-relative
     std::vector<std::string> save_paths;
 };
 
-// Parse ws_rom_pair output ("sys\trom\tsave_dir[\tsave]*\n" lines). false on a line with < 3 fields.
-bool parse_rom_pair_tsv(const char* data, size_t len, std::vector<RomPairingRow>* out);
+// Parse ws_rom_pair* output ("sys\trom\tsave_dir[\tsave]*\n" lines, each prefixed by "flavor\t" when
+// leading_flavor; otherwise every row gets `flavor`). false on a short line or an empty flavor.
+bool parse_rom_pair_tsv(const char* data, size_t len, bool leading_flavor, const char* flavor,
+                        std::vector<RomPairingRow>* out);
 
 struct RomIdCacheEntry {
     std::string path;            // SD-root-relative ROM path
@@ -39,6 +42,7 @@ uint32_t rom_synthetic_unique_id(const std::string& system, const std::string& r
 std::string rom_group_key(const std::string& system, const std::string& rom_id, const char* slot);
 bool rom_save_name_safe(const std::string& name);          // single path component, not "."/".."
 bool title_name_less(const std::string& a, const std::string& b); // ASCII case-insensitive
+std::string rom_join(const std::vector<std::string>& items, char sep);  // FFI list args ('\n', '\x1e')
 bool rom_hidden_name(const char* name);                    // dot entries (macOS "._*" AppleDouble, ".DS_Store", ".", "..")
 
 #endif

@@ -53,6 +53,7 @@ static void test_pair_rows() {
     assert(rom_pair_rows(rels, "native", &rows));
     assert(rows.size() == 1);
     assert(rows[0].system == "gba" && rows[0].rom_path == "roms/gba/Zelda.gba");
+    assert(rows[0].flavor == "native");
     assert(rows[0].save_paths.size() == 1);
 }
 
@@ -82,8 +83,34 @@ static void test_write_then_extract() {
     assert(rom_extract_saves("gba", paths).empty());
 }
 
+static void test_to_native_local() {
+    std::vector<FileTreeEntry> canon(1, FileTreeEntry("battery", std::vector<uint8_t>(4, 9)));
+    std::vector<uint8_t> tree = file_tree_encode(canon);
+    std::vector<std::string> none;
+    std::vector<FileTreeEntry> out;
+    assert(rom_keyed_to_native_local("gba", "battery", "Pokemon CHROME.gba", "retroarch", none,
+                                     tree.data(), tree.size(), &out) == 0);
+    assert(out.size() == 1 && out[0].first == "Pokemon CHROME.srm" && out[0].second.size() == 4);
+    out.clear();
+    assert(rom_keyed_to_native_local("gba", "battery", "Pokemon CHROME.gba", "native", none,
+                                     tree.data(), tree.size(), &out) == 0);
+    assert(out.size() == 1 && out[0].first == "Pokemon CHROME.sav");
+    assert(rom_keyed_to_native_local("gba", "battery", "X.gba", "bogus", none,
+                                     tree.data(), tree.size(), &out) != 0);
+
+    char tmpl[] = "/tmp/ws_rom_restore_XXXXXX";
+    char* dir = mkdtemp(tmpl);
+    assert(dir);
+    std::string d = std::string(dir) + "/mGBA";
+    assert(rom_keyed_restore("gba", "battery", "Pokemon CHROME.gba", "retroarch", none, d,
+                             tree.data(), tree.size()) == 0);
+    std::vector<uint8_t> back;
+    assert(rom_read_whole(d + "/Pokemon CHROME.srm", &back) && back.size() == 4);
+}
+
 int main() {
     test_lower_ext();
+    test_to_native_local();
     test_base_name();
     test_write_then_extract();
     test_resolve_cue();

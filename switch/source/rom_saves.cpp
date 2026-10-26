@@ -2,6 +2,7 @@
 #include "rom_parse.h"
 #include "rom_io.h"
 #include "rom_art.h"
+#include "rom_retroarch.h"
 #include "rom_boxart.h"
 #include "snapshot.h"  // fs_mkdir_p
 #include "wall_clock.h"
@@ -14,6 +15,7 @@
 #include <vector>
 
 static const char* const ROMS_ROOTS[] = {ROM_NATIVE_ROMS, ROM_RETROARCH_ROMS};
+static const char RETROARCH_PLATFORM[] = "switch";
 static const char ROM_ICON_DIR[] = "sdmc:/waystone/icons";
 static const unsigned ROM_BOXART_ICON_SIDE = 128;  // dashboard tile is 48 px; headroom for scaling
 static const RomBoxartLimits RETROARCH_BOXART_LIMITS = { 2048, 2048, 2 * 1024 * 1024 };
@@ -73,14 +75,13 @@ static std::string retroarch_boxart_icon(const std::string& system, const std::s
 std::vector<TitleInfo> scan_rom_titles() {
     unsigned long long t0 = wall_now_ms();
     std::vector<TitleInfo> out;
-    std::vector<std::string> rels;
-    for (const char* root : ROMS_ROOTS) rom_walk_rel(root, 0, ROM_SCAN_MAX_DEPTH, rels);
-    rom_walk_rel(ROM_RETROARCH_SAVES, 0, 0, rels); // depth 0; per-core save subdirs out of scope
-    printf("[roms] walked %zu file(s) in %llu ms\n", rels.size(), wall_ms_since(t0));
-    if (rels.empty()) return out;
-
+    std::vector<const char*> roots(ROMS_ROOTS, ROMS_ROOTS + sizeof(ROMS_ROOTS) / sizeof(ROMS_ROOTS[0]));
     std::vector<RomPairingRow> rows;
-    if (!rom_pair_rows(rels, "native", &rows)) return out;
+    std::string save_root;
+    if (!rom_retroarch_rows(RETROARCH_PLATFORM, roots, &rows, &save_root)) return out;
+    printf("[roms] retroarch pairing: %zu row(s), save root '%s' in %llu ms\n", rows.size(),
+           save_root.c_str(), wall_ms_since(t0));
+    if (rows.empty()) return out;
 
     RomIdScan scan;
     rom_id_scan_begin(scan);
@@ -99,6 +100,7 @@ std::vector<TitleInfo> scan_rom_titles() {
         t.rom_id = rom_id;
         t.rom_path = abs;
         t.rom_file_name = rom_file_name;
+        t.flavor = row.flavor;
         t.save_dir = rom_sd_abs(row.save_dir);
         for (size_t s = 0; s < row.save_paths.size(); s++) t.save_paths.push_back(rom_sd_abs(row.save_paths[s]));
         t.name = rom_display_name(row.system, header, rom_file_name);
@@ -108,8 +110,8 @@ std::vector<TitleInfo> scan_rom_titles() {
             if (!banner_title.empty()) t.name = banner_title;
         }
         if (t.icon_path.empty()) t.icon_path = retroarch_boxart_icon(row.system, rom_id, rom_file_name);
-        printf("[roms] %s -> [%s] '%s' id=%s saves=%zu save_dir=%s\n", row.rom_path.c_str(),
-               row.system.c_str(), t.name.c_str(), t.rom_id.c_str(), t.save_paths.size(),
+        printf("[roms] flavor=%s %s -> [%s] '%s' id=%s saves=%zu save_dir=%s\n", t.flavor.c_str(),
+               row.rom_path.c_str(), row.system.c_str(), t.name.c_str(), t.rom_id.c_str(), t.save_paths.size(),
                t.save_dir.c_str());
         out.push_back(t);
     }

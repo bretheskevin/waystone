@@ -9,6 +9,7 @@
 #include <vector>
 #include "rom_parse.h"
 #include "file_tree.h"
+#include "ffi_err.h"  // WsBuf
 
 static const char* const ROM_SD_PREFIX = "sdmc:/";
 static const char* const ROM_ID_CACHE_PATH = "sdmc:/waystone/rom_ids";
@@ -16,7 +17,6 @@ static const char* const ROM_ID_CACHE_PATH = "sdmc:/waystone/rom_ids";
 static const char* const ROM_NATIVE_ROMS = "roms";
 static const char* const ROM_RETROARCH_ROOT = "retroarch";
 static const char* const ROM_RETROARCH_ROMS = "retroarch/roms";
-static const char* const ROM_RETROARCH_SAVES = "retroarch/saves";
 static const int ROM_SCAN_MAX_DEPTH = 4;
 
 std::string rom_sd_abs(const std::string& rel);
@@ -47,6 +47,10 @@ void rom_id_scan_end(const RomIdScan& scan);
 // ws_rom_pair_flavored over SD-root-relative file rels ("native" = plain pairing). false on failure.
 bool rom_pair_rows(const std::vector<std::string>& rels, const char* flavor,
                    std::vector<RomPairingRow>* rows);
+// Parse + free a ws_rom_pair* TSV buffer (null buf = FFI failure). leading_flavor: rows carry their own
+// flavor column (ws_rom_pair_retroarch); otherwise every row gets `flavor`. false on failure.
+bool rom_pair_rows_from_buf(WsBuf pairs, const char* flavor, bool leading_flavor,
+                            std::vector<RomPairingRow>* rows);
 
 // Append each readable save as FileTreeEntry(prefix + file name, bytes). strict: the first
 // unreadable file fails the call; otherwise it is logged and skipped (treated as absent).
@@ -58,4 +62,15 @@ std::vector<uint8_t> rom_extract_saves(const std::string& system, const std::vec
 // Write native-named entries (single path component each) into save_dir (created if missing).
 // 0 on success, -1 if any entry failed.
 int rom_write_saves(const std::string& save_dir, const std::vector<FileTreeEntry>& entries);
+// Canonical ROM-keyed tree -> native-named entries for slot via ws_rom_keyed_to_native_flavored,
+// keeping the names/.dsv footer of the ROM's current local save files (save_paths). 0 or -1.
+int rom_keyed_to_native_local(const std::string& system, const std::string& slot,
+                              const std::string& rom_file_name, const std::string& flavor,
+                              const std::vector<std::string>& save_paths, const uint8_t* tree,
+                              size_t tree_len, std::vector<FileTreeEntry>* out);
+// rom_keyed_to_native_local + rom_write_saves into save_dir. 0 or -1.
+int rom_keyed_restore(const std::string& system, const std::string& slot,
+                      const std::string& rom_file_name, const std::string& flavor,
+                      const std::vector<std::string>& save_paths, const std::string& save_dir,
+                      const uint8_t* tree, size_t tree_len);
 #endif
