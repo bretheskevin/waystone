@@ -4,20 +4,18 @@
 #include <cstdio>
 
 SyncController::SyncController(WsVault* vault, AccountUid uid, std::string device_id,
-                               WebDavCfg dav, std::vector<TitleInfo> titles,
+                               const OwnedWebDavCfg* dav, std::vector<TitleInfo> titles,
                                const WaystoneShellConfig* config)
     : vault_(vault),
       uid_(uid),
       device_id_(std::move(device_id)),
-      dav_url_(dav.base_url), dav_user_(dav.user), dav_pass_(dav.pass),
-      dav_{dav_url_.c_str(), dav_user_.c_str(), dav_pass_.c_str()},
+      dav_src_(dav),
       titles_(std::move(titles)),
       config_(config),
       results_(titles_.size()) {}
 
 SyncController::~SyncController() {
     join();
-    zeroize_string(dav_pass_);
 }
 
 void SyncController::start() {
@@ -28,6 +26,12 @@ void SyncController::start() {
     }
     if (thread_.joinable()) {
         thread_.join();
+    }
+    if (dav_src_) {
+        dav_.assign(dav_src_->as_cfg());
+    } else {
+        printf("[sync] start: no WebDAV config bound, using empty credentials\n");
+        dav_.assign(WebDavCfg{nullptr, nullptr, nullptr});
     }
     policy_ = config_ ? static_cast<int>(config_->conflict_policy) : 0;
     safety_backup_ = config_ ? config_->safety_backup : true;
@@ -41,8 +45,8 @@ void SyncController::start() {
         step_.clear();
         results_.assign(titles_.size(), TitleResult());
     }
-    printf("[sync] start: %zu title(s) policy=%d safety_backup=%d\n", titles_.size(), policy_,
-           static_cast<int>(safety_backup_));
+    printf("[sync] start: %zu title(s) policy=%d safety_backup=%d dav=%s\n", titles_.size(), policy_,
+           static_cast<int>(safety_backup_), webdav_loggable_url(dav_.cfg().base_url).c_str());
     thread_ = std::thread(&SyncController::worker, this);
 }
 
@@ -110,7 +114,7 @@ void SyncController::worker() {
     cfg.device_id = device_id_.c_str();
     ShellOps ops = nx_shell_ops(&uid_);
 
-    WebDavSession* sess = webdav_session_begin(dav_);
+    WebDavSession* sess = webdav_session_begin(dav_.cfg());
     if (!sess) {
         printf("[sync] webdav_session_begin failed\n");
         {

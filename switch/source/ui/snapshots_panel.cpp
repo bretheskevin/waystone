@@ -1,8 +1,8 @@
 #include "snapshots_panel.h"
 #include <cstdio>
 
-SnapshotsPanel::SnapshotsPanel(SnapshotsController* ctrl)
-    : ControllerRestorePanel(ctrl, "Snapshots", "No snapshots yet for this game.") {}
+SnapshotsPanel::SnapshotsPanel(SnapshotsController* ctrl, const Session* session)
+    : ControllerRestorePanel(ctrl, session, "Snapshots", "No snapshots yet for this game.") {}
 
 size_t SnapshotsPanel::entryCount() const { return ctrl_->snapshots().size(); }
 

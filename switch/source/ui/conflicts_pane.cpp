@@ -151,17 +151,20 @@ void ConflictsPane::focus_selected_row() {
 }
 
 void ConflictsPane::confirm_resolve(const ConflictView& item, bool keep_local) {
-    // A reaped History/Snapshots restore may still be writing this save.
-    if (refuse_while_reaping("[conflict] ui:", keep_local ? "keep local" : "keep remote")) return;
+    // A running sync or a reaped History/Snapshots restore may still be writing this save.
+    const char* what = keep_local ? "keep local" : "keep remote";
+    if (refuse_if_busy(BusyScope::Resolve, session_, "[conflict] ui:", what)) return;
     const uint32_t id = item.id;
     selected_id_ = id;
     dialog_open_ = true;
     printf("[conflict] ui: keep %s requested id=%u (confirming)\n", keep_local ? "local" : "remote", id);
 
     ConflictController* ctrl = ctrl_;
-    auto on_confirm = ws_if_alive(alive_, "conflict resolve", [this, ctrl, id, keep_local] {
+    auto on_confirm = ws_if_alive(alive_, "conflict resolve", [this, ctrl, id, keep_local, what] {
         dialog_open_ = false;
-        if (ctrl_ != ctrl) {
+        if (refuse_if_busy(BusyScope::Resolve, session_, "[conflict] ui:", what)) {
+            printf("[conflict] ui: resolve id=%u dropped at confirm\n", id);
+        } else if (ctrl_ != ctrl) {
             printf("[conflict] ui: controller replaced, resolve id=%u dropped\n", id);
         } else if (keep_local) {
             printf("[conflict] ui: keep local id=%u\n", id);

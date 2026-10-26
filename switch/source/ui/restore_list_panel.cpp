@@ -8,8 +8,9 @@
 
 static constexpr int POLL_MS = 300;
 
-RestoreListPanel::RestoreListPanel(std::string heading, std::string game, std::string empty_text)
-    : SlidePanel(WIDTH, false), heading_(std::move(heading)), game_(std::move(game)),
+RestoreListPanel::RestoreListPanel(const Session* session, std::string heading, std::string game,
+                                   std::string empty_text)
+    : SlidePanel(WIDTH, false), session_(session), heading_(std::move(heading)), game_(std::move(game)),
       empty_text_(std::move(empty_text)) {
     setGuide(ws_hint_bar({WsAction::Restore, WsAction::Back}));
 }
@@ -118,15 +119,21 @@ void RestoreListPanel::askRestore(size_t i) {
                (int)phase(), (int)restoring_);
         return;
     }
+    if (refuseRestore()) return;
     printf("[ui] %s panel: confirm restore of entry %zu\n", heading_.c_str(), i);
     dialog_open_ = true;
     OverlayActivity::push(new ConfirmDialog(
         confirmTitle(), confirmDetail(i),
         ws_if_alive(alive_, "restore confirm", [this, i] {
             dialog_open_ = false;
+            if (refuseRestore()) return;
             beginRestore(i);
         }),
         ws_if_alive(alive_, "restore cancel", [this] { dialog_open_ = false; }), WsAction::Restore));
+}
+
+bool RestoreListPanel::refuseRestore() const {
+    return refuse_if_busy(BusyScope::Restore, session_, "[saves]", (heading_ + " restore").c_str());
 }
 
 void RestoreListPanel::beginRestore(size_t i) {

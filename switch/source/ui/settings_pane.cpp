@@ -141,12 +141,7 @@ void SettingsPane::save_settings() {
 }
 
 bool SettingsPane::refuse_while_busy(const char* what) const {
-    if (session_->sync_busy && session_->sync_busy()) {
-        printf("[ui] settings: %s refused -- sync or conflict scan in progress\n", what);
-        ws_toast("Sync in progress \xe2\x80\x94 wait for it to finish");
-        return true;
-    }
-    return refuse_while_reaping("[ui] settings:", what);
+    return refuse_if_busy(BusyScope::Credentials, session_, "[ui] settings:", what);
 }
 
 void SettingsPane::request_logout() {

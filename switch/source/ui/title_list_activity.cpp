@@ -56,6 +56,7 @@ TitleListActivity::TitleListActivity(SyncController* ctrl, Session* session)
 
 TitleListActivity::~TitleListActivity() {
     session_->sync_busy = nullptr;
+    session_->sync_running = nullptr;
     pump_.stop();
     poll_timer_.stop();
     if (single_ctrl_) { single_ctrl_->join(); delete single_ctrl_; }
@@ -126,6 +127,7 @@ brls::View* TitleListActivity::createContentView() {
 void TitleListActivity::onContentAvailable() {
     printf("[ui] dashboard onContentAvailable\n");
     session_->sync_busy = [this]() { return sync_running() || conflicts_->busy(); };
+    session_->sync_running = [this]() { return sync_running(); };
     frame_->guide()->slideIn();
     refresh_guide(FocusArea::Sidebar);
     pump_.start();
@@ -280,12 +282,8 @@ bool TitleListActivity::sync_running() const {
 }
 
 bool TitleListActivity::background_task_blocks_sync(const char* what) const {
-    if (conflicts_->busy()) {
-        printf("[sync] %s refused: conflict worker running\n", what);
-        ws_toast(WS_BACKGROUND_BUSY_TOAST);
-        return true;
-    }
-    return refuse_while_reaping("[sync]", what);
+    // A sync writes saves exactly like a restore: same refusal rules.
+    return refuse_if_busy(BusyScope::Restore, session_, "[sync]", what);
 }
 
 static void refuse_sync_running(const char* what, const char* why) {
@@ -340,7 +338,7 @@ void TitleListActivity::start_single_sync_or_gate(const TitleInfo& t) {
         delete single_ctrl_;
     }
     single_ctrl_ = new SyncController(session_->vault, session_->uid, session_->device_id,
-                                      session_->dav.as_cfg(), { t }, &session_->config);
+                                      &session_->dav, { t }, &session_->config);
 
     if (!network_available()) {
         brls::Application::pushActivity(

@@ -59,7 +59,7 @@ static void run_history(Session& session, bool confirm) {
         OverlayActivity::push(fixture_game_panel(s));
         auto* hc = new HistoryController(fixture_title(), s);
         hc->start_scan();
-        auto* panel = new PreviewHistoryPanel(hc);
+        auto* panel = new PreviewHistoryPanel(hc, s);
         OverlayActivity::push(panel);
         if (confirm) panel->askRestore(0);
     }));
@@ -74,7 +74,7 @@ static void run_snapshots_panel(Session& session) {
         OverlayActivity::push(fixture_game_panel(s));
         auto* sc = new SnapshotsController(fixture_title(), AccountUid{});
         sc->start_scan();
-        OverlayActivity::push(new SnapshotsPanel(sc));
+        OverlayActivity::push(new SnapshotsPanel(sc, s));
     }));
 }
 

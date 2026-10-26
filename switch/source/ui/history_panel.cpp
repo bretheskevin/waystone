@@ -1,8 +1,8 @@
 #include "history_panel.h"
 #include "snapshot_browse.h"  // human_timestamp
 
-HistoryPanel::HistoryPanel(HistoryController* ctrl)
-    : ControllerRestorePanel(ctrl, "History", "No history yet for this game.") {}
+HistoryPanel::HistoryPanel(HistoryController* ctrl, const Session* session)
+    : ControllerRestorePanel(ctrl, session, "History", "No history yet for this game.") {}
 
 size_t HistoryPanel::entryCount() const { return ctrl_->entries().size(); }
 

@@ -8,9 +8,9 @@
 #include <utility>
 #include <vector>
 #include "net.h"
-#include "secure_clear.h"
 #include "sync_engine.h"
 #include "wall_clock.h"
+#include "webdav_cfg_copy.h"
 #include "wsconfig.h"
 
 // Shell-provided mutex (std::mutex on Switch, LightLock on 3DS). Non-recursive.
@@ -54,21 +54,11 @@ public:
                  std::vector<TitleT> titles, const WaystoneShellConfig& config,
                  const ShellOps* ops, ConflictLockOps lock, void (*prepare_item)(TitleT&) = 0)
         : vault_(vault), device_id_(device_id ? device_id : ""),
-          dav_url_(dav.base_url ? dav.base_url : ""), dav_user_(dav.user ? dav.user : ""),
-          dav_pass_(dav.pass ? dav.pass : ""), dav_(), titles_(std::move(titles)),
+          titles_(std::move(titles)),
           config_(config), ops_(ops), lock_(lock), prepare_item_(prepare_item),
           phase_((int)ConflictPhase::Idle), running_(false), cancel_(false), version_(0),
           scan_active_(false), next_id_(1) {
-        dav_.base_url = dav_url_.c_str();
-        dav_.user = dav_user_.c_str();
-        dav_.pass = dav_pass_.c_str();
-    }
-
-    ~ConflictCore() {
-        if (!dav_pass_.empty()) {
-            secure_clear(&dav_pass_[0], dav_pass_.size());
-            dav_pass_.clear();
-        }
+        dav_.assign(dav);
     }
 
     // false = a worker is already running (nothing changed).
@@ -97,7 +87,7 @@ public:
         const unsigned long long scan_t0 = wall_now_ms();
         printf("[conflict] scan begin: %zu title(s)\n", n);
         SyncEngineCfg ecfg = sync_cfg_from(config_, device_id_.c_str());
-        WebDavSession* sess = webdav_session_begin(dav_);
+        WebDavSession* sess = webdav_session_begin(dav_.cfg());
         if (!sess) {
             printf("[conflict] webdav_session_begin failed\n");
             // conflicts_ is still empty here, so begin_resolve() cannot have queued anything.
@@ -245,7 +235,7 @@ public:
     }
 
     void run_resolve(uint32_t id, bool keep_local) {
-        WebDavSession* sess = webdav_session_begin(dav_);
+        WebDavSession* sess = webdav_session_begin(dav_.cfg());
         if (!sess) {
             printf("[conflict] webdav_session_begin failed (resolve id=%lu)\n", (unsigned long)id);
             {
@@ -370,8 +360,7 @@ private:
 
     const WsVault* vault_;
     std::string device_id_;
-    std::string dav_url_, dav_user_, dav_pass_;
-    WebDavCfg dav_;
+    WebDavCfgCopy dav_;
     std::vector<TitleT> titles_;
     WaystoneShellConfig config_;
     const ShellOps* ops_;

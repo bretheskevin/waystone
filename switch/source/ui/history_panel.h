@@ -5,7 +5,7 @@
 // Remote history versions of one game (stacked over the game panel, not dimmed). Owns ctrl.
 class HistoryPanel : public ControllerRestorePanel<HistoryController> {
   public:
-    explicit HistoryPanel(HistoryController* ctrl);
+    HistoryPanel(HistoryController* ctrl, const Session* session);
 
   protected:
     size_t entryCount() const override;

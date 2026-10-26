@@ -5,7 +5,7 @@
 // Local safety snapshots of one game (stacked over the game panel, not dimmed). Owns ctrl.
 class SnapshotsPanel : public ControllerRestorePanel<SnapshotsController> {
   public:
-    explicit SnapshotsPanel(SnapshotsController* ctrl);
+    SnapshotsPanel(SnapshotsController* ctrl, const Session* session);
 
   protected:
     size_t entryCount() const override;

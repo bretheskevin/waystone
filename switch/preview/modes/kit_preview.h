@@ -29,7 +29,7 @@ inline void preview_seed_session(Session& session) {
 
 // Stubbed controller (preview/stubs/sync_controller_stub.cpp): fixture titles, canned progress.
 inline SyncController* preview_sync_controller(const WaystoneShellConfig* cfg) {
-    return new SyncController(nullptr, AccountUid{}, "", WebDavCfg{nullptr, nullptr, nullptr}, {}, cfg);
+    return new SyncController(nullptr, AccountUid{}, "", nullptr, {}, cfg);
 }
 
 class PreviewShellActivity : public brls::Activity {

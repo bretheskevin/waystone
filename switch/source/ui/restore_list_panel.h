@@ -10,8 +10,11 @@
 #include "kit/overlay.h"
 #include "worker_reaper.h"
 
+struct Session;
+
 // Shared body of the History / Snapshots slide panels: heading + game name + status line +
-// a list of restorable versions; A on a row -> confirm dialog -> start_restore(i).
+// a list of restorable versions; A on a row -> confirm dialog -> start_restore(i). A restore is
+// refused (at A and again at confirm) while a sync, conflict worker or reaped worker runs.
 // Subclasses owning a controller derive from ControllerRestorePanel (stops polling first).
 class RestoreListPanel : public SlidePanel {
   public:
@@ -25,7 +28,7 @@ class RestoreListPanel : public SlidePanel {
         std::string detail;
     };
 
-    RestoreListPanel(std::string heading, std::string game, std::string empty_text);
+    RestoreListPanel(const Session* session, std::string heading, std::string game, std::string empty_text);
 
     virtual size_t entryCount() const                  = 0;
     virtual std::vector<RowText> rows() const          = 0;
@@ -43,11 +46,13 @@ class RestoreListPanel : public SlidePanel {
     static constexpr const char* REPLACES_SAVE = "replaces the save on this Switch.";
 
   private:
+    bool refuseRestore() const;
     void poll();
     void refresh();
     void rebuildList();
     void beginRestore(size_t i);
 
+    const Session* session_;
     std::string heading_;
     std::string game_;
     std::string empty_text_;
@@ -78,8 +83,8 @@ class ControllerRestorePanel : public RestoreListPanel {
     }
 
   protected:
-    ControllerRestorePanel(Ctrl* ctrl, std::string heading, std::string empty_text)
-        : RestoreListPanel(std::move(heading), ctrl->title().name, std::move(empty_text)), ctrl_(ctrl) {}
+    ControllerRestorePanel(Ctrl* ctrl, const Session* session, std::string heading, std::string empty_text)
+        : RestoreListPanel(session, std::move(heading), ctrl->title().name, std::move(empty_text)), ctrl_(ctrl) {}
 
     void startRestore(size_t i) override { ctrl_->start_restore(i); }
     BrowsePhase phase() const override { return ctrl_->phase(); }

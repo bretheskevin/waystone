@@ -28,7 +28,7 @@ class SettingsPane : public brls::Box {
     void toggle_backup();
     void check_updates();
     void save_settings();
-    // Workers borrow the vault and the WebDAV strings (WebDavCfg holds their c_str()): no logout
+    // Workers borrow the vault (History also reads the Session's WebDAV strings): no logout
     // or credential edit while one runs. Logs + toasts the refusal.
     bool refuse_while_busy(const char* what) const;
     void request_logout();

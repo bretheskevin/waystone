@@ -6,20 +6,19 @@
 #include <vector>
 #include "net.h"
 #include "saves.h"
+#include "session.h"
 #include "sync_summary.h"
+#include "webdav_cfg_copy.h"
 #include "wsconfig.h"
-
-// WsVault is an opaque Rust FFI type; only used as a pointer here.
-struct Vault;
-typedef Vault WsVault;
 
 enum class SyncPhase { Idle, Running, Done, Error };
 
 class SyncController {
 public:
-    // config: borrowed (Session-owned); conflict_policy/safety_backup are read at start().
+    // dav/config: borrowed (Session-owned); credentials, conflict_policy and safety_backup are
+    // snapshotted at start() so Settings edits apply to the next run.
     SyncController(WsVault* vault, AccountUid uid, std::string device_id,
-                   WebDavCfg dav, std::vector<TitleInfo> titles,
+                   const OwnedWebDavCfg* dav, std::vector<TitleInfo> titles,
                    const WaystoneShellConfig* config);
     ~SyncController();
     SyncController(const SyncController&) = delete;
@@ -43,10 +42,8 @@ private:
     WsVault* vault_;
     AccountUid uid_;
     std::string device_id_;
-    std::string dav_url_;
-    std::string dav_user_;
-    std::string dav_pass_;
-    WebDavCfg dav_;
+    const OwnedWebDavCfg* dav_src_;
+    WebDavCfgCopy dav_;  // snapshot taken at start(); read only by the worker
     std::vector<TitleInfo> titles_;
     const WaystoneShellConfig* config_;
     int policy_ = 0;

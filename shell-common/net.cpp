@@ -83,7 +83,7 @@ std::string webdav_url(const WebDavCfg& cfg, const char* path) {
 // ---- Session ----
 
 // A user may type `user:pass@` into the server URL; log lines must never carry it.
-static std::string loggable_url(const std::string& url) {
+std::string webdav_loggable_url(const std::string& url) {
     char* r = ws_redact_url(url.c_str());
     std::string out = r ? r : "<url>";
     ws_string_free(r);
@@ -118,7 +118,7 @@ WebDavSession* webdav_session_begin(const WebDavCfg& cfg) {
     s->pass = cfg.pass ? cfg.pass : "";
     s->has_auth = cfg.user && cfg.pass;
     s->num_connects = 0;
-    s->log_url = loggable_url(s->base_url);
+    s->log_url = webdav_loggable_url(s->base_url);
     printf("[net] webdav session begin: %s\n", s->log_url.c_str());
     return s;
 }

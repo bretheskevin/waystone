@@ -55,12 +55,12 @@ void GamePanel::openHistory() {
     printf("[ui] game panel: open history '%s'\n", title_.name.c_str());
     auto* hc = new HistoryController(title_, session_);
     hc->start_scan();
-    OverlayActivity::push(new HistoryPanel(hc));
+    OverlayActivity::push(new HistoryPanel(hc, session_));
 }
 
 void GamePanel::openSnapshots() {
     printf("[ui] game panel: open snapshots '%s'\n", title_.name.c_str());
     auto* sc = new SnapshotsController(title_, session_->uid);
     sc->start_scan();
-    OverlayActivity::push(new SnapshotsPanel(sc));
+    OverlayActivity::push(new SnapshotsPanel(sc, session_));
 }

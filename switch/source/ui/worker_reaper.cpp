@@ -1,5 +1,6 @@
 #include "worker_reaper.h"
 #include "kit/toast.h"
+#include "session.h"
 #include <borealis.hpp>
 #include <cstdio>
 #include <vector>
@@ -50,10 +51,14 @@ void defer_reap(std::function<bool()> try_reap) {
 
 size_t worker_reaper_pending() { return reapers().size(); }
 
-bool refuse_while_reaping(const char* tag, const char* what) {
-    const size_t pending = worker_reaper_pending();
-    if (pending == 0) return false;
-    printf("%s %s refused: %zu background worker(s) still finishing\n", tag, what, pending);
-    ws_toast(WS_BACKGROUND_BUSY_TOAST);
+bool refuse_if_busy(BusyScope scope, const Session* session, const char* tag, const char* what) {
+    const bool sync    = session && session->sync_running && session->sync_running();
+    const bool busy    = session && session->sync_busy && session->sync_busy();
+    const size_t reaping = worker_reaper_pending();
+    const char* why = busy_refusal(scope, sync, busy, reaping);
+    if (!why) return false;
+    printf("%s %s refused: %s (sync=%d busy=%d reaping=%zu)\n", tag, what, why, (int)sync, (int)busy, reaping);
+    ws_toast(sync ? "Sync in progress \xe2\x80\x94 wait for it to finish"
+                  : "Finishing a background task \xe2\x80\x94 try again in a moment");
     return true;
 }

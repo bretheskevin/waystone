@@ -55,8 +55,8 @@ static std::vector<TitleInfo> make_fixture_titles() {
 }
 
 SyncController::SyncController(WsVault*, AccountUid, std::string,
-                               WebDavCfg, std::vector<TitleInfo>, const WaystoneShellConfig*)
-    : titles_(make_fixture_titles()), config_(nullptr)
+                               const OwnedWebDavCfg*, std::vector<TitleInfo>, const WaystoneShellConfig*)
+    : dav_src_(nullptr), titles_(make_fixture_titles()), config_(nullptr)
 {}
 
 SyncController::~SyncController()

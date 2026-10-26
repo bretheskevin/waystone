@@ -12,6 +12,9 @@ struct WebDavCfg {
     const char* pass;
 };
 
+// base_url with any `user:pass@` userinfo redacted — the only form allowed in log lines.
+std::string webdav_loggable_url(const std::string& url);
+
 // Build a full URL: base_url + "/" + path (strips leading / from path).
 std::string webdav_url(const WebDavCfg& cfg, const char* path);
 

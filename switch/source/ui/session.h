@@ -45,6 +45,8 @@ struct Session {
     std::string config_path;  // e.g. "sdmc:/waystone/config.json"
     // Set by the dashboard: true while a sync or conflict-scan worker (which borrows vault) runs.
     std::function<bool()> sync_busy;
+    // Set by the dashboard: true while a SyncController (Sync All or single-title) runs.
+    std::function<bool()> sync_running;
 
     Session() = default;
     Session(const Session&) = delete;
