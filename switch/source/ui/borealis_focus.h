@@ -1,6 +1,18 @@
 #pragma once
 #include <borealis.hpp>
 
+// True when |v| is |ancestor| or sits anywhere below it.
+inline bool borealis_is_descendant(brls::View* v, const brls::View* ancestor) {
+    for (; v; v = v->getParent())
+        if (v == ancestor) return true;
+    return false;
+}
+
+// True when the current focus is |ancestor| or one of its descendants.
+inline bool borealis_focus_within(const brls::View* ancestor) {
+    return borealis_is_descendant(brls::Application::getCurrentFocus(), ancestor);
+}
+
 // Walk the focus chain upward from the current focus to find which direct
 // child of |box| is focused (or is an ancestor of the focused view).
 // Returns the child's index, or 0 if nothing matches.
@@ -8,13 +20,8 @@ inline size_t borealis_focused_child_index(brls::Box* box) {
     auto* focus = brls::Application::getCurrentFocus();
     if (!focus) return 0;
     auto& ch = box->getChildren();
-    for (size_t i = 0; i < ch.size(); i++) {
-        brls::View* v = focus;
-        while (v) {
-            if (v == ch[i]) return i;
-            v = v->getParent();
-        }
-    }
+    for (size_t i = 0; i < ch.size(); i++)
+        if (borealis_is_descendant(focus, ch[i])) return i;
     return 0;
 }
 

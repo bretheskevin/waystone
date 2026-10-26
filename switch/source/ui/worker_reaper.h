@@ -10,6 +10,13 @@ void worker_reaper_start();
 void defer_reap(std::function<bool()> try_reap);  // try_reap returns true once it deleted its worker
 size_t worker_reaper_pending();
 
+// Toast shown when an action is refused until background workers have finished.
+static const char* const WS_BACKGROUND_BUSY_TOAST = "Finishing a background task \xe2\x80\x94 try again in a moment";
+
+// True (logged under `tag` + toasted) while reaped workers are still running: they may still
+// write saves or borrow the session, so `what` must wait for them.
+bool refuse_while_reaping(const char* tag, const char* what);
+
 template <typename W>
 void reap_worker(W*& worker) {
     if (!worker) return;

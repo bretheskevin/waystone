@@ -86,6 +86,14 @@ void HistoryController::scan_worker() {
     group_key_ = d.group_key;
     raw_tree_  = d.raw_tree;
 
+    if (cancel_.load()) {
+        printf("[history] scan cancelled for %s before listing\n", title_.name.c_str());
+        { std::lock_guard<std::mutex> lk(mu_); status_ = "Cancelled."; }
+        phase_.store(BrowsePhase::Idle);
+        running_.store(false);
+        return;
+    }
+
     // List remote history
     printf("[history] listing %s/history/\n", d.base_path.c_str());
     { std::lock_guard<std::mutex> lk(mu_); status_ = "Fetching history..."; }

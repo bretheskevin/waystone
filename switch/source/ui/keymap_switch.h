@@ -44,6 +44,10 @@ inline std::string ws_hint(WsAction a, const char* label_override = nullptr) {
     return ws_format_hint(a, ws_hint_style(), label_override);
 }
 
+inline std::string ws_hint_pair(WsAction a, WsAction b) {
+    return ws_format_hint_pair(a, b, ws_hint_style());
+}
+
 template <size_t N>
 inline std::string ws_hint_bar(const WsAction (&acts)[N]) {
     return ws_format_hint_bar(acts, N, ws_hint_style());

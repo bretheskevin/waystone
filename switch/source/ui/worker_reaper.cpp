@@ -1,4 +1,5 @@
 #include "worker_reaper.h"
+#include "kit/toast.h"
 #include <borealis.hpp>
 #include <cstdio>
 #include <vector>
@@ -48,3 +49,11 @@ void defer_reap(std::function<bool()> try_reap) {
 }
 
 size_t worker_reaper_pending() { return reapers().size(); }
+
+bool refuse_while_reaping(const char* tag, const char* what) {
+    const size_t pending = worker_reaper_pending();
+    if (pending == 0) return false;
+    printf("%s %s refused: %zu background worker(s) still finishing\n", tag, what, pending);
+    ws_toast(WS_BACKGROUND_BUSY_TOAST);
+    return true;
+}

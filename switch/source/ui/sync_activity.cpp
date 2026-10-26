@@ -1,28 +1,29 @@
 #include "sync_activity.h"
-#include "applet_footer_hint.h"
 #include "keymap_switch.h"
+#include "kit/toast.h"
+#include "kit/ws_scroll_frame.h"
+#include "kit/ws_views.h"
 #include "snapshot_browse.h"  // human_size
+#include <algorithm>
 #include <cstdio>
 
-static NVGcolor muted_color()   { return nvgRGB(0x71, 0x71, 0x7A); }
-static NVGcolor sync_color()    { return nvgRGB(0x3B, 0x82, 0xF6); }
-static NVGcolor success_color() { return nvgRGB(0x22, 0xC5, 0x5E); }
-static NVGcolor warning_color() { return nvgRGB(0xF5, 0x9E, 0x0B); }
-static NVGcolor error_color()   { return nvgRGB(0xEF, 0x44, 0x44); }
-static NVGcolor track_color()   { return nvgRGB(0x38, 0x38, 0x40); }
+static constexpr float LIST_MAX_H   = 200.0f;
+static constexpr float LIST_ROW_H   = 32.0f;
+static constexpr float LIST_STATE_W = 240.0f;
 
-static NVGcolor state_color(TitleState s) {
+static uint32_t state_color(TitleState s) {
     switch (s) {
-    case TitleState::Pending:  return muted_color();
-    case TitleState::Active:   return sync_color();
-    case TitleState::Conflict: return warning_color();
-    case TitleState::Failed:   return error_color();
-    default:                   return success_color();
+    case TitleState::Pending:  return WS_C_MUTED;
+    case TitleState::Active:   return WS_C_ACCENT_TEXT;
+    case TitleState::Conflict: return WS_C_WARNING;
+    case TitleState::Failed:   return WS_C_ERROR;
+    default:                   return WS_C_TEXT;
     }
 }
 
-SyncActivity::SyncActivity(SyncController* ctrl) : ctrl_(ctrl) {
+SyncActivity::SyncActivity(SyncController* ctrl) : DialogCard(WS_DIALOG_PROGRESS_W), ctrl_(ctrl) {
     printf("[ui] sync modal opened (%zu title(s))\n", ctrl_->titles().size());
+    setHint("Syncing\xe2\x80\xa6 please wait");
 }
 
 SyncActivity::~SyncActivity() {
@@ -35,105 +36,93 @@ bool SyncActivity::finished() const {
     return ph == SyncPhase::Done || ph == SyncPhase::Error;
 }
 
-brls::View* SyncActivity::createContentView() {
-    auto* frame = new brls::AppletFrame();
-    frame->setTitle("Sync");
-
-    auto* col = new brls::Box(brls::Axis::COLUMN);
-    col->setGrow(1.0f);
-    col->setPadding(24.0f, 32.0f, 16.0f, 32.0f);
-
-    title_label_ = new brls::Label();
-    title_label_->setFontSize(26.0f);
-    title_label_->setSingleLine(true);
-    title_label_->setText("Preparing\xe2\x80\xa6");
-    col->addView(title_label_);
-
-    step_label_ = new brls::Label();
-    step_label_->setFontSize(20.0f);
-    step_label_->setTextColor(sync_color());
-    step_label_->setMarginTop(8.0f);
-    col->addView(step_label_);
-
-    bytes_label_ = new brls::Label();
-    bytes_label_->setFontSize(18.0f);
-    bytes_label_->setTextColor(muted_color());
-    col->addView(bytes_label_);
-
-    bar_track_ = new brls::Box(brls::Axis::ROW);
-    bar_track_->setHeight(8.0f);
-    bar_track_->setMarginTop(16.0f);
-    bar_fill_ = new brls::Rectangle(sync_color());
-    bar_fill_->setWidth(0.0f);
-    bar_fill_->setHeight(8.0f);
-    bar_track_->addView(bar_fill_);
-    auto* rest = new brls::Rectangle(track_color());
-    rest->setHeight(8.0f);
-    rest->setGrow(1.0f);
-    bar_track_->addView(rest);
-    col->addView(bar_track_);
-
-    pct_label_ = new brls::Label();
-    pct_label_->setFontSize(18.0f);
-    pct_label_->setTextColor(muted_color());
-    pct_label_->setMarginBottom(12.0f);
-    col->addView(pct_label_);
-
-    auto* scroll = new brls::ScrollingFrame();
-    scroll->setScrollingBehavior(brls::ScrollingBehavior::NATURAL);
-    scroll->setGrow(1.0f);
-    auto* list = new brls::Box(brls::Axis::COLUMN);
+void SyncActivity::buildBody(brls::Box* body) {
     const auto& titles = ctrl_->titles();
+    const float w      = innerWidth();
+
+    title_label_ = addTitle(body, ctrl_->total_count() == 1 && !titles.empty()
+                                      ? "Syncing " + titles[0].name
+                                      : std::string("Syncing all games"));
+    title_label_->setSingleLine(true);
+    step_label_ = addDetail(body, "Preparing\xe2\x80\xa6");
+    step_label_->setSingleLine(true);
+
+    auto* track = new brls::Box(brls::Axis::ROW);
+    track->setWidth(w);
+    track->setHeight(WS_BAR_H);
+    track->setCornerRadius(WS_BAR_RADIUS);
+    track->setBackgroundColor(ws_nvg(WS_C_BAR_TRACK));
+    track->setMarginTop(WS_DIALOG_PAD / 2.0f);
+    bar_fill_ = new brls::Box(brls::Axis::ROW);
+    bar_fill_->setWidth(0.0f);
+    bar_fill_->setHeight(WS_BAR_H);
+    bar_fill_->setCornerRadius(WS_BAR_RADIUS);
+    bar_fill_->setBackgroundColor(ws_nvg(WS_C_BAR));
+    track->addView(bar_fill_);
+    body->addView(track);
+
+    auto* nums = new brls::Box(brls::Axis::ROW);
+    nums->setWidth(w);
+    nums->setMarginTop(8.0f);
+    bytes_label_ = ws_make_label(" ", WS_ROW_DETAIL_SIZE, WS_C_MUTED);
+    bytes_label_->setGrow(1.0f);
+    nums->addView(bytes_label_);
+    pct_label_ = ws_make_label("0%", WS_ROW_DETAIL_SIZE, WS_C_DETAIL);
+    nums->addView(pct_label_);
+    body->addView(nums);
+
+    WsScrollFrame* scroll = ws_make_scroll(w);
+    scroll->setHeight(std::min(LIST_MAX_H, LIST_ROW_H * (float)titles.size()));
+    scroll->setMarginTop(WS_DIALOG_PAD / 2.0f);
+    auto* list = new brls::Box(brls::Axis::COLUMN);
+    list->setWidth(w);
     for (size_t i = 0; i < titles.size(); i++) {
         auto* row = new brls::Box(brls::Axis::ROW);
         row->setFocusable(true);  // gives the list a focus target for D-pad scrolling
-        row->setPadding(6.0f, 10.0f, 6.0f, 10.0f);
-        auto* name = new brls::Label();
-        name->setText(titles[i].name);
-        name->setFontSize(20.0f);
-        name->setSingleLine(true);
-        name->setGrow(1.0f);
+        row->setWidth(w);
+        row->setHeight(LIST_ROW_H);
+        row->setAlignItems(brls::AlignItems::CENTER);
+        brls::Label* name = ws_make_label(titles[i].name, WS_DIALOG_DETAIL_SIZE, WS_C_TEXT);
+        name->setWidth(w - LIST_STATE_W);
         row->addView(name);
-        auto* state = new brls::Label();
-        state->setFontSize(18.0f);
-        state->setSingleLine(true);
-        state->setText(title_state_label(TitleState::Pending));
-        state->setTextColor(state_color(TitleState::Pending));
+        brls::Label* state = ws_make_label(title_state_label(TitleState::Pending), WS_ROW_DETAIL_SIZE,
+                                           state_color(TitleState::Pending));
+        state->setWidth(LIST_STATE_W);
+        state->setHorizontalAlign(brls::HorizontalAlign::RIGHT);
         row->addView(state);
         list->addView(row);
         state_labels_.push_back(state);
         shown_states_.push_back(-1);
     }
     scroll->setContentView(list);
-    col->addView(scroll);
+    body->addView(scroll);
 
-    frame->setContentView(col);
-    footer_ = set_footer_hint(frame, "Syncing\xe2\x80\xa6 please wait");
-    return frame;
+    root()->registerAction(ws_label(WsAction::Back), ws_brls(WsAction::Back), [this](brls::View*) {
+        close_if_finished("B");
+        return true;
+    });
+    root()->registerAction(ws_label(WsAction::Continue), ws_brls(WsAction::Continue), [this](brls::View*) {
+        close_if_finished("A");
+        return true;
+    });
 }
 
 void SyncActivity::onContentAvailable() {
     poll_timer_.setCallback([this]() { poll(); });
     poll_timer_.start(100);
-    registerAction(ws_label(WsAction::Back), ws_brls(WsAction::Back), [this](brls::View*) {
-        close_if_finished("B");
-        return true;
-    });
-    registerAction(ws_label(WsAction::Continue), ws_brls(WsAction::Continue), [this](brls::View*) {
-        close_if_finished("A");
-        return true;
-    });
     poll();
 }
 
 void SyncActivity::close_if_finished(const char* why) {
+    if (isClosing()) return;
     if (!finished()) {
         printf("[ui] sync modal: %s ignored -- sync still running\n", why);
         return;
     }
     printf("[ui] sync modal dismissed (%s)\n", why);
     poll_timer_.stop();
-    brls::Application::popActivity();
+    std::string headline = ctrl_->status();
+    close([headline] { ws_toast(headline); });
 }
 
 void SyncActivity::poll() {
@@ -146,23 +135,24 @@ void SyncActivity::poll() {
         const char* label = (r.state == TitleState::Failed && !r.reason.empty())
                             ? r.reason.c_str() : title_state_label(r.state);
         state_labels_[i]->setText(label);
-        state_labels_[i]->setTextColor(state_color(r.state));
+        state_labels_[i]->setTextColor(ws_nvg(state_color(r.state)));
     }
 
-    const float track_w = bar_track_ ? bar_track_->getWidth() : 0.0f;
+    const float track_w = innerWidth();
     if (!finished()) {
         int idx = ctrl_->current_index();
         const auto& titles = ctrl_->titles();
-        title_label_->setText(idx >= 0 && idx < (int)titles.size() ? titles[(size_t)idx].name
-                                                                  : std::string("Preparing\xe2\x80\xa6"));
-        step_label_->setText(ctrl_->step());
+        std::string step = ctrl_->step();
+        if (idx >= 0 && idx < (int)titles.size() && ctrl_->total_count() != 1)
+            step = titles[(size_t)idx].name + (step.empty() ? "" : " \xc2\xb7 " + step);
+        step_label_->setText(step.empty() ? std::string("Preparing\xe2\x80\xa6") : step);
+        // Empty single-line labels break the borealis layout: hide instead of clearing.
         size_t got = ctrl_->bytes_got(), total = ctrl_->bytes_total();
+        ws_show(bytes_label_, got > 0 || total > 0);
         if (got > 0 || total > 0)
             bytes_label_->setText(total > 0 ? human_size(got) + " / " + human_size(total) : human_size(got));
-        else
-            bytes_label_->setText("");
         float p = ctrl_->progress();
-        if (track_w > 0.0f) bar_fill_->setWidth(track_w * p);
+        bar_fill_->setWidth(track_w * p);
         pct_label_->setText(std::to_string((int)(p * 100.0f + 0.5f)) + "%");
         return;
     }
@@ -172,15 +162,16 @@ void SyncActivity::poll() {
     bool problems = false;
     for (size_t i = 0; i < results.size(); i++)
         if (results[i].state == TitleState::Failed || results[i].state == TitleState::Conflict) problems = true;
-    NVGcolor c = ctrl_->phase() == SyncPhase::Error ? error_color()
-               : (problems ? warning_color() : success_color());
+    const bool error   = ctrl_->phase() == SyncPhase::Error;
+    auto outcome_color = [&](uint32_t ok) { return ws_nvg(error ? WS_C_ERROR : (problems ? WS_C_WARNING : ok)); };
+    title_label_->setSingleLine(false);
     title_label_->setText(ctrl_->status());   // headline ("Done — …") or the Error message
-    title_label_->setTextColor(c);
-    step_label_->setText("");
-    bytes_label_->setText("");
-    if (track_w > 0.0f) bar_fill_->setWidth(track_w);
-    bar_fill_->setColor(c);
+    title_label_->setTextColor(outcome_color(WS_C_TEXT));
+    step_label_->setVisibility(brls::Visibility::GONE);
+    ws_show(bytes_label_, false);
+    bar_fill_->setWidth(track_w);
+    bar_fill_->setBackgroundColor(outcome_color(WS_C_BAR));
     pct_label_->setText("100%");
-    if (footer_) footer_->setText(ws_hint(WsAction::Continue) + "  " + ws_hint(WsAction::Back));
+    setHint(ws_hint(WsAction::Continue));
     printf("[ui] sync modal finished: %s\n", ctrl_->status().c_str());
 }

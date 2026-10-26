@@ -43,7 +43,7 @@ struct Session {
     OwnedWebDavCfg dav;
     WaystoneShellConfig config;
     std::string config_path;  // e.g. "sdmc:/waystone/config.json"
-    // Set by the dashboard: true while a Sync All / single-title sync worker is running.
+    // Set by the dashboard: true while a sync or conflict-scan worker (which borrows vault) runs.
     std::function<bool()> sync_busy;
 
     Session() = default;

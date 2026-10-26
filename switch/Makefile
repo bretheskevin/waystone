@@ -39,7 +39,7 @@ ifeq ($(CONSOLE),1)
 SOURCES		:=	source ../shell-common
 EXCLUDES	:=	source/app_main.cpp source/net_status.cpp ../shell-common/test_wsconfig.cpp
 else
-SOURCES		:=	source source/ui ../shell-common
+SOURCES		:=	source source/ui source/ui/kit ../shell-common
 EXCLUDES	:=	source/main.cpp ../shell-common/test_wsconfig.cpp
 ROMFS_ASSETS	:=	romfs-assets
 BOREALIS_PATCH	:=	borealis-patch

@@ -172,28 +172,34 @@ OBJS+=( $(cxx "$BRL/lib/extern/yoga/src/yoga/YGValue.cpp"                       
 OBJS+=( $(cxx "$BRL/lib/extern/yoga/src/yoga/Yoga.cpp"                                 brls_yoga) )
 
 # ---------------------------------------------------------------------------
-# Waystone wizard UI files (compiled read-only from switch/source/ui/)
+# Waystone UI files: every $UI/*.cpp and $UI/kit/*.cpp except EXCLUDE (stubbed
+# in $PREVIEW/stubs/ or Switch-only). New UI/kit files need no edit here.
 # ---------------------------------------------------------------------------
-echo "=== Compiling wizard UI ===" >&2
-OBJS+=( $(cxx "$UI/applet_footer_hint.cpp"      ws_applet_footer_hint) )
-OBJS+=( $(cxx "$UI/confirm_banner.cpp"          ws_confirm_banner) )
-OBJS+=( $(cxx "$UI/wizard.cpp"                  ws_wizard) )
-OBJS+=( $(cxx "$UI/wizard_activity.cpp"         ws_wizard_activity) )
-OBJS+=( $(cxx "$UI/setup_activity.cpp"          ws_setup_activity) )
-OBJS+=( $(cxx "$UI/unlock_activity.cpp"         ws_unlock_activity) )
-OBJS+=( $(cxx "$UI/recovery_key_activity.cpp"   ws_recovery_key_activity) )
-OBJS+=( $(cxx "$UI/no_internet_activity.cpp"    ws_no_internet_activity) )
-OBJS+=( $(cxx "$UI/loading_activity.cpp"        ws_loading_activity) )
-OBJS+=( $(cxx "$UI/conflicts_activity.cpp"      ws_conflicts_activity) )
-OBJS+=( $(cxx "$UI/worker_reaper.cpp"           ws_worker_reaper) )
-OBJS+=( $(cxx "$UI/history_activity.cpp"        ws_history_activity) )
-OBJS+=( $(cxx "$UI/sync_activity.cpp"           ws_sync_activity) )
-OBJS+=( $(cxx "$UI/theme_tint.cpp"              ws_theme_tint) )
-# Real TitleListActivity — compiled from source so the dashboard preview is faithful.
-OBJS+=( $(cxx "$UI/title_list_activity.cpp"     ws_title_list_activity) )
+EXCLUDE=(
+    swkbd_util vault_helpers
+    conflict_controller history_controller sync_controller snapshots_controller update_controller
+)
+is_excluded() {
+    local name="$1" e
+    for e in "${EXCLUDE[@]}"; do [ "$e" = "$name" ] && return 0; done
+    return 1
+}
+
+echo "=== Compiling Waystone UI ===" >&2
+for src in "$UI"/*.cpp; do
+    name="$(basename "$src" .cpp)"
+    is_excluded "$name" && { echo "  [SKIP] ${name} (stubbed/Switch-only)" >&2; continue; }
+    OBJS+=( $(cxx "$src" "ws_${name}") )
+done
+for src in "$UI"/kit/*.cpp; do
+    [ -e "$src" ] || continue
+    name="$(basename "$src" .cpp)"
+    is_excluded "$name" && { echo "  [SKIP] kit/${name} (stubbed/Switch-only)" >&2; continue; }
+    OBJS+=( $(cxx "$src" "ws_kit_${name}") )
+done
 
 # ---------------------------------------------------------------------------
-# shell-common TUs referenced by the compiled UI (history_activity -> human_timestamp).
+# shell-common TUs referenced by the compiled UI (panels/panes -> human_timestamp).
 # Add any later shared .cpp the compiled UI files reference here as well.
 # ---------------------------------------------------------------------------
 echo "=== Compiling shell-common ===" >&2
@@ -201,28 +207,24 @@ OBJS+=( $(cxx "$SHELL_COMMON/snapshot_browse.cpp" sc_snapshot_browse) )
 OBJS+=( $(cxx "$SHELL_COMMON/snapshot.cpp"        sc_snapshot) )
 OBJS+=( $(cxx "$SHELL_COMMON/file_tree.cpp"       sc_file_tree) )
 OBJS+=( $(cxx "$SHELL_COMMON/sync_summary.cpp"    sc_sync_summary) )
-# rom_system_badge is called by title_list_activity.cpp for ROM rows.
+# rom_system_badge is called by games_pane.cpp / dashboard_model.h for ROM tiles.
 OBJS+=( $(cxx "$SHELL_COMMON/rom_parse.cpp"       sc_rom_parse) )
+# read_keys_file is called by settings_pane.cpp (log out -> UnlockActivity).
+OBJS+=( $(cxx "$SHELL_COMMON/keys_file.cpp"       sc_keys_file) )
 
 # ---------------------------------------------------------------------------
 # Preview stubs (replace Switch-only or complex real implementations)
 # ---------------------------------------------------------------------------
 echo "=== Compiling preview stubs ===" >&2
-OBJS+=( $(cxx "$PREVIEW/stubs/swkbd_stub.cpp"           stub_swkbd) )
-OBJS+=( $(cxx "$PREVIEW/stubs/vault_helpers_stub.cpp"   stub_vault_helpers) )
-OBJS+=( $(cxx "$PREVIEW/stubs/ws_ffi_stub.cpp"          stub_ws_ffi) )
-OBJS+=( $(cxx "$PREVIEW/stubs/saves_stub.cpp"           stub_saves) )
-OBJS+=( $(cxx "$PREVIEW/stubs/wsconfig_stub.cpp"        stub_wsconfig) )
-OBJS+=( $(cxx "$PREVIEW/stubs/net_status_stub.cpp"      stub_net_status) )
-OBJS+=( $(cxx "$PREVIEW/stubs/session_store_stub.cpp"   stub_session_store) )
-OBJS+=( $(cxx "$PREVIEW/stubs/conflict_controller_stub.cpp" stub_conflict_controller) )
-OBJS+=( $(cxx "$PREVIEW/stubs/history_controller_stub.cpp"  stub_history_controller) )
-OBJS+=( $(cxx "$PREVIEW/stubs/sync_controller_stub.cpp"     stub_sync_controller) )
-OBJS+=( $(cxx "$PREVIEW/stubs/snapshots_controller_stub.cpp" stub_snapshots_controller) )
-OBJS+=( $(cxx "$PREVIEW/stubs/snapshots_activity_stub.cpp"   stub_snapshots_activity) )
-OBJS+=( $(cxx "$PREVIEW/stubs/settings_activity_stub.cpp"    stub_settings_activity) )
+for src in "$PREVIEW"/stubs/*.cpp; do
+    OBJS+=( $(cxx "$src" "stub_$(basename "$src" .cpp)") )
+done
 
-# Preview entry point
+# Preview modes (self-registering, see modes/registry.h) + entry point
+echo "=== Compiling preview modes ===" >&2
+for src in "$PREVIEW"/modes/*.cpp; do
+    OBJS+=( $(cxx "$src" "mode_$(basename "$src" .cpp)") )
+done
 OBJS+=( $(cxx "$PREVIEW/main.cpp" preview_main) )
 
 # ---------------------------------------------------------------------------

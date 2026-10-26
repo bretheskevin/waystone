@@ -4,6 +4,7 @@
  * the preview build can compile engine headers without the Switch SDK.
  */
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 
 /* Basic libnx integer aliases */
@@ -22,3 +23,13 @@ typedef uint32_t Result;
 
 /* Account UID (128-bit opaque identifier) */
 typedef struct { u8 uid[16]; } AccountUid;
+
+/* hbloader next-load (settings restart-after-update); defined in stubs/update_controller_stub.cpp */
+#ifdef __cplusplus
+extern "C" {
+#endif
+bool envHasNextLoad(void);
+Result envSetNextLoad(const char* path, const char* argv);
+#ifdef __cplusplus
+}
+#endif

@@ -10,12 +10,15 @@
 class SnapshotsController {
 public:
     SnapshotsController(TitleInfo title, AccountUid uid);
-    ~SnapshotsController();
+    ~SnapshotsController();  // joins: only deleted via reap_worker once !is_running()
     SnapshotsController(const SnapshotsController&) = delete;
     SnapshotsController& operator=(const SnapshotsController&) = delete;
 
     void start_scan();
     void start_restore(size_t index);
+    // No-op: the scan is one local listing and a restore must never stop mid-write.
+    void request_cancel() {}
+    bool is_running() const { return running_.load(); }
     void join();
 
     BrowsePhase phase() const;

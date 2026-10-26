@@ -59,6 +59,19 @@ static void test_no_button_clash_per_screen() {
     CHECK_SCREEN(no_internet);
     CHECK_SCREEN(sync_progress);
     CHECK_SCREEN(loading_error);
+    static const A sw_sidebar[]        = { A::Select, A::SyncAll, A::Quit };
+    static const A sw_grid[]           = { A::OpenGame, A::JumpUp, A::JumpDown, A::SyncAll,
+                                           A::Back, A::Quit };
+    static const A sw_conflicts_pane[] = { A::KeepLocal, A::KeepRemote, A::Back, A::Quit };
+    static const A sw_settings_pane[]  = { A::Select, A::Back, A::Quit };
+    static const A sw_game_panel[]     = { A::Select, A::Back };
+    static const A sw_browse_panel[]   = { A::Restore, A::Back };
+    CHECK_SCREEN(sw_sidebar);
+    CHECK_SCREEN(sw_grid);
+    CHECK_SCREEN(sw_conflicts_pane);
+    CHECK_SCREEN(sw_settings_pane);
+    CHECK_SCREEN(sw_game_panel);
+    CHECK_SCREEN(sw_browse_panel);
     printf("test_no_button_clash_per_screen PASSED\n");
 }
 
@@ -75,6 +88,12 @@ static void test_decided_bindings() {
     assert(ws_button(WsAction::ToggleRecovery)== WsButton::Y);
     assert(ws_button(WsAction::Confirm)       == WsButton::A);
     assert(ws_button(WsAction::Cancel)        == WsButton::B);
+    assert(ws_button(WsAction::OpenGame)      == WsButton::A);
+    assert(ws_button(WsAction::JumpUp)        == WsButton::L);
+    assert(ws_button(WsAction::JumpDown)      == WsButton::R);
+    assert(strcmp(ws_label(WsAction::OpenGame), "Open") == 0);
+    assert(strcmp(ws_label(WsAction::JumpUp), "Jump") == 0);
+    assert(strcmp(ws_label(WsAction::JumpDown), "Jump") == 0);
     assert(strcmp(ws_label(WsAction::SyncAll), "Sync All") == 0);
     assert(strcmp(ws_label(WsAction::WizardPrev), ws_label(WsAction::WizardPrevAlt)) == 0);
     printf("test_decided_bindings PASSED\n");
@@ -85,6 +104,7 @@ static const char* fake_glyph(WsButton b) {
     case WsButton::A: return "<A>";
     case WsButton::B: return "<B>";
     case WsButton::R: return "<R>";
+    case WsButton::L: return "<L>";
     default:          return "<?>";
     }
 }
@@ -100,11 +120,18 @@ static void test_format_hint() {
     printf("test_format_hint PASSED\n");
 }
 
+static void test_format_hint_pair() {
+    WsHintStyle st = { &fake_glyph, ": ", " | " };
+    assert(ws_format_hint_pair(WsAction::JumpUp, WsAction::JumpDown, st) == "<L> <R>: Jump");
+    printf("test_format_hint_pair PASSED\n");
+}
+
 int main() {
     test_every_action_has_binding();
     test_no_button_clash_per_screen();
     test_decided_bindings();
     test_format_hint();
+    test_format_hint_pair();
     printf("ALL keymap tests PASSED\n");
     return 0;
 }

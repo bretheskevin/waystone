@@ -10,6 +10,7 @@ enum class WsAction {
     KeepLocal, KeepRemote, Restore,
     WizardEdit, WizardNext, WizardPrev, WizardPrevAlt,
     ToggleRecovery, Retry, ExitApp, Continue, Update, Quit,
+    OpenGame, JumpUp, JumpDown,
     Count
 };
 
@@ -43,6 +44,9 @@ inline const WsBinding* ws_binding_table() {
         { WsAction::Continue,       WsButton::A,      "Continue" },
         { WsAction::Update,         WsButton::A,      "Update now" },
         { WsAction::Quit,           WsButton::Start,  "Quit" },
+        { WsAction::OpenGame,       WsButton::A,      "Open" },
+        { WsAction::JumpUp,         WsButton::L,      "Jump" },
+        { WsAction::JumpDown,       WsButton::R,      "Jump" },
     };
     static_assert(sizeof(table) / sizeof(table[0]) == WS_ACTION_COUNT,
                   "keymap table must cover every WsAction");
@@ -64,6 +68,15 @@ inline std::string ws_format_hint(WsAction a, const WsHintStyle& st, const char*
     std::string s = st.glyph(ws_button(a));
     s += st.glyph_sep;
     s += (label_override && label_override[0]) ? label_override : ws_label(a);
+    return s;
+}
+
+inline std::string ws_format_hint_pair(WsAction a, WsAction b, const WsHintStyle& st) {
+    std::string s = st.glyph(ws_button(a));
+    s += " ";
+    s += st.glyph(ws_button(b));
+    s += st.glyph_sep;
+    s += ws_label(a);
     return s;
 }
 

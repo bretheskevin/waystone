@@ -12,12 +12,15 @@
 class HistoryController {
 public:
     HistoryController(TitleInfo title, Session* session);
-    ~HistoryController();
+    ~HistoryController();  // joins: only deleted via reap_worker once !is_running()
     HistoryController(const HistoryController&) = delete;
     HistoryController& operator=(const HistoryController&) = delete;
 
     void start_scan();
     void start_restore(size_t index);
+    // Stops a scan before its history listing; a running restore always completes.
+    void request_cancel() { cancel_.store(true); }
+    bool is_running() const { return running_.load(); }
     void join();
 
     BrowsePhase phase() const;
@@ -30,6 +33,7 @@ private:
     Session* session_;  // borrowed, not owned
     std::atomic<BrowsePhase> phase_{BrowsePhase::Idle};
     std::atomic<bool> running_{false};
+    std::atomic<bool> cancel_{false};
     mutable std::mutex mu_;
     std::string status_;
     std::vector<HistoryEntry> entries_;

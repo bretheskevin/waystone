@@ -48,8 +48,12 @@ std::string human_timestamp(const std::string& ts) {
     if (!d.empty() && d.back() == 'Z') d.pop_back();
     size_t dot = d.find('.');
     if (dot != std::string::npos) d.resize(dot);
-    if (d.size() < 15 || d[8] != 'T') return ts;
     char buf[32];
+    if (d.size() >= 16 && d[4] == '-' && d[7] == '-' && d[10] == 'T' && d[13] == ':') {
+        snprintf(buf, sizeof(buf), "%.10s %.5s", d.c_str(), d.c_str() + 11);
+        return buf;
+    }
+    if (d.size() < 15 || d[8] != 'T') return ts;
     snprintf(buf, sizeof(buf), "%.4s-%.2s-%.2s %.2s:%.2s",
              d.c_str(), d.c_str() + 4, d.c_str() + 6, d.c_str() + 9,
              d.c_str() + 11);

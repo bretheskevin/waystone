@@ -10,6 +10,7 @@
 #include "sync_controller.h"
 
 bool g_preview_sync_running = false;
+bool g_preview_sync_done = false;  // finished run with mixed outcomes (sync-dialog-done)
 
 // Placeholder icon path — resolved relative to switch/preview/ where the
 // preview binary runs, matching BRLS_RESOURCES="./resources/".
@@ -43,6 +44,13 @@ static std::vector<TitleInfo> make_fixture_titles() {
     add(0x0100ABF008968000ULL, "Metroid Dread");
     add(0x01004D300C5AE000ULL, "Fire Emblem: Three Houses");
     add(0x0100152000022000ULL, "Splatoon 3");
+    add(0x0100C2500FC20000ULL, "Splatoon 2");
+    add(0x01006A800016E000ULL, "Super Smash Bros. Ultimate");
+    add(0x0100E95004038000ULL, "Xenoblade Chronicles 3");
+    add(0x01008F6008C5E000ULL, "Pikmin 4");
+    add(0x0100A5C00D162000ULL, "Kirby and the Forgotten Land");
+    add_rom("gba", "Pokemon Emeraude", false);
+    add_rom("snes", "Super Metroid", false);
     return v;
 }
 
@@ -59,17 +67,26 @@ void SyncController::join() {}
 
 SyncPhase SyncController::phase() const
 {
+    if (g_preview_sync_done) return SyncPhase::Done;
     return g_preview_sync_running ? SyncPhase::Running : SyncPhase::Idle;
 }
 
 std::string SyncController::status() const
 {
+    if (g_preview_sync_done) return format_sync_headline(results());
     return g_preview_sync_running ? "Syncing 3/8" : "Idle";
 }
 
 std::vector<TitleResult> SyncController::results() const
 {
     std::vector<TitleResult> r(titles_.size());
+    if (g_preview_sync_done) {
+        static const TitleState done[] = {TitleState::InSync, TitleState::Uploaded, TitleState::Downloaded,
+                                          TitleState::Conflict, TitleState::Failed};
+        for (size_t i = 0; i < r.size(); i++) r[i].state = done[i % 5];
+        if (r.size() > 4) r[4].reason = "Network timeout";
+        return r;
+    }
     if (g_preview_sync_running && r.size() > 2) {
         r[0].state = TitleState::InSync;
         r[1].state = TitleState::InSync;

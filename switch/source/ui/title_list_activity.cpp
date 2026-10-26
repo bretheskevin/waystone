@@ -1,45 +1,62 @@
 #include "title_list_activity.h"
-#include "applet_footer_hint.h"
-#include "keymap_switch.h"
-#include "settings_activity.h"
-#include "conflicts_activity.h"
-#include "conflict_controller.h"
-#include "no_internet_activity.h"
-#include "net_status.h"
-#include "snapshots_controller.h"
-#include "snapshots_activity.h"
-#include "history_controller.h"
-#include "history_activity.h"
 #include "borealis_focus.h"
-#include "version.h"
-#include "rom_parse.h"
+#include "conflicts_pane.h"
+#include "game_panel.h"
+#include "games_pane.h"
+#include "keymap_switch.h"
+#include "net_status.h"
+#include "no_internet_activity.h"
+#include "settings_pane.h"
+#include "sync_activity.h"
+#include "worker_reaper.h"
+#include "kit/icon_sidebar.h"
+#include "kit/shell_frame.h"
+#include "kit/title_grid.h"
+#include "kit/toast.h"
 #include <cstdio>
 
-// Muted color for status line (matches wizard footer hints).
-static NVGcolor muted_color() { return nvgRGB(0x71, 0x71, 0x7A); }
+static constexpr int POLL_MS = 200;
 
-// Placeholder icon color when a title has no icon JPEG cached.
-static NVGcolor placeholder_icon_color() { return nvgRGB(0x38, 0x38, 0x40); }
-
-// Deterministic per-system tint for ROM placeholder tiles (fallback when no banner/box art).
-static NVGcolor rom_placeholder_color(const std::string& system) {
-    return nvgHSL((float)(rom_fnv1a(system) % 360) / 360.0f, 0.45f, 0.42f);
+static const char* section_name(Section s) {
+    switch (s) {
+    case Section::Games:     return "games";
+    case Section::Emulator:  return "emulator";
+    case Section::Conflicts: return "conflicts";
+    case Section::Settings:  return "settings";
+    }
+    return "?";
 }
 
-static const float ICON_SIZE     = 48.0f;
-static const float ROW_PADDING   = 5.0f;   // top/bottom only; left/right use ROW_H_PADDING
-static const float ROW_H_PADDING = 10.0f;  // left/right padding for row
-static const float ROW_GAP       = 12.0f;  // space between icon and name
+static bool same_title(const TitleInfo& a, const TitleInfo& b) {
+    if (a.source != b.source) return false;
+    return a.source == SourceRom ? a.rom_id == b.rom_id : a.title_id == b.title_id;
+}
 
-static const WsAction DASHBOARD_ACTIONS[] = {
-    WsAction::SyncGame, WsAction::SyncAll, WsAction::OpenConflicts,
-    WsAction::OpenSettings, WsAction::OpenSnapshots, WsAction::OpenHistory };
+namespace {
+
+// Hosts the four panes (one VISIBLE, the rest GONE). Box focus routing doesn't skip GONE
+// children, so focus enters the active pane only and never moves between panes.
+class PaneHost : public brls::Box {
+  public:
+    explicit PaneHost(std::function<brls::View*()> active) : active_(std::move(active)) {}
+    brls::View* getDefaultFocus() override {
+        brls::View* pane = active_();
+        return pane ? pane->getDefaultFocus() : nullptr;
+    }
+    brls::View* getNextFocus(brls::FocusDirection, brls::View*) override { return nullptr; }
+
+  private:
+    std::function<brls::View*()> active_;
+};
+
+}
 
 TitleListActivity::TitleListActivity(SyncController* ctrl, Session* session)
-    : ctrl_(ctrl), session_(session) {}
+    : ctrl_(ctrl), session_(session), results_(ctrl->titles().size()) {}
 
 TitleListActivity::~TitleListActivity() {
     session_->sync_busy = nullptr;
+    pump_.stop();
     poll_timer_.stop();
     if (single_ctrl_) { single_ctrl_->join(); delete single_ctrl_; }
     if (ctrl_) { ctrl_->join(); delete ctrl_; }
@@ -47,302 +64,295 @@ TitleListActivity::~TitleListActivity() {
 
 brls::View* TitleListActivity::createContentView() {
     printf("[ui] dashboard createContentView: start\n");
-
-    auto* frame = new brls::AppletFrame();
-    frame->setTitle("Waystone");
-
-    // Root column fills the AppletFrame content area.
-    // FIX 2: NO horizontal padding on col — ScrollingFrame::onLayout() positions its
-    // detached contentView at (scroll->getX(), scroll->getY()), so if scroll is inside
-    // a padded col it inherits the col's x offset but NOT the padding as an x shift
-    // in the detached layout (detachedOriginX ends up 0). Instead: col has only
-    // top/bottom padding; each widget gets its own 32px left margin.
-    auto* col = new brls::Box(brls::Axis::COLUMN);
-    col->setGrow(1.0f);
-    col->setPadding(24.0f, 0.0f, 16.0f, 0.0f);
-
-    // Status row — muted status line (grow) + version label pinned to the right,
-    // mirroring the 3DS title list's corner version label.
-    auto* status_row = new brls::Box(brls::Axis::ROW);
-    status_row->setMarginLeft(32.0f);
-    status_row->setMarginRight(32.0f);
-    status_row->setMarginBottom(12.0f);
-
-    status_label_ = new brls::Label();
-    status_label_->setText("Idle \xc2\xb7 0 games");
-    status_label_->setFontSize(18.0f);
-    status_label_->setTextColor(muted_color());
-    status_label_->setSingleLine(true);
-    status_label_->setGrow(1.0f);
-    status_row->addView(status_label_);
-
-    auto* version_label = new brls::Label();
-    version_label->setText(std::string("v") + WS_APP_VERSION);
-    version_label->setFontSize(18.0f);
-    version_label->setTextColor(muted_color());
-    version_label->setSingleLine(true);
-    status_row->addView(version_label);
-
-    col->addView(status_row);
-
-    // Sync all button — primary style, d-pad focusable.
-    auto* sync_btn = new brls::Button();
-    sync_btn->setStyle(&brls::BUTTONSTYLE_PRIMARY);
-    sync_btn->setText(ws_label(WsAction::SyncAll));
-    sync_btn->setMarginLeft(32.0f);
-    sync_btn->setMarginRight(32.0f);
-    sync_btn->setMarginBottom(20.0f);
-    // White label: set AFTER setStyle (applyStyle() overwrites via style->enabledLabelColor).
-    // Button::label is private; access via getChildren()[0] which is the Label from XML.
-    if (!sync_btn->getChildren().empty())
-        static_cast<brls::Label*>(sync_btn->getChildren()[0])->setTextColor(nvgRGB(255, 255, 255));
-    sync_btn->registerClickAction([this](brls::View*) { start_sync_or_gate(); return true; });
-    col->addView(sync_btn);
-
-    // Scrollable game list.
-    auto* scroll = new brls::ScrollingFrame();
-    scroll->setScrollingBehavior(brls::ScrollingBehavior::NATURAL);
-    scroll->setGrow(1.0f);
-
-    title_list_box_ = new brls::Box(brls::Axis::COLUMN);
-    title_list_box_->setGrow(1.0f);
-    // FIX 2: Horizontal padding 32px on the detached contentView so rows line up with
-    // the header widgets (status_label_, sync_btn both have marginLeft=32). The minWidth
-    // is set in onContentAvailable() once we know the AppletFrame's laid-out width.
-    title_list_box_->setPadding(0.0f, 32.0f, 0.0f, 32.0f);
-
     const auto& titles = ctrl_->titles();
-    for (size_t i = 0; i < titles.size(); i++) {
-        const auto& t = titles[i];
 
-        auto* row = new brls::Box(brls::Axis::ROW);
-        row->setFocusable(true);
-        row->setPadding(ROW_PADDING, ROW_H_PADDING, ROW_PADDING, ROW_H_PADDING);
-        row->setAlignItems(brls::AlignItems::CENTER);
+    frame_ = new ShellFrame("Waystone");
+    auto* row = new brls::Box(brls::Axis::ROW);
 
-        // Icon slot: fixed-size parent Box + auto Image with FIT, mirroring title_icon.
-        // BUG 1 fix: Image with auto dimensions (no setWidth/setHeight on the Image)
-        // inside a fixed-size parent already in the tree. setImageFromFile runs AFTER
-        // addView, so imageMeasureFunc sees the parent's 48×48 exact constraints instead
-        // of UNDEFINED → correct pixel dims → clean NVG paint on deko3d.
-        // FIT mode: 256×256 source inside AtMost(48,48) → 48×48 square (1:1 aspect).
-        // setWidth/setHeight used on icon_box (they call invalidate); NOT setDimensions.
-        auto* icon_box = new brls::Box(brls::Axis::COLUMN);
-        icon_box->setWidth(ICON_SIZE);
-        icon_box->setHeight(ICON_SIZE);
-        icon_box->setGrow(0.0f);
-        icon_box->setShrink(0.0f);
-        icon_box->setJustifyContent(brls::JustifyContent::CENTER);
-        icon_box->setAlignItems(brls::AlignItems::CENTER);
-        icon_box->setMarginRight(ROW_GAP);
-        row->addView(icon_box);  // parent in tree first
+    sidebar_ = new IconSidebar();
+    sidebar_->setHeight(WS_CONTENT_H);
+    sidebar_->addItem(WS_ICON_GAMES, "Games");
+    sidebar_->addItem(WS_ICON_EMULATOR, "Emulator");
+    sidebar_->addItem(WS_ICON_CONFLICTS, "Conflicts");
+    sidebar_->addItem(WS_ICON_SETTINGS, "Settings");
+    sidebar_->setActive(static_cast<size_t>(Section::Games));
+    sidebar_->setOnFocusItem([this](size_t item) {
+        const Section s = static_cast<Section>(item);
+        if (s == target_) return;
+        printf("[ui] dashboard: sidebar focus -> %s (pane swap scheduled)\n", section_name(s));
+        target_ = s;
+        sidebar_->setActive(item);
+        pump_.schedule();
+    });
+    sidebar_->registerAction(ws_label(WsAction::Select), ws_brls(WsAction::Select), [this](brls::View*) {
+        enter_pane();
+        return true;
+    });
+    row->addView(sidebar_);
 
-        bool icon_loaded = false;
-        if (!t.icon_path.empty()) {
-            auto* img = new brls::Image();
-            // STRETCH fills the icon_box exactly; FIT cropped square icons at non-zero screen x.
-            img->setScalingType(brls::ImageScalingType::STRETCH);
-            icon_box->addView(img);  // in tree first: correct Yoga constraints
-            try {
-                img->setImageFromFile(t.icon_path);
-                icon_loaded = true;
-            } catch (...) {
-                printf("[ui] dashboard: icon load failed for '%s' (%s), using placeholder\n",
-                       t.name.c_str(), t.icon_path.c_str());
-                icon_box->removeView(img);  // img deleted by removeView
-            }
-        }
-        if (!icon_loaded) {
-            auto* placeholder = new brls::Rectangle(t.source == SourceRom
-                                                        ? rom_placeholder_color(t.system)
-                                                        : placeholder_icon_color());
-            placeholder->setWidth(ICON_SIZE);
-            placeholder->setHeight(ICON_SIZE);
-            icon_box->addView(placeholder);
-        }
+    // Entering the host (Right / Select) applies a pane swap the pump has not run yet.
+    host_ = new PaneHost([this] {
+        apply_section();
+        return pane_view(shown_);
+    });
+    host_->setMarginLeft(WS_PANE_X - WS_SIDEBAR_W);
+    host_->setWidth(WS_PANE_W);
+    host_->setHeight(WS_CONTENT_H);
+    host_->registerAction(ws_label(WsAction::Back), ws_brls(WsAction::Back), [this](brls::View*) {
+        printf("[ui] dashboard: back -> sidebar (%s)\n", section_name(shown_));
+        brls::Application::giveFocus(sidebar_);
+        return true;
+    });
 
-        // Game name — grows to fill remaining width.
-        auto* name_label = new brls::Label();
-        name_label->setText(t.name);
-        name_label->setFontSize(20.0f);
-        name_label->setSingleLine(true);
-        name_label->setGrow(1.0f);
-        row->addView(name_label);
-
-        if (t.source == SourceRom) {
-            auto* badge = new brls::Label();
-            badge->setText(rom_system_badge(t.system));
-            badge->setFontSize(14.0f);
-            badge->setTextColor(muted_color());
-            badge->setSingleLine(true);
-            badge->setMarginLeft(ROW_GAP);
-            row->addView(badge);
-        }
-
-        title_list_box_->addView(row);
+    auto on_open = [this](const TitleInfo& t) { open_game(t); };
+    games_ = new GamesPane(titles, Section::Games);
+    games_->setOnOpen(on_open);
+    emulator_ = new GamesPane(titles, Section::Emulator);
+    emulator_->setOnOpen(on_open);
+    conflicts_ = new ConflictsPane(session_, titles);
+    settings_  = new SettingsPane(session_);
+    for (brls::Box* pane : {static_cast<brls::Box*>(games_), static_cast<brls::Box*>(emulator_),
+                            static_cast<brls::Box*>(conflicts_), static_cast<brls::Box*>(settings_)}) {
+        if (pane != games_) pane->setVisibility(brls::Visibility::GONE);
+        host_->addView(pane);
     }
+    row->addView(host_);
 
-    scroll->setContentView(title_list_box_);
-    col->addView(scroll);
-
-    frame->setContentView(col);
-
-    // Clear AppletFrame debug-placeholder footer rectangles and install the hint bar.
-    set_footer_hint(frame, ws_hint_bar(DASHBOARD_ACTIONS));
-
-    printf("[ui] dashboard createContentView: done (%zu rows)\n", titles.size());
-    return frame;
+    frame_->setContent(row);
+    printf("[ui] dashboard createContentView: done (%zu titles)\n", titles.size());
+    return frame_;
 }
 
 void TitleListActivity::onContentAvailable() {
     printf("[ui] dashboard onContentAvailable\n");
-    session_->sync_busy = [this]() {
-        return ctrl_->phase() == SyncPhase::Running ||
-               (single_ctrl_ && single_ctrl_->phase() == SyncPhase::Running);
-    };
-    const size_t game_count = ctrl_->titles().size();
+    session_->sync_busy = [this]() { return sync_running() || conflicts_->busy(); };
+    frame_->guide()->slideIn();
+    refresh_guide(FocusArea::Sidebar);
+    pump_.start();
+    poll_timer_.setCallback([this]() { poll(); });
+    poll_timer_.start(POLL_MS);
+    poll();
 
-    // FIX 2: The ScrollingFrame detaches its contentView (standalone Yoga layout,
-    // YGNodeCalculateLayout with UND×UND). setMaxWidth(scroll->getWidth()) is set,
-    // but natural content width < maxWidth → box shrinks to content width (≈959).
-    // setWidth = exact screen width forces standalone layout to full screen width so
-    // rows stretch to (screen_w - padding_left - padding_right) = screen_w - 64 = 1216,
-    // matching the Sync-all button. getContentView() is the AppletFrame (full screen width).
-    if (title_list_box_) {
-        auto* cv = this->getContentView();
-        if (cv) {
-            float screen_w = cv->getWidth();
-            if (screen_w > 0.0f) {
-                printf("[ui] dashboard onContentAvailable: screen_w=%.1f, setWidth\n", screen_w);
-                title_list_box_->setWidth(screen_w);
-                title_list_box_->invalidate();
-            }
-        }
-    }
-
-    poll_timer_.setCallback([this, game_count]() {
-        if (pending_modal_ && !isHidden()) {
-            SyncController* c = pending_modal_;
-            pending_modal_ = nullptr;
-            printf("[ui] dashboard visible again -> push deferred sync modal\n");
-            brls::Application::pushActivity(new SyncActivity(c));
-        }
-        std::string sync_status;
-        if (single_ctrl_ && single_ctrl_->phase() == SyncPhase::Running)
-            sync_status = single_ctrl_->status();
-        else
-            sync_status = ctrl_->status();
-        std::string s = sync_status
-                      + " \xc2\xb7 " + std::to_string(game_count) + " game"
-                      + (game_count != 1 ? "s" : "");
-        status_label_->setText(s);
-    });
-    poll_timer_.start(200);
-
-    registerAction(ws_label(WsAction::SyncGame), ws_brls(WsAction::SyncGame),
-                   [this](brls::View*) { start_single_sync_or_gate(); return true; });
     registerAction(ws_label(WsAction::SyncAll), ws_brls(WsAction::SyncAll),
                    [this](brls::View*) { start_sync_or_gate(); return true; });
-    registerAction(ws_label(WsAction::OpenConflicts), ws_brls(WsAction::OpenConflicts), [this](brls::View*) {
-        auto titles = ctrl_->titles();
-        auto* cc = new ConflictController(session_->vault, session_->uid, session_->device_id,
-                                          session_->dav.as_cfg(), titles, session_->config);
-        cc->start_scan();
-        brls::Application::pushActivity(new ConflictsActivity(cc));
-        return true;
-    });
-    registerAction(ws_label(WsAction::OpenSettings), ws_brls(WsAction::OpenSettings), [this](brls::View*) {
-        brls::Application::pushActivity(new SettingsActivity(session_));
-        return true;
-    });
-    registerAction(ws_label(WsAction::OpenSnapshots), ws_brls(WsAction::OpenSnapshots), [this](brls::View*) {
-        auto titles = ctrl_->titles();
-        size_t idx = focused_title_index();
-        if (idx < titles.size()) {
-            auto* sc = new SnapshotsController(titles[idx], session_->uid);
-            sc->start_scan();
-            brls::Application::pushActivity(new SnapshotsActivity(sc));
+}
+
+brls::View* TitleListActivity::pane_view(Section s) const {
+    switch (s) {
+    case Section::Games:     return games_;
+    case Section::Emulator:  return emulator_;
+    case Section::Conflicts: return conflicts_;
+    case Section::Settings:  return settings_;
+    }
+    return nullptr;
+}
+
+void TitleListActivity::apply_section() {
+    if (target_ == shown_) return;
+    printf("[ui] dashboard: pane swap %s -> %s\n", section_name(shown_), section_name(target_));
+    pane_view(shown_)->setVisibility(brls::Visibility::GONE);
+    shown_ = target_;
+    pane_view(shown_)->setVisibility(brls::Visibility::VISIBLE);
+    if (shown_ == Section::Conflicts) conflicts_->onShown();
+    if (shown_ == Section::Settings) settings_->onShown();
+}
+
+void TitleListActivity::enter_pane() {
+    brls::View* focus = host_->getDefaultFocus();
+    if (!focus) {
+        printf("[ui] dashboard: enter %s pane: nothing focusable, stay on sidebar\n", section_name(shown_));
+        return;
+    }
+    printf("[ui] dashboard: enter %s pane\n", section_name(shown_));
+    brls::Application::giveFocus(focus);
+}
+
+TitleListActivity::FocusArea TitleListActivity::focus_area() const {
+    brls::View* f = brls::Application::getCurrentFocus();
+    if (!f || !frame_ || !borealis_is_descendant(f, frame_)) return FocusArea::None;
+    if (borealis_is_descendant(f, sidebar_)) return FocusArea::Sidebar;
+    if (borealis_is_descendant(f, conflicts_)) return FocusArea::Conflicts;
+    if (borealis_is_descendant(f, settings_)) return FocusArea::Settings;
+    if (borealis_is_descendant(f, games_) || borealis_is_descendant(f, emulator_)) return FocusArea::Grid;
+    return FocusArea::None;
+}
+
+void TitleListActivity::refresh_guide(FocusArea area) {
+    const std::string sep = ws_hint_style().item_sep;
+    switch (area) {
+    case FocusArea::Sidebar:
+        frame_->setGuide(ws_hint_bar({WsAction::Select, WsAction::SyncAll, WsAction::Quit}));
+        break;
+    case FocusArea::Grid:
+        frame_->setGuide(ws_hint(WsAction::OpenGame) + sep + ws_hint_pair(WsAction::JumpUp, WsAction::JumpDown) +
+                         sep + ws_hint_bar({WsAction::SyncAll, WsAction::Back, WsAction::Quit}));
+        break;
+    case FocusArea::Conflicts: frame_->setGuide(conflicts_->guide()); break;
+    case FocusArea::Settings:  frame_->setGuide(settings_->guide()); break;
+    case FocusArea::None:      break;
+    }
+}
+
+static const char* area_name(int a) {
+    static const char* const names[] = {"none", "sidebar", "grid", "conflicts", "settings"};
+    return names[a];
+}
+
+void TitleListActivity::poll() {
+    const FocusArea area = focus_area();
+    if (area != last_area_) {
+        printf("[ui] dashboard: focus area %s -> %s\n", area_name((int)last_area_), area_name((int)area));
+        last_area_ = area;
+    }
+    refresh_guide(area);
+
+    // Focus comes back synchronously on pop, before the popped activity leaves the stack; only
+    // !isHidden() proves an opaque one (NoInternet) is gone. Overlays on top hold the focus.
+    if (pending_modal_ && !isHidden() && area != FocusArea::None) {
+        SyncController* c = pending_modal_;
+        pending_modal_ = nullptr;
+        printf("[ui] dashboard on top again -> push deferred sync modal\n");
+        OverlayActivity::push(new SyncActivity(c));
+    }
+
+    apply_finished_runs();
+
+    const int badge = conflict_badge(conflicts_->knownConflicts(), results_);
+    if (badge != last_badge_) {
+        last_badge_ = badge;
+        sidebar_->setBadge(static_cast<size_t>(Section::Conflicts), badge);
+    }
+
+    const size_t game_count = ctrl_->titles().size();
+    frame_->setStatus((single_sync_running() ? single_ctrl_->status() : ctrl_->status()) + " \xc2\xb7 " +
+                      std::to_string(game_count) + " game" + (game_count != 1 ? "s" : ""));
+}
+
+static bool run_finished(const SyncController* c) {
+    const SyncPhase p = c->phase();
+    return p == SyncPhase::Done || p == SyncPhase::Error;
+}
+
+void TitleListActivity::apply_finished_runs() {
+    bool changed = false;
+    if (full_run_pending_ && run_finished(ctrl_)) {
+        full_run_pending_ = false;
+        const std::vector<TitleResult> r = ctrl_->results();
+        for (size_t i = 0; i < r.size() && i < results_.size(); i++) results_[i] = r[i];
+        printf("[sync] sync all finished -> %zu results applied to the grids\n", r.size());
+        changed = true;
+    }
+    if (single_run_pending_ && single_ctrl_ && run_finished(single_ctrl_)) {
+        single_run_pending_ = false;
+        const std::vector<TitleResult> r = single_ctrl_->results();
+        const auto& one = single_ctrl_->titles();
+        const auto& all = ctrl_->titles();
+        bool mapped = false;
+        for (size_t i = 0; !r.empty() && !one.empty() && i < all.size(); i++) {
+            if (!same_title(all[i], one[0])) continue;
+            results_[i] = r[0];
+            mapped = true;
+            printf("[sync] sync single finished -> '%s' (title %zu) = %s\n", all[i].name.c_str(), i,
+                   title_state_label(r[0].state));
+            break;
         }
+        if (!mapped) printf("[sync] sync single finished: result not mapped to a dashboard title\n");
+        changed = changed || mapped;
+    }
+    if (!changed) return;
+    games_->setResults(results_);
+    emulator_->setResults(results_);
+}
+
+void TitleListActivity::open_game(const TitleInfo& t) {
+    GamesPane* pane = shown_ == Section::Emulator ? emulator_ : games_;
+    printf("[ui] dashboard: open game panel '%s'\n", t.name.c_str());
+    OverlayActivity::push(new GamePanel(t, session_, pane->focusedDetail(),
+                                        [this](TitleInfo picked) { start_single_sync_or_gate(picked); }));
+}
+
+bool TitleListActivity::single_sync_running() const {
+    return single_ctrl_ && single_ctrl_->phase() == SyncPhase::Running;
+}
+
+bool TitleListActivity::sync_running() const {
+    return ctrl_->phase() == SyncPhase::Running || single_sync_running();
+}
+
+bool TitleListActivity::background_task_blocks_sync(const char* what) const {
+    if (conflicts_->busy()) {
+        printf("[sync] %s refused: conflict worker running\n", what);
+        ws_toast(WS_BACKGROUND_BUSY_TOAST);
         return true;
-    });
-    registerAction(ws_label(WsAction::OpenHistory), ws_brls(WsAction::OpenHistory), [this](brls::View*) {
-        auto titles = ctrl_->titles();
-        size_t idx = focused_title_index();
-        if (idx < titles.size()) {
-            auto* hc = new HistoryController(titles[idx], session_);
-            hc->start_scan();
-            brls::Application::pushActivity(new HistoryActivity(hc));
-        }
-        return true;
-    });
+    }
+    return refuse_while_reaping("[sync]", what);
+}
+
+static void refuse_sync_running(const char* what, const char* why) {
+    printf("[sync] %s refused: %s\n", what, why);
+    ws_toast("A sync is already running");
 }
 
 void TitleListActivity::start_sync_or_gate() {
     printf("[ui] sync all triggered (%zu titles)\n", ctrl_->titles().size());
-    if (ctrl_->phase() == SyncPhase::Running ||
-        (single_ctrl_ && single_ctrl_->phase() == SyncPhase::Running)) {
-        printf("[sync] sync all: a sync is already running, skip\n");
+    if (sync_running()) {
+        refuse_sync_running("sync all", "a sync is already running");
         return;
     }
+    if (background_task_blocks_sync("sync all")) return;
     if (!network_available()) {
         // NoInternetActivity pops itself then calls back: never push from that callback.
         brls::Application::pushActivity(
             new NoInternetActivity(NoInternetReason::NoNetwork, [this]() {
                 ctrl_->start();
+                full_run_pending_ = true;
                 pending_modal_ = ctrl_;
-                printf("[ui] sync all: modal deferred until dashboard is visible again\n");
+                printf("[ui] sync all: modal deferred until dashboard is on top again\n");
             }));
         return;
     }
+    printf("[sync] sync all: start\n");
     ctrl_->start();
-    brls::Application::pushActivity(new SyncActivity(ctrl_));
+    full_run_pending_ = true;
+    OverlayActivity::push(new SyncActivity(ctrl_));
 }
 
-void TitleListActivity::start_single_sync_or_gate() {
+void TitleListActivity::start_single_sync_or_gate(const TitleInfo& t) {
     if (ctrl_->phase() == SyncPhase::Running) {
-        printf("[sync] sync single: full sync in progress, skip\n");
+        refuse_sync_running("sync single", "full sync in progress");
         return;
     }
-    const auto& titles = ctrl_->titles();
-    const size_t idx = focused_title_index();
-    if (titles.empty() || idx >= titles.size()) {
-        printf("[sync] sync single: no valid focused title (idx=%zu, count=%zu)\n",
-               idx, titles.size());
-        return;
-    }
-    const TitleInfo& t = titles[idx];
-    printf("[sync] sync single: %s (id=%016llx)\n",
-           t.name.c_str(), (unsigned long long)t.title_id);
+    printf("[sync] sync single: %s (id=%016llx)\n", t.name.c_str(), (unsigned long long)t.title_id);
 
-    // No-op if a single-title sync is already running (don't block UI thread with join).
-    if (single_ctrl_ && single_ctrl_->phase() == SyncPhase::Running) {
-        printf("[sync] sync single: already running, skip\n");
+    // Refused while a single-title sync is already running (don't block UI thread with join).
+    if (single_sync_running()) {
+        refuse_sync_running("sync single", "already running");
         return;
     }
-    // Previous run finished — clean it up.
+    if (background_task_blocks_sync("sync single")) return;
     if (single_ctrl_) {
+        apply_finished_runs();  // don't drop a finished run the 200 ms poll has not applied yet
+        if (pending_modal_ == single_ctrl_) {
+            printf("[ui] sync single: dropping the deferred modal of the previous run\n");
+            pending_modal_ = nullptr;
+        }
         single_ctrl_->join();
         delete single_ctrl_;
     }
-    single_ctrl_ = new SyncController(session_->vault, session_->uid,
-                                      session_->device_id,
-                                      session_->dav.as_cfg(),
-                                      { t }, &session_->config);
+    single_ctrl_ = new SyncController(session_->vault, session_->uid, session_->device_id,
+                                      session_->dav.as_cfg(), { t }, &session_->config);
 
     if (!network_available()) {
         brls::Application::pushActivity(
             new NoInternetActivity(NoInternetReason::NoNetwork, [this]() {
                 single_ctrl_->start();
+                single_run_pending_ = true;
                 pending_modal_ = single_ctrl_;
-                printf("[ui] sync single: modal deferred until dashboard is visible again\n");
+                printf("[ui] sync single: modal deferred until dashboard is on top again\n");
             }));
         return;
     }
     single_ctrl_->start();
-    brls::Application::pushActivity(new SyncActivity(single_ctrl_));
-}
-
-size_t TitleListActivity::focused_title_index() const {
-    if (!title_list_box_) return 0;
-    return borealis_focused_child_index(title_list_box_);
+    single_run_pending_ = true;
+    OverlayActivity::push(new SyncActivity(single_ctrl_));
 }

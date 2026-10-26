@@ -42,10 +42,13 @@ typedef Vault WsVault;
 // Export the MDK from vault and persist it to session.bin for auto-unlock. false on failure.
 bool persist_session(WsVault* vault, const std::string& webdav_pass);
 
-// Settings "WebDAV password" row text: masked, never the secret itself.
+// Settings "WebDAV password" value: masked, never the secret itself.
+inline std::string webdav_pass_mask(const std::string& pass) {
+    return pass.empty() ? "not set" : "\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2";
+}
+
 inline std::string webdav_pass_label(const std::string& pass) {
-    return std::string("WebDAV password: ") +
-           (pass.empty() ? "not set" : "\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2");
+    return "WebDAV password: " + webdav_pass_mask(pass);
 }
 
 // Settings "WebDAV password" edit: replaces `current` in place (old bytes wiped) with `entered`,

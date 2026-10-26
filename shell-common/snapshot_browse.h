@@ -42,7 +42,8 @@ std::string human_size(unsigned long long bytes);
 // Shared definition used by both console sync and snapshot-restore code paths.
 std::string history_timestamp();
 
-// Reformat "YYYYMMDDTHHMMSS[.fff]Z" as "YYYY-MM-DD HH:MM" for display.
+// Reformat "YYYYMMDDTHHMMSS[.fff]Z" or ISO-8601 "YYYY-MM-DDTHH:MM:SS[.fff]Z" as
+// "YYYY-MM-DD HH:MM" for display.
 // Render-only: the compact form is kept for storage and lexicographic sorting.
 // Unknown shapes are returned unchanged.
 std::string human_timestamp(const std::string& ts);
