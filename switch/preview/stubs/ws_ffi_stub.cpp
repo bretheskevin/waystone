@@ -1,12 +1,13 @@
 /*
  * Preview stubs for all Waystone Rust FFI symbols (from ffi/include/waystone.h).
  * unlock_activity.cpp includes waystone.h directly and calls
- * ws_vault_unlock_pass / ws_vault_unlock_recovery / ws_last_error.
+ * ws_keys_mode / ws_vault_open / ws_last_error.
  * All other symbols are stubbed for completeness to satisfy the linker.
  */
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 // Define Vault as a complete type before waystone.h typedef-aliases it.
 struct Vault { int _pad; };
@@ -57,6 +58,23 @@ WsBuf ws_vault_export_mdk(const WsVault*) {
 WsVault* ws_vault_from_mdk(const uint8_t*, uintptr_t) {
     return &g_stub_vault;
 }
+
+// Plain when the keys mention "none" (the unlock-plain mode's {"encryption":"none"} marker).
+int32_t ws_keys_mode(const uint8_t* keys, uintptr_t len) {
+    if (!keys || len == 0) return -1;
+    std::string s(reinterpret_cast<const char*>(keys), len);
+    return s.find("\"none\"") != std::string::npos ? WS_KEYS_MODE_PLAIN : WS_KEYS_MODE_ENCRYPTED;
+}
+
+WsVault* ws_vault_plain(void) { return &g_stub_vault; }
+
+WsVault* ws_vault_open(const uint8_t*, uintptr_t, const char*, bool) { return &g_stub_vault; }
+
+bool ws_vault_is_encrypted(const WsVault*) { return true; }
+
+const char* ws_vault_blob_ext(const WsVault*) { return "bin"; }
+
+WsBuf ws_vault_keys_json(const WsVault*) { return {(uint8_t*)strdup("{}"), 2}; }
 
 // ---------------------------------------------------------------------------
 // Error

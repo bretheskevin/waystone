@@ -45,13 +45,13 @@ class UnlockViewModel(
                     passphrase.value = ""
                     session.attach(result.vault, result.dav, result.sync)
                     _navigateTo.value = "dashboard"
-                    Log.i(TAG, "auto-unlock succeeded from keystore MDK")
+                    Log.i(TAG, "auto-unlock succeeded (${if (result.vault.isEncrypted()) "keystore MDK" else "plain server"})")
                 }
                 is UnlockResult.Form -> {
                     if (result.clearedStoredSession) {
                         Log.e(TAG, "auto-unlock failed; server rejected stored creds, cleared MDK+creds")
                     } else {
-                        Log.i(TAG, "auto-unlock unavailable (no stored MDK or creds), waiting for input")
+                        Log.i(TAG, "auto-unlock unavailable (no stored creds, or no MDK for an encrypted server), waiting for input")
                     }
                     _uiState.value = UiState.Ready(UnlockReady)
                 }

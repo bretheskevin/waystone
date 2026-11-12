@@ -6,12 +6,13 @@
 #include "vault_helpers.h"
 #include <borealis.hpp>
 
-VaultSetupResult setup_create_vault(Session*, const WebDavCfg&, const std::string&) {
+VaultSetupResult setup_create_vault(Session*, const WebDavCfg&, const char* passphrase) {
     return {reinterpret_cast<WsVault*>(1),
-            "DEAD0001DEAD0002DEAD0003DEAD0004DEAD0005DEAD0006DEAD0007DEAD0008", {}, ""};
+            passphrase ? "DEAD0001DEAD0002DEAD0003DEAD0004DEAD0005DEAD0006DEAD0007DEAD0008" : "",
+            {}, ""};
 }
 
-VaultSetupResult setup_join_vault(Session*, const std::vector<uint8_t>&, const std::string&,
+VaultSetupResult setup_join_vault(Session*, const std::vector<uint8_t>&, const char*,
                                   bool recovery) {
     return {nullptr, "", {}, recovery ? "Wrong recovery key" : "Wrong passphrase"};
 }

@@ -2,6 +2,7 @@
 #include "ffi_err.h"
 #include "keys_file.h"
 #include "secure_clear.h"
+#include "setup_model.h"
 #include "snapshot.h"
 #include <algorithm>
 #include <cstdio>
@@ -32,6 +33,7 @@ int cfg_put(void* ctx, const char* path, const uint8_t* data, size_t len) {
 }
 
 const char* const kVaultExists = "A vault already exists on this server - join it instead";
+const char* const kUnrecognizedKeys = "Unrecognized keys.json on server";
 const int kHttpPreconditionFailed = 412;
 
 void wipe_buf(WsBuf* b) {
@@ -72,20 +74,32 @@ VaultDav vault_dav_from_cfg(const WebDavCfg& dav) {
 RemoteKeys vault_fetch_remote_keys(const VaultDav& dav) {
     printf("[vault] probe %s%s ...\n", dav.log_url.c_str(), kKeysPath);
     RemoteKeys r;
+    r.plain = false;
     r.http_status = dav.get(dav.ctx, kKeysPath, &r.bytes);
     if (r.http_status == 404) {
         r.state = RemoteKeysState::Absent;
         r.bytes.clear();
     } else if (is_2xx(r.http_status) && !r.bytes.empty()) {
-        r.state = RemoteKeysState::Present;
+        if (ffi_keys_mode(r.bytes.data(), r.bytes.size(), &r.plain)) {
+            r.state = RemoteKeysState::Present;
+        } else {
+            printf("[vault] probe: ws_keys_mode failed (%zu bytes): %s\n", r.bytes.size(), ffi_err());
+            r.state = RemoteKeysState::Error;
+            r.error = kUnrecognizedKeys;
+            r.bytes.clear();
+        }
     } else {
         r.state = RemoteKeysState::Error;
         r.bytes.clear();
     }
-    const char* label = r.state == RemoteKeysState::Absent    ? "absent"
-                        : r.state == RemoteKeysState::Present ? "present"
-                                                              : "error";
-    printf("[vault] probe done: %s (http=%d, %zu bytes)\n", label, r.http_status, r.bytes.size());
+    if (r.state == RemoteKeysState::Present) {
+        printf("[vault] probe done: present mode=%s (http=%d, %zu bytes)\n",
+               keys_mode_name(r.plain), r.http_status, r.bytes.size());
+    } else {
+        printf("[vault] probe done: %s (http=%d, %zu bytes)\n",
+               r.state == RemoteKeysState::Absent ? "absent" : "error", r.http_status,
+               r.bytes.size());
+    }
     return r;
 }
 
@@ -93,22 +107,26 @@ RemoteKeys vault_fetch_remote_keys(const WebDavCfg& dav) {
     return vault_fetch_remote_keys(vault_dav_from_cfg(dav));
 }
 
-VaultSetupResult vault_create_and_publish(const VaultDav& dav, const std::string& passphrase) {
+VaultSetupResult vault_create_and_publish(const VaultDav& dav, const char* passphrase) {
     VaultSetupResult res = {nullptr, "", std::vector<uint8_t>(), ""};
-    printf("[vault] create: start\n");
+    const bool plain = passphrase == nullptr;
+    printf("[vault] create: start (mode=%s)\n", keys_mode_name(plain));
 
     WsBuf recovery = {nullptr, 0};
     WsBuf keys = {nullptr, 0};
-    printf("[vault] create: ws_vault_init (Argon2) ...\n");
-    WsVault* vault = ws_vault_init(passphrase.c_str(), &recovery, &keys);
-    if (!vault) {
-        printf("[vault] create: ws_vault_init failed: %s\n", ffi_err());
+    const char* step = plain ? "ws_vault_plain" : "ws_vault_init (Argon2)";
+    printf("[vault] create: %s ...\n", step);
+    WsVault* vault = plain ? ws_vault_plain() : ws_vault_init(passphrase, &recovery, &keys);
+    if (vault && plain) keys = ws_vault_keys_json(vault);
+    if (!vault || !keys.ptr) {
+        printf("[vault] create: %s failed: %s\n", step, ffi_err());
         res.error = std::string("Vault creation failed: ") + ffi_err();
+        if (vault) ws_vault_free(vault);
         wipe_buf(&recovery);
         ws_buf_free(keys);
         return res;
     }
-    printf("[vault] create: ws_vault_init done (keys %zu bytes)\n", static_cast<size_t>(keys.len));
+    printf("[vault] create: %s done (keys %zu bytes)\n", step, static_cast<size_t>(keys.len));
 
     // Probe after the slow KDF so the probe -> PUT window stays minimal.
     RemoteKeys probe = vault_fetch_remote_keys(dav);
@@ -119,8 +137,9 @@ VaultSetupResult vault_create_and_publish(const VaultDav& dav, const std::string
     } else if (probe.state == RemoteKeysState::Error) {
         printf("[vault] create refused: probe failed (http=%d) - discarding vault\n",
                probe.http_status);
-        res.error = with_status("Could not check the server for an existing vault",
-                                probe.http_status);
+        res.error = !probe.error.empty()
+            ? probe.error
+            : with_status("Could not check the server for an existing vault", probe.http_status);
     } else {
         status = dav.put(dav.ctx, kKeysPath, keys.ptr, keys.len);
         if (!is_2xx(status)) {
@@ -149,26 +168,46 @@ VaultSetupResult vault_create_and_publish(const VaultDav& dav, const std::string
     return res;
 }
 
-VaultSetupResult vault_create_and_publish(const WebDavCfg& dav, const std::string& passphrase) {
+VaultSetupResult vault_create_and_publish(const WebDavCfg& dav, const char* passphrase) {
     return vault_create_and_publish(vault_dav_from_cfg(dav), passphrase);
 }
 
-VaultSetupResult vault_join(const std::vector<uint8_t>& server_keys, const std::string& secret,
+VaultSetupResult vault_join(const std::vector<uint8_t>& server_keys, const char* secret,
                             bool recovery) {
     VaultSetupResult res = {nullptr, "", std::vector<uint8_t>(), ""};
-    const char* how = recovery ? "recovery key" : "passphrase";
+    bool plain = false;
+    if (!ffi_keys_mode(server_keys.data(), server_keys.size(), &plain)) {
+        printf("[vault] join failed: ws_keys_mode: %s\n", ffi_err());
+        res.error = kUnrecognizedKeys;
+        return res;
+    }
+    if (!plain && (!secret || !secret[0])) {
+        printf("[vault] join refused: encrypted server, no %s entered\n",
+               recovery ? "recovery key" : "passphrase");
+        res.error = vault_secret_required(recovery);
+        return res;
+    }
+    const char* how = plain ? "no secret (plain)" : recovery ? "recovery key" : "passphrase";
     printf("[vault] join with %s (keys %zu bytes) ...\n", how, server_keys.size());
-    res.vault = recovery
-        ? ws_vault_unlock_recovery(secret.c_str(), server_keys.data(), server_keys.size())
-        : ws_vault_unlock_pass(secret.c_str(), server_keys.data(), server_keys.size());
+    res.vault = ws_vault_open(server_keys.data(), server_keys.size(), plain ? nullptr : secret,
+                              recovery);
     if (!res.vault) {
         printf("[vault] join failed: %s\n", ffi_err());
-        res.error = recovery ? "Wrong recovery key" : "Wrong passphrase";
+        res.error = plain ? std::string("Could not open the server vault: ") + ffi_err()
+                          : std::string(recovery ? "Wrong recovery key" : "Wrong passphrase");
         return res;
     }
     res.keys_json = server_keys;
     printf("[vault] join done\n");
     return res;
+}
+
+WsVault* vault_open_local(const uint8_t* keys, size_t len, const char* passphrase) {
+    printf("[vault] opening local keys.json (%zu bytes) ...\n", len);
+    WsVault* v = ws_vault_open(keys, len, passphrase, false);
+    if (v) printf("[vault] local keys.json opened (encrypted=%d)\n", ws_vault_is_encrypted(v) ? 1 : 0);
+    else   printf("[vault] local keys.json open failed: %s\n", ffi_err());
+    return v;
 }
 
 bool vault_persist_local(const VaultSetupResult& r, const char* keys_path,
@@ -189,8 +228,16 @@ void vault_setup_persist(const VaultSetupResult& r, const char* keys_path,
 }
 
 void vault_setup_wipe_recovery(VaultSetupResult* r) {
-    if (!r->recovery_hex.empty()) secure_clear(&r->recovery_hex[0], r->recovery_hex.size());
-    r->recovery_hex.clear();
+    zeroize_string(r->recovery_hex);
+}
+
+void vault_setup_log_start(const char* what, bool plain) {
+    printf("[vault] setup %s %s: start\n", what, keys_mode_name(plain));
+}
+
+void vault_setup_log_result(const char* what, bool plain, const VaultSetupResult& r) {
+    if (r.vault) printf("[vault] setup %s %s: ok\n", what, keys_mode_name(plain));
+    else         printf("[vault] setup %s %s: failed (%s)\n", what, keys_mode_name(plain), r.error.c_str());
 }
 
 void vault_publish_if_absent(const VaultDav& dav, const uint8_t* local_keys, size_t len) {

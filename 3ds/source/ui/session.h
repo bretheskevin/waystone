@@ -7,11 +7,6 @@
 struct Vault;
 typedef Vault WsVault;
 
-// Securely overwrite a std::string's buffer before clearing.
-inline void zeroize_string(std::string& s) {
-    if (!s.empty()) { secure_clear(&s[0], s.size()); s.clear(); }
-}
-
 // Owns the server/user/pass strings backing the WebDavCfg pointers.
 struct OwnedWebDavCfg {
     std::string server_url;

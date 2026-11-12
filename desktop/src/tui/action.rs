@@ -576,7 +576,7 @@ pub async fn install_update(rel: crate::updater::Release, tx: mpsc::Sender<Msg>)
 pub async fn attempt_unlock(
     server_url: String,
     username: Option<String>,
-    mut secret: String,
+    mut secret: Option<String>,
     webdav_password: Option<String>,
     recovery: bool,
     tx: mpsc::Sender<Msg>,
@@ -585,7 +585,7 @@ pub async fn attempt_unlock(
     let result = try_unlock(
         &server_url,
         username.clone(),
-        &secret,
+        secret.as_deref(),
         webdav_password.clone(),
         recovery,
     )
@@ -619,7 +619,7 @@ pub async fn attempt_unlock(
 async fn try_unlock(
     server_url: &str,
     username: Option<String>,
-    secret: &str,
+    secret: Option<&str>,
     webdav_password: Option<String>,
     recovery: bool,
 ) -> Result<(Vault, WebDavClient, BlockingWebDav)> {
@@ -627,8 +627,13 @@ async fn try_unlock(
         server_url,
         &username,
         &webdav_password,
-        secret,
         recovery,
+        || {
+            secret.map(str::to_owned).ok_or_else(|| {
+                log::warn!("[vault] tui unlock: encrypted server but no passphrase entered");
+                anyhow::anyhow!(crate::vault_ops::PASSPHRASE_REQUIRED)
+            })
+        },
     )
     .await?;
     let dav = WebDavClient::new(server_url, username.clone(), webdav_password.clone());
@@ -640,18 +645,27 @@ pub async fn run_setup(
     server_url: String,
     username: String,
     mut password: String,
-    mut passphrase: String,
+    mut passphrase: Option<String>,
     tx: mpsc::Sender<Msg>,
     store: Arc<dyn SecretStore>,
 ) {
-    let result = try_setup(&server_url, &username, &password, &passphrase).await;
+    log::info!(
+        "[vault] tui setup for {} (encrypt={})",
+        redact_userinfo(&server_url),
+        passphrase.is_some()
+    );
+    let result = try_setup(&server_url, &username, &password, passphrase.as_deref()).await;
     passphrase.zeroize();
     let remembered_password = (!password.is_empty()).then(|| password.clone());
     password.zeroize();
 
     match result {
-        Ok((vault, dav, blocking_dav, recovery_key)) => {
-            log::info!("[vault] tui setup ok for {}", redact_userinfo(&server_url));
+        Ok((vault, dav, blocking_dav, recovery_key, joined)) => {
+            log::info!(
+                "[vault] tui setup ok for {} (encrypted={}, joined={joined})",
+                redact_userinfo(&server_url),
+                vault.is_encrypted()
+            );
             crate::cli_session::remember(
                 store.as_ref(),
                 &server_url,
@@ -662,6 +676,7 @@ pub async fn run_setup(
             let _ = tx
                 .send(Msg::SetupResult(Ok(SetupOk {
                     recovery_key,
+                    joined,
                     vault: Arc::new(vault),
                     dav: Arc::new(dav),
                     blocking_dav: Arc::new(blocking_dav),
@@ -682,8 +697,8 @@ async fn try_setup(
     server_url: &str,
     username: &str,
     password: &str,
-    passphrase: &str,
-) -> Result<(Vault, WebDavClient, BlockingWebDav, String)> {
+    passphrase: Option<&str>,
+) -> Result<(Vault, WebDavClient, BlockingWebDav, Option<String>, bool)> {
     let user = if username.is_empty() {
         None
     } else {
@@ -696,10 +711,12 @@ async fn try_setup(
     };
     let dav = WebDavClient::new(server_url, user.clone(), pass.clone());
 
-    let (vault, recovery_key) = crate::vault_ops::init_vault(&dav, passphrase).await?;
+    let (vault, recovery_key, joined) = crate::vault_ops::init_vault(&dav, passphrase)
+        .await?
+        .into_parts();
 
     let blocking_dav = make_blocking_dav(server_url, user, pass).await?;
-    Ok((vault, dav, blocking_dav, recovery_key))
+    Ok((vault, dav, blocking_dav, recovery_key, joined))
 }
 
 pub fn save_recovery_file(key: &str, device_id: &str) -> Result<std::path::PathBuf> {

@@ -347,9 +347,24 @@ static int decide_title(const WsVault* vault, const void* title, const char* nam
     return 0;
 }
 
+// <blobs_dir>/<blob name>.<vault blob ext>; "" (logged) when ws_vault_blob_name fails.
+static std::string blob_remote_path(const WsVault* vault, const std::string& blobs_dir,
+                                    const std::string& hash, const char* op,
+                                    const std::string& group_key) {
+    char* bn = ws_vault_blob_name(vault, hash.c_str());
+    if (!bn) {
+        printf("[sync] %s %s: ws_vault_blob_name failed: %s\n", op, group_key.c_str(), ffi_err());
+        return std::string();
+    }
+    std::string path = blobs_dir + "/" + bn + "." + ws_vault_blob_ext(vault);
+    ws_string_free(bn);
+    return path;
+}
+
 static int push_save(const WsVault* vault, const LocalSave& s, const SyncEngineCfg& cfg,
                      WebDavSession* dav, const SyncProgress* prog) {
-    report_step(prog, "Encrypting");
+    const bool encrypted = ws_vault_is_encrypted(vault);
+    report_step(prog, encrypted ? "Encrypting" : "Packaging");
     std::string mtime, hash, group_key;
     WsBuf zip = {0, 0};
     unsigned long long t0 = wall_now_ms();
@@ -375,16 +390,14 @@ static int push_save(const WsVault* vault, const LocalSave& s, const SyncEngineC
         printf("[sync] push %s: ws_vault_encrypt_blob failed: %s\n", group_key.c_str(), ffi_err());
         return -1;
     }
-    printf("[sync] encrypt done: %zu -> %zu bytes in %llu ms\n", zip_len, (size_t)enc.len, wall_ms_since(t0));
+    printf("[sync] seal done (encrypted=%d): %zu -> %zu bytes in %llu ms\n", encrypted ? 1 : 0, zip_len,
+           (size_t)enc.len, wall_ms_since(t0));
 
-    char* bn = ws_vault_blob_name(vault, hash.c_str());
-    if (!bn) {
-        printf("[sync] push %s: ws_vault_blob_name failed: %s\n", group_key.c_str(), ffi_err());
+    std::string blob_remote = blob_remote_path(vault, blobs_path, hash, "push", group_key);
+    if (blob_remote.empty()) {
         ws_buf_free(enc);
         return -1;
     }
-    std::string blob_remote = blobs_path + "/" + bn + ".bin";
-    ws_string_free(bn);
 
     report_step(prog, "Checking server");
     t0 = wall_now_ms();
@@ -421,13 +434,9 @@ int sync_restore_hash(const WsVault* vault, const void* title, const ShellOps& o
                       const SyncProgress* prog) {
     printf("[sync] restore %s hash=%.12s safety_backup=%d\n", group_key.c_str(), hash.c_str(),
            (int)cfg.safety_backup);
-    char* bn = ws_vault_blob_name(vault, hash.c_str());
-    if (!bn) {
-        printf("[sync] restore %s: ws_vault_blob_name failed: %s\n", group_key.c_str(), ffi_err());
-        return -1;
-    }
-    std::string blob_remote = base_path + "/blobs/" + bn + ".bin";
-    ws_string_free(bn);
+    std::string blob_remote = blob_remote_path(vault, base_path + "/blobs", hash, "restore",
+                                               group_key);
+    if (blob_remote.empty()) return -1;
 
     report_step(prog, "Downloading");
     std::vector<uint8_t> enc;

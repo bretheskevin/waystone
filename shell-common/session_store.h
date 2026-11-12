@@ -39,7 +39,8 @@ void session_store_clear();
 extern "C" { struct Vault; }
 typedef Vault WsVault;
 
-// Export the MDK from vault and persist it to session.bin for auto-unlock. false on failure.
+// Export the MDK from vault and persist it to session.bin for auto-unlock (an unencrypted
+// vault stores a zero MDK placeholder + the password). false on failure.
 bool persist_session(WsVault* vault, const std::string& webdav_pass);
 
 // Settings "WebDAV password" value: masked, never the secret itself.
@@ -59,19 +60,20 @@ inline bool update_webdav_pass(WsVault* vault, std::string& current, std::string
         printf("[vault] webdav password unchanged (empty input)\n");
         return false;
     }
-    if (!current.empty()) secure_clear(&current[0], current.size());
+    zeroize_string(current);
     current = entered;
-    secure_clear(&entered[0], entered.size());
-    entered.clear();
+    zeroize_string(entered);
     bool persisted = vault && persist_session(vault, current);
     printf("[vault] webdav password updated (persisted=%d)\n", persisted ? 1 : 0);
     return true;
 }
 
-// Load the persisted session and reconstruct the runtime vault in one step.
+// Load the persisted session and reconstruct the runtime vault in one step. The vault mode
+// comes from the LOCAL keys.json (local_keys): plain -> ws_vault_plain, encrypted -> the MDK.
 // On success: returns a WsVault* (caller owns → ws_vault_free) and fills pass_out
-// with the WebDAV password. On failure: returns nullptr and clears pass_out.
-// The 32-byte MDK is zeroized internally on every path.
-WsVault* session_store_load_vault(std::string& pass_out);
+// with the WebDAV password. On failure (incl. invalid/null keys): returns nullptr and clears
+// pass_out. The 32-byte MDK is zeroized internally on every path.
+WsVault* session_store_load_vault(std::string& pass_out, const uint8_t* local_keys,
+                                  size_t local_keys_len);
 
 #endif

@@ -72,7 +72,9 @@ impl SecretStore for MemoryStore {
 pub struct StoredSession {
     pub server_url: String,
     pub username: Option<String>,
-    pub mdk_hex: String,
+    /// None for an unencrypted server.
+    #[serde(default)]
+    pub mdk_hex: Option<String>,
     pub webdav_password: Option<String>,
 }
 
@@ -89,7 +91,9 @@ impl std::fmt::Debug for StoredSession {
 
 impl Drop for StoredSession {
     fn drop(&mut self) {
-        self.mdk_hex.zeroize();
+        if let Some(m) = self.mdk_hex.as_mut() {
+            m.zeroize();
+        }
         if let Some(p) = self.webdav_password.as_mut() {
             p.zeroize();
         }
@@ -97,11 +101,14 @@ impl Drop for StoredSession {
 }
 
 impl StoredSession {
-    pub fn mdk(&self) -> Result<[u8; 32]> {
-        let mut bytes = hex::decode(&self.mdk_hex).context("session mdk is not hex")?;
+    pub fn mdk(&self) -> Result<Option<[u8; 32]>> {
+        let Some(mdk_hex) = self.mdk_hex.as_deref() else {
+            return Ok(None);
+        };
+        let mut bytes = hex::decode(mdk_hex).context("session mdk is not hex")?;
         let arr: Result<[u8; 32], _> = bytes.as_slice().try_into();
         bytes.zeroize();
-        arr.context("session mdk is not 32 bytes")
+        arr.map(Some).context("session mdk is not 32 bytes")
     }
 }
 
@@ -171,9 +178,32 @@ mod tests {
         StoredSession {
             server_url: url.into(),
             username: Some("kev".into()),
-            mdk_hex: "ab".repeat(32),
+            mdk_hex: Some("ab".repeat(32)),
             webdav_password: Some("hunter2".into()),
         }
+    }
+
+    #[test]
+    fn round_trip_plain_session_has_no_mdk() {
+        let store = MemoryStore::default();
+        let mut s = session("https://a");
+        s.mdk_hex = None;
+        save_session(&store, &s).unwrap();
+        let loaded = load_session(&store, "https://a").unwrap();
+        assert_eq!(loaded.webdav_password.as_deref(), Some("hunter2"));
+        assert_eq!(loaded.mdk().unwrap(), None);
+    }
+
+    #[test]
+    fn legacy_json_with_mdk_string_still_loads() {
+        let store = MemoryStore::default();
+        let raw = format!(
+            r#"{{"server_url":"https://a","username":"kev","mdk_hex":"{}","webdav_password":null}}"#,
+            "cd".repeat(32)
+        );
+        store.set(SESSION_KEY, &raw).unwrap();
+        let s = load_session(&store, "https://a").unwrap();
+        assert_eq!(s.mdk().unwrap(), Some([0xcd; 32]));
     }
 
     #[test]
@@ -183,7 +213,7 @@ mod tests {
         let s = load_session(&store, "https://a").unwrap();
         assert_eq!(s.username.as_deref(), Some("kev"));
         assert_eq!(s.webdav_password.as_deref(), Some("hunter2"));
-        assert_eq!(s.mdk().unwrap(), [0xab; 32]);
+        assert_eq!(s.mdk().unwrap(), Some([0xab; 32]));
     }
 
     #[test]
@@ -205,9 +235,9 @@ mod tests {
     #[test]
     fn mdk_rejects_wrong_length_and_non_hex() {
         let mut s = session("https://a");
-        s.mdk_hex = "abcd".into();
+        s.mdk_hex = Some("abcd".into());
         assert!(s.mdk().is_err());
-        s.mdk_hex = "zz".into();
+        s.mdk_hex = Some("zz".into());
         assert!(s.mdk().is_err());
     }
 
@@ -216,6 +246,6 @@ mod tests {
         let s = session("https://a");
         let d = format!("{s:?}");
         assert!(!d.contains("hunter2"));
-        assert!(!d.contains(&s.mdk_hex));
+        assert!(!d.contains(s.mdk_hex.as_deref().unwrap()));
     }
 }

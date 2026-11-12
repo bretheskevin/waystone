@@ -49,7 +49,7 @@ fun UnlockScreen(
             OutlinedTextField(
                 value = passphrase,
                 onValueChange = onSecretChange,
-                label = { Text(if (useRecoveryKey) "Recovery key" else "Passphrase") },
+                label = { Text(if (useRecoveryKey) "Recovery key" else "Passphrase (leave empty if the server is unencrypted)") },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.fillMaxWidth(),

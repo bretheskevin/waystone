@@ -9,8 +9,8 @@
 #include <thread>
 #include <vector>
 
-// Leaving the login step probes the server: an existing vault turns the last step into
-// "Join your vault", otherwise it creates one and publishes it.
+// Leaving the login step probes the server: an existing server keys.json turns the last step
+// into a join (encrypted or plain), otherwise it creates one (plain by default, Y to encrypt).
 class SetupActivity : public WizardActivity {
   public:
     explicit SetupActivity(Session* session);
@@ -27,7 +27,7 @@ class SetupActivity : public WizardActivity {
 
     // A probe / create / join worker is running (main thread only).
     bool           busy_          = false;
-    SetupVaultMode mode_          = SetupVaultMode::Create;
+    SetupVaultMode mode_          = SetupVaultMode::CreatePlain;
     bool           join_recovery_ = false;
 
     static const size_t FIELD_SERVER     = 0;
@@ -55,4 +55,5 @@ class SetupActivity : public WizardActivity {
     void on_probe_done();
     void start_setup();
     void on_setup_done(bool join);
+    void toggle_encryption();
 };

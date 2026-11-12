@@ -8,6 +8,10 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+#define WS_KEYS_MODE_PLAIN 0
+
+#define WS_KEYS_MODE_ENCRYPTED 1
+
 typedef struct WsBuf {
     uint8_t *ptr;
     uintptr_t len;
@@ -119,6 +123,34 @@ char *ws_decide_pull(const char *local_hash,
                      const char *all_heads_json,
                      const char *this_device_id,
                      int policy);
+
+/**
+ * Returns WS_KEYS_MODE_PLAIN / WS_KEYS_MODE_ENCRYPTED, or -1 (last error set)
+ * on NULL or unrecognized keys.json.
+ */
+ int32_t ws_keys_mode(const uint8_t *keys_json, uintptr_t len);
+
+ WsVault *ws_vault_plain(void);
+
+/**
+ * Opens a vault from keys.json. `secret` may be NULL for an unencrypted vault;
+ * it is the passphrase, or the recovery hex when `recovery` is true.
+ * Returns NULL with the last error set on failure.
+ */
+ WsVault *ws_vault_open(const uint8_t *keys_json, uintptr_t len, const char *secret, bool recovery);
+
+/**
+ * NULL vault -> false.
+ */
+ bool ws_vault_is_encrypted(const WsVault *vault);
+
+/**
+ * Blob file extension without the dot ("zip" plain, "bin" encrypted; NULL vault -> "bin").
+ * The returned string is static: do not free it.
+ */
+ const char *ws_vault_blob_ext(const WsVault *vault);
+
+ struct WsBuf ws_vault_keys_json(const WsVault *vault);
 
 
 WsVault *ws_vault_init(const char *passphrase,

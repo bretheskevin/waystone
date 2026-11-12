@@ -11,7 +11,8 @@ bash switch/preview/build.sh        # build the preview harness (Docker image + 
 bash switch/preview/screenshot.sh   # render headlessly + write PNGs to out/
 ```
 
-Outputs: `out/{setup-welcome,setup-field,unlock,recovery}.png` (1280×720), rendered in
+Outputs: `out/{setup-welcome,setup-field,unlock,recovery}.png` plus the optional-encryption
+screens `out/{setup-plain,setup-plain-encrypt,setup-join-plain,unlock-plain}.png` (1280×720), rendered in
 the shipped **dark theme + Waystone tint**.
 
 ## How it works

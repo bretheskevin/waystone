@@ -30,12 +30,7 @@ public:
     }
 
 private:
-    void clear_pass() {
-        if (!pass_.empty()) {
-            secure_clear(&pass_[0], pass_.size());
-            pass_.clear();
-        }
-    }
+    void clear_pass() { zeroize_string(pass_); }
 
     std::string url_, user_, pass_;
 };

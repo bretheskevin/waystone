@@ -9,6 +9,7 @@
 #include "json.h"
 #include "snapshot.h"
 #include "snapshot_browse.h"
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -31,10 +32,12 @@ static std::vector<int> g_policy_args;
 static std::set<std::string> g_propfind_fail;
 static int g_live = 0;                          // outstanding fake FFI allocations
 static int g_net_calls = 0;                     // every fake webdav_*_s call
+static const char* g_blob_ext = "bin";          // fake ws_vault_blob_ext result
 
 static void reset() {
     g_files.clear(); g_dirs.clear(); g_events.clear(); g_decisions.clear();
     g_policy_args.clear(); g_propfind_fail.clear(); g_net_calls = 0;
+    g_blob_ext = "bin";
 }
 static char* dup_c(const std::string& s) {
     char* p = (char*)malloc(s.size() + 1);
@@ -66,6 +69,8 @@ void ws_string_free(char* s) { if (s) { free(s); g_live--; } }
 const char* ws_last_error(void) { return "fake"; }
 char* ws_vault_path_segment(const WsVault*, const char* name) { return dup_c(name); }
 char* ws_vault_blob_name(const WsVault*, const char* hash) { return dup_c(std::string("blob-") + hash); }
+const char* ws_vault_blob_ext(const WsVault*) { return g_blob_ext; }
+bool ws_vault_is_encrypted(const WsVault*) { return strcmp(g_blob_ext, "bin") == 0; }
 WsBuf ws_vault_encrypt_blob(const WsVault*, const uint8_t* d, uintptr_t n) { return dup_buf(d, n); }
 WsBuf ws_vault_decrypt_blob(const WsVault*, const uint8_t* d, uintptr_t n) { return dup_buf(d, n); }
 WsBuf ws_vault_encrypt_heads(const WsVault*, const uint8_t* d, uintptr_t n) { return dup_buf(d, n); }
@@ -189,7 +194,7 @@ static void seed_head(const std::string& base, const char* dev, const char* hash
 }
 static void seed_blob(const std::string& base, const char* hash, const char* body) {
     std::string b(body);
-    g_files[base + "/blobs/blob-" + hash + ".bin"] = std::vector<uint8_t>(b.begin(), b.end());
+    g_files[base + "/blobs/blob-" + hash + "." + g_blob_ext] = std::vector<uint8_t>(b.begin(), b.end());
     webdav_mkdir_p_s(0, (base + "/blobs").c_str());
 }
 static SyncEngineCfg cfg(int policy, bool backup) {
@@ -490,6 +495,43 @@ static void test_local_keys_list_error() {
     printf("test_local_keys_list_error PASSED\n");
 }
 
+static void record_step(void* ctx, const char* label) {
+    static_cast<std::vector<std::string>*>(ctx)->push_back(label);
+}
+
+static void test_plain_vault_pushes_zip_blob() {
+    reset();
+    g_blob_ext = "zip";
+    FakeTitle t; t.saves.push_back(save("sw/game/main", "h1", "2026-01-01T00:00:00Z"));
+    std::vector<std::string> steps;
+    SyncProgress prog = {record_step, 0, &steps};
+    TitleTally r = sync_title(0, &t, "game", fake_ops(), cfg(0, true), 0, &prog);
+    assert(r.uploaded && !r.failed);
+    assert(std::find(steps.begin(), steps.end(), "Packaging") != steps.end());
+    assert(std::find(steps.begin(), steps.end(), "Encrypting") == steps.end());
+    assert(g_files.count("sw/game/main/blobs/blob-h1.zip"));
+    assert(!g_files.count("sw/game/main/blobs/blob-h1.bin"));
+    assert(g_live == 0);
+    printf("test_plain_vault_pushes_zip_blob PASSED\n");
+}
+
+static void test_restore_gets_blob_with_vault_ext() {
+    const char* exts[] = { "zip", "bin" };
+    for (size_t i = 0; i < 2; i++) {
+        reset();
+        g_blob_ext = exts[i];
+        seed_blob("sw/game/main", "h5", "remote");
+        FakeTitle t; t.saves.push_back(save("sw/game/main", "h0", "2026-01-01T00:00:00Z"));
+        std::vector<uint8_t> raw;
+        int rc = sync_restore_hash(0, &t, fake_ops(), cfg(0, false), "sw/game/main", "sw/game/main",
+                                   "h5", raw, 0, 0);
+        assert(rc == 0);
+        assert(first_event("write:sw/game/main") >= 0);
+        assert(g_live == 0);
+    }
+    printf("test_restore_gets_blob_with_vault_ext PASSED\n");
+}
+
 int main() {
     test_adopt_normalized_owns_or_frees_buffer();
     test_first_upload_pushes();
@@ -508,6 +550,8 @@ int main() {
     test_local_keys_skips_unpackageable_save();
     test_local_keys_no_local_save();
     test_local_keys_list_error();
+    test_plain_vault_pushes_zip_blob();
+    test_restore_gets_blob_with_vault_ext();
     printf("ALL PASSED\n");
     return 0;
 }

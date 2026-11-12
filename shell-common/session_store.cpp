@@ -1,5 +1,6 @@
 #include "session_store.h"
 #include "secure_clear.h"
+#include "ffi_err.h"
 #include <cstdio>
 #include <cstring>
 #include <sys/stat.h>
@@ -220,22 +221,50 @@ void session_store_clear() {
 }
 
 bool persist_session(WsVault* vault, const std::string& webdav_pass) {
-    WsBuf mdk_buf = ws_vault_export_mdk(vault);
+    if (!vault) {
+        printf("[vault] persist_session: no vault - FAILED\n");
+        return false;
+    }
+    const bool plain = !ws_vault_is_encrypted(vault);
     bool ok = false;
-    if (mdk_buf.ptr && mdk_buf.len == 32) ok = session_store_save(mdk_buf.ptr, mdk_buf.len, webdav_pass);
-    else printf("[vault] persist_session: MDK export failed (len=%zu)\n", (size_t)mdk_buf.len);
-    if (mdk_buf.ptr) secure_clear(mdk_buf.ptr, mdk_buf.len);
-    ws_buf_free(mdk_buf);
-    printf("[vault] persist_session: %s\n", ok ? "saved" : "FAILED");
+    if (plain) {
+        const uint8_t placeholder[32] = {0};
+        ok = session_store_save(placeholder, sizeof placeholder, webdav_pass);
+    } else {
+        WsBuf mdk_buf = ws_vault_export_mdk(vault);
+        if (mdk_buf.ptr && mdk_buf.len == 32) ok = session_store_save(mdk_buf.ptr, mdk_buf.len, webdav_pass);
+        else printf("[vault] persist_session: MDK export failed (len=%zu)\n", (size_t)mdk_buf.len);
+        if (mdk_buf.ptr) secure_clear(mdk_buf.ptr, mdk_buf.len);
+        ws_buf_free(mdk_buf);
+    }
+    printf("[vault] persist_session (mode=%s): %s\n", keys_mode_name(plain), ok ? "saved" : "FAILED");
     return ok;
 }
 
-WsVault* session_store_load_vault(std::string& pass_out) {
+WsVault* session_store_load_vault(std::string& pass_out, const uint8_t* local_keys,
+                                  size_t local_keys_len) {
+    pass_out.clear();
+    bool plain = false;
+    if (!ffi_keys_mode(local_keys, local_keys_len, &plain)) {
+        printf("[vault] session restore failed: local keys.json %s (%zu bytes)\n",
+               local_keys ? "unrecognized" : "missing", local_keys_len);
+        return nullptr;
+    }
+    printf("[vault] session restore (mode=%s) ...\n", keys_mode_name(plain));
     uint8_t mdk[32];
     size_t cap = sizeof(mdk);
-    if (!session_store_load(mdk, cap, pass_out)) { secure_clear(mdk, 32); return nullptr; }
-    WsVault* v = ws_vault_from_mdk(mdk, 32);
+    if (!session_store_load(mdk, cap, pass_out)) {
+        secure_clear(mdk, 32);
+        printf("[vault] session restore failed: session.bin unreadable\n");
+        return nullptr;
+    }
+    WsVault* v = plain ? ws_vault_plain() : ws_vault_from_mdk(mdk, 32);
     secure_clear(mdk, 32);
-    if (!v && !pass_out.empty()) { secure_clear(&pass_out[0], pass_out.size()); pass_out.clear(); }
+    if (!v) {
+        printf("[vault] session restore failed: %s\n", ffi_err());
+        zeroize_string(pass_out);
+        return nullptr;
+    }
+    printf("[vault] session restore done (mode=%s)\n", keys_mode_name(plain));
     return v;
 }

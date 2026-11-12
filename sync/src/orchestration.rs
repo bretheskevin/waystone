@@ -23,6 +23,15 @@ pub fn remote_path(vault: &Vault, save: &NormalizedSave) -> String {
     format!("{}/{}/{}", sys_seg, game_seg, slot_seg)
 }
 
+fn blob_path(vault: &Vault, base_path: &str, hash: &str) -> String {
+    format!(
+        "{}/blobs/{}.{}",
+        base_path,
+        vault.blob_name(hash),
+        vault.blob_ext()
+    )
+}
+
 pub fn href_last_segment(href: &str) -> &str {
     href.trim_end_matches('/').rsplit('/').next().unwrap_or("")
 }
@@ -55,14 +64,13 @@ pub fn push_one(
 ) -> Result<PushOutcome> {
     let (entry, zip_bytes) = packaging::package(save);
     let encrypted = vault.encrypt_blob(&zip_bytes)?;
-    let blob_name = vault.blob_name(&entry.content.hash);
     let base_path = remote_path(vault, save);
 
     dav.mkdir_p(&format!("{}/blobs", base_path))?;
     dav.mkdir_p(&format!("{}/heads", base_path))?;
     dav.mkdir_p(&format!("{}/history", base_path))?;
 
-    let blob_path = format!("{}/blobs/{}.bin", base_path, blob_name);
+    let blob_path = blob_path(vault, &base_path, &entry.content.hash);
     let blob_existed = dav.exists(&blob_path)?;
     if !blob_existed {
         dav.put(&blob_path, encrypted)?;
@@ -186,9 +194,7 @@ pub fn fetch_blob(
     hash: &str,
     dav: &dyn WebDav,
 ) -> Result<Vec<u8>> {
-    let blob_name = vault.blob_name(hash);
-    let base_path = remote_path(vault, save);
-    let blob_path = format!("{}/blobs/{}.bin", base_path, blob_name);
+    let blob_path = blob_path(vault, &remote_path(vault, save), hash);
     let encrypted = dav
         .get(&blob_path)?
         .ok_or(SyncError::BlobNotFound(blob_path))?;

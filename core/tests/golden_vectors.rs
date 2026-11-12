@@ -161,3 +161,14 @@ fn golden_rom_keyed_round_trip() {
     assert_eq!(zip_bytes, zip_bytes2);
     assert_eq!(entry.content.hash, entry2.content.hash);
 }
+
+/// Vector: unencrypted-server marker and readable path-segment slug (cross-device contract)
+#[test]
+fn golden_plain_keys_json_and_path_segment() {
+    use waystone_core::crypto::PLAIN_KEYS_JSON;
+    assert_eq!(PLAIN_KEYS_JSON, br#"{"encryption":"none","version":1}"#);
+    assert_eq!(
+        Vault::plain().path_segment("Pokemon Emerald (U)"),
+        "Pokemon_Emerald_U-3531057c"
+    );
+}

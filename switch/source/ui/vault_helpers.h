@@ -7,14 +7,16 @@
 
 // Worker thread (blocks: network + Argon2). Creates the vault and PUTs it to the server
 // (refused when one exists), then writes keys.json, the recovery file and config.json.
+// passphrase == nullptr creates an unencrypted server (no recovery key).
 // session->config.server_url / username must be set before calling.
 VaultSetupResult setup_create_vault(Session* session, const WebDavCfg& dav,
-                                    const std::string& passphrase);
+                                    const char* passphrase);
 
-// Worker thread (blocks: Argon2). Unlocks the server's keys.json with the passphrase or
-// recovery key, then writes keys.json + config.json locally.
+// Worker thread (blocks: Argon2). Opens the server's keys.json with the passphrase or
+// recovery key (secret == nullptr for an unencrypted server), then writes keys.json +
+// config.json locally.
 VaultSetupResult setup_join_vault(Session* session, const std::vector<uint8_t>& server_keys,
-                                  const std::string& secret, bool recovery);
+                                  const char* secret, bool recovery);
 
 // Worker thread, after every successful unlock: uploads a local-only vault's keys.json when
 // the server has none (failures only logged), then lists titles.

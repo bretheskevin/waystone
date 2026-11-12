@@ -1,5 +1,6 @@
 #include "recovery_key_activity.h"
 #include "vault_helpers.h"
+#include "setup_model.h"
 #include <cstdio>
 
 RecoveryKeyActivity::RecoveryKeyActivity(Session* session,
@@ -41,8 +42,8 @@ brls::View* RecoveryKeyActivity::createContentView() {
     col->addView(path_label);
 
     auto* warning = new brls::Label();
-    warning->setText("Write this key down or keep the file on your SD card. "
-                     "If you forget your passphrase, this is the ONLY way to recover your vault.");
+    warning->setText(std::string("Write this key down or keep the file on your SD card. ") +
+                     recovery_key_warning());
     warning->setFontSize(18.0f);
     warning->setTextColor(nvgRGB(0xEF, 0x44, 0x44));
     warning->setMargins(0.0f, 0.0f, 24.0f, 0.0f);

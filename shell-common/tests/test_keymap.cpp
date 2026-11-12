@@ -41,6 +41,8 @@ static void test_no_button_clash_per_screen() {
     static const A updater_banner[]  = { A::Update, A::Cancel, A::Quit };
     static const A wizard[]          = { A::WizardEdit, A::WizardNext, A::WizardPrev,
                                          A::WizardPrevAlt, A::Quit };
+    static const A setup_create[]    = { A::WizardEdit, A::WizardNext, A::WizardPrev,
+                                         A::WizardPrevAlt, A::ToggleEncryption, A::Quit };
     static const A unlock[]          = { A::WizardEdit, A::WizardNext, A::WizardPrev,
                                          A::WizardPrevAlt, A::ToggleRecovery, A::Quit };
     static const A recovery_key[]    = { A::Continue, A::Quit };
@@ -54,6 +56,7 @@ static void test_no_button_clash_per_screen() {
     CHECK_SCREEN(settings);
     CHECK_SCREEN(updater_banner);
     CHECK_SCREEN(wizard);
+    CHECK_SCREEN(setup_create);
     CHECK_SCREEN(unlock);
     CHECK_SCREEN(recovery_key);
     CHECK_SCREEN(no_internet);
@@ -91,6 +94,9 @@ static void test_decided_bindings() {
     assert(ws_button(WsAction::OpenGame)      == WsButton::A);
     assert(ws_button(WsAction::JumpUp)        == WsButton::L);
     assert(ws_button(WsAction::JumpDown)      == WsButton::R);
+    assert(ws_button(WsAction::ToggleEncryption) == WsButton::Y);
+    assert(strcmp(ws_label(WsAction::ToggleEncryption), "Encryption") == 0);
+    assert(static_cast<size_t>(WsAction::ToggleEncryption) == WS_ACTION_COUNT - 1);
     assert(strcmp(ws_label(WsAction::OpenGame), "Open") == 0);
     assert(strcmp(ws_label(WsAction::JumpUp), "Jump") == 0);
     assert(strcmp(ws_label(WsAction::JumpDown), "Jump") == 0);

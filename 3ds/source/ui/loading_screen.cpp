@@ -44,7 +44,7 @@ void LoadingScreen::worker_entry(void* arg) {
     if (self->auto_unlock_) {
         printf("[vault] auto-unlock: loading session...\n");
         std::string webdav_pass;
-        WsVault* v = session_store_load_vault(webdav_pass);
+        WsVault* v = session_store_load_vault(webdav_pass, self->keys_data_, self->keys_len_);
         if (!v) {
             printf("[vault] auto-unlock: session expired\n");
             self->ctx_.result.success = false;

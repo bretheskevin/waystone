@@ -15,10 +15,10 @@ object SetupValidator {
         return withoutScheme.isNotBlank() && !withoutScheme.startsWith("/")
     }
 
-    fun validateForm(serverUrl: String, passphrase: String, confirm: String): String? = when {
+    fun validateForm(serverUrl: String, encrypt: Boolean, passphrase: String, confirm: String): String? = when {
         !isValidServerUrl(serverUrl) -> URL_ERROR
-        passphrase.isEmpty() -> PASSPHRASE_ERROR
-        passphrase != confirm -> CONFIRM_ERROR
+        encrypt && passphrase.isEmpty() -> PASSPHRASE_ERROR
+        encrypt && passphrase != confirm -> CONFIRM_ERROR
         else -> null
     }
 }

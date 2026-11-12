@@ -61,7 +61,7 @@ void Wizard::draw_bottom(C3D_RenderTarget* target, C2D_TextBuf buf, const char* 
     const WizardStepDef& step = steps_[current_step_];
     if (steps_.size() > 1) draw_step_dots(buf, (float)SCREEN_BOT_W/2.0f, SP_MD, current_step_, steps_.size());
     draw_text_centered(buf, 0, 20.0f, 0.5f, TEXT_LG, CLR_TEXT, step.title.c_str(), (float)SCREEN_BOT_W);
-    if (step.fields.empty() && !step.hint.empty()) {
+    if (step.fields.empty() && !step.hint.empty() && !has_finish_) {
         draw_text_centered(buf, 0, (float)SCREEN_BOT_H-60.0f, 0.5f, TEXT_BASE, CLR_TEXT_HINT, step.hint.c_str(), (float)SCREEN_BOT_W);
         if (current_step_ != 0) draw_footer_hint(buf, ws_hint(WsAction::WizardNext).c_str());
         return;
@@ -74,6 +74,13 @@ void Wizard::draw_bottom(C3D_RenderTarget* target, C2D_TextBuf buf, const char* 
     if (has_finish_) {
         bool focused=(cursor_==step.fields.size());
         draw_button(buf, finish_rect_.x, finish_rect_.y, finish_rect_.w, finish_rect_.h, finish_label, ButtonStyle::PRIMARY, focused);
+    }
+    if (!step.hint.empty()) {
+        float hint_y = 44.0f;
+        if (has_finish_) hint_y = finish_rect_.y + finish_rect_.h + SP_MD;
+        else if (!field_rects_.empty()) hint_y = field_rects_.back().y + field_rects_.back().h + SP_MD;
+        draw_text_wrapped_centered(buf, (float)SP_XL, hint_y, 0.5f, TEXT_SM, CLR_TEXT_HINT, step.hint.c_str(),
+                                   (float)SCREEN_BOT_W - 2.0f*SP_XL, 14.0f);
     }
     static const WsAction first_acts[] = { WsAction::WizardEdit, WsAction::WizardNext };
     static const WsAction rest_acts[]  = { WsAction::WizardEdit, WsAction::WizardNext, WsAction::WizardPrev };

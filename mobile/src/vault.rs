@@ -8,6 +8,33 @@ pub struct VaultInit {
     pub keys_json: Vec<u8>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum KeysMode {
+    Plain,
+    Encrypted,
+}
+
+impl From<waystone_core::crypto::KeysMode> for KeysMode {
+    fn from(m: waystone_core::crypto::KeysMode) -> Self {
+        match m {
+            waystone_core::crypto::KeysMode::Plain => Self::Plain,
+            waystone_core::crypto::KeysMode::Encrypted => Self::Encrypted,
+        }
+    }
+}
+
+#[uniffi::export]
+pub fn keys_mode(keys_json: Vec<u8>) -> Result<KeysMode, WaystoneError> {
+    Ok(waystone_core::crypto::keys_mode(&keys_json)?.into())
+}
+
+#[uniffi::export]
+pub fn vault_plain() -> Arc<Vault> {
+    Arc::new(Vault {
+        inner: waystone_core::crypto::Vault::plain(),
+    })
+}
+
 #[derive(uniffi::Object)]
 pub struct Vault {
     inner: waystone_core::crypto::Vault,
@@ -36,6 +63,27 @@ pub fn vault_init(passphrase: String) -> Result<VaultInit, WaystoneError> {
 
 #[uniffi::export]
 impl Vault {
+    #[uniffi::constructor]
+    pub fn open(
+        keys_json: Vec<u8>,
+        secret: Option<String>,
+        recovery: bool,
+    ) -> Result<Arc<Self>, WaystoneError> {
+        match waystone_core::crypto::Vault::open(&keys_json, secret.as_deref(), recovery) {
+            Ok(vault) => {
+                log::info!(
+                    "[vault] opened (encrypted={}, recovery={recovery})",
+                    vault.is_encrypted()
+                );
+                Ok(Arc::new(Vault { inner: vault }))
+            }
+            Err(e) => {
+                log::warn!("[vault] open failed (recovery={recovery}): {e}");
+                Err(e.into())
+            }
+        }
+    }
+
     #[uniffi::constructor]
     pub fn unlock_with_passphrase(
         passphrase: String,
@@ -82,8 +130,12 @@ impl Vault {
         Ok(self.inner.keys_json()?)
     }
 
-    pub fn export_mdk(&self) -> Vec<u8> {
-        self.inner.export_mdk().to_vec()
+    pub fn is_encrypted(&self) -> bool {
+        self.inner.is_encrypted()
+    }
+
+    pub fn export_mdk(&self) -> Option<Vec<u8>> {
+        self.inner.export_mdk().map(|mdk| mdk.to_vec())
     }
 }
 

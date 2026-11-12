@@ -47,6 +47,7 @@ class WizardActivity : public brls::Activity {
     // Y flips *recovery_mode while active() holds: wipes the field and reloads the steps.
     void register_recovery_toggle(bool* recovery_mode, size_t value_index,
                                   std::function<bool()> active);
+    void toggle_recovery(bool* recovery_mode, size_t value_index);
 
     virtual std::vector<WizardStepDef> get_steps()      const = 0;
     virtual std::string                finish_label()    const = 0;

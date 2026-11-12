@@ -15,12 +15,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -42,12 +44,13 @@ import dev.waystone.app.vm.UiState
 @Composable
 fun SetupScreen(
     state: UiState<SetupReady>,
-    onSubmit: (serverUrl: String, username: String, password: String, passphrase: String, confirm: String) -> Unit,
+    onSubmit: (serverUrl: String, username: String, password: String, encrypt: Boolean, passphrase: String, confirm: String) -> Unit,
     onRecoveryAcknowledged: () -> Unit,
 ) {
     var serverUrl by remember { mutableStateOf("") }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var encrypt by remember { mutableStateOf(false) }
     var passphrase by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf("") }
 
@@ -92,31 +95,64 @@ fun SetupScreen(
             modifier = Modifier.fillMaxWidth(),
             enabled = state !is UiState.Loading,
         )
-        OutlinedTextField(
-            value = passphrase,
-            onValueChange = { passphrase = it },
-            label = { Text("Vault passphrase") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
-            enabled = state !is UiState.Loading,
-        )
-        OutlinedTextField(
-            value = confirm,
-            onValueChange = { confirm = it },
-            label = { Text("Confirm passphrase") },
-            singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
-            modifier = Modifier.fillMaxWidth(),
-            enabled = state !is UiState.Loading,
-        )
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Encrypt saves", style = LocalWaystoneTypography.current.base)
+                Text(
+                    "Off: saves are stored unencrypted, protected by your WebDAV login",
+                    style = LocalWaystoneTypography.current.sm,
+                )
+            }
+            Switch(
+                checked = encrypt,
+                onCheckedChange = {
+                    encrypt = it
+                    if (!it) {
+                        passphrase = ""
+                        confirm = ""
+                    }
+                },
+                enabled = state !is UiState.Loading,
+            )
+        }
+        if (encrypt) {
+            OutlinedTextField(
+                value = passphrase,
+                onValueChange = { passphrase = it },
+                label = { Text("Vault passphrase") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+                enabled = state !is UiState.Loading,
+            )
+            OutlinedTextField(
+                value = confirm,
+                onValueChange = { confirm = it },
+                label = { Text("Confirm passphrase") },
+                singleLine = true,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+                enabled = state !is UiState.Loading,
+            )
+        }
 
         Button(
-            onClick = { onSubmit(serverUrl, username, password, passphrase, confirm) },
+            onClick = { onSubmit(serverUrl, username, password, encrypt, passphrase, confirm) },
             enabled = state !is UiState.Loading,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(if (state is UiState.Loading) "Creating vault…" else "Create vault")
+            val loading = state is UiState.Loading
+            Text(
+                when {
+                    encrypt && loading -> "Creating vault…"
+                    encrypt -> "Create encrypted vault"
+                    loading -> "Setting up…"
+                    else -> "Set up"
+                },
+            )
         }
     }
 }

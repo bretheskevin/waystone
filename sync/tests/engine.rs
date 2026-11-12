@@ -463,3 +463,40 @@ fn remote_only_lists_server_slots_missing_locally() {
     assert!(found[0].files.is_empty());
     assert_eq!(found[0].id.game.display_name, "Mario Kart DS");
 }
+
+#[test]
+fn plan_and_execute_with_plain_vault() {
+    let v = Vault::plain();
+    let dav = MemoryDav::new();
+    let old = save("0100ABC000123000", "old", T1);
+    push_one(&v, &old, "dev1", &dav).unwrap();
+    push_one(&v, &with_content(&old, "new", T2), "dev2", &dav).unwrap();
+    let fresh = save("FRESH", "local", T1);
+
+    let plan = engine::plan(
+        &v,
+        &[old.clone(), fresh.clone()],
+        "dev1",
+        ConflictPolicy::Prompt,
+        &dav,
+    );
+    let actions: Vec<_> = plan.iter().map(|e| e.action).collect();
+    assert_eq!(actions, vec![PlanAction::Pull, PlanAction::Push]);
+
+    let io = RecIo::default();
+    let sink = RecSink::default();
+    let summary = engine::execute(&v, &plan, "dev1", &dav, &io, &sink);
+    assert_eq!(summary.pulled, 1);
+    assert_eq!(summary.pushed, 1);
+    let restored = io.restored.lock().unwrap_or_else(PoisonError::into_inner);
+    assert_eq!(
+        restored[0].2,
+        vec![("save.dat".to_string(), b"new".to_vec())]
+    );
+    assert_eq!(decrypt_head(&v, &dav, &old, "dev1").mtime, T2);
+    assert!(
+        dav.keys()
+            .iter()
+            .any(|k| k.starts_with("switch/FRESH/main/blobs/") && k.ends_with(".zip"))
+    );
+}

@@ -34,7 +34,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize a new vault (passphrase + recovery key)
+    /// Set up the server (unencrypted by default) or join an unencrypted one
     Init {
         /// WebDAV server URL
         #[arg(long)]
@@ -42,6 +42,9 @@ enum Commands {
         /// WebDAV username (stored in config; password from WAYSTONE_WEBDAV_PASSWORD or prompt)
         #[arg(long)]
         username: Option<String>,
+        /// Encrypt saves with a passphrase (prints a recovery key)
+        #[arg(long)]
+        encrypt: bool,
     },
     /// Push local saves to the server
     Push {
@@ -487,15 +490,28 @@ async fn run() -> Result<()> {
     }
 
     match cli.command {
-        Commands::Init { server, username } => {
-            let mut passphrase = rpassword::prompt_password("Enter passphrase: ")?;
-            let mut confirm = rpassword::prompt_password("Confirm passphrase: ")?;
-            let matches = passphrase == confirm;
-            confirm.zeroize();
-            if !matches {
-                passphrase.zeroize();
-                anyhow::bail!("passphrases do not match");
-            }
+        Commands::Init {
+            server,
+            username,
+            encrypt,
+        } => {
+            let mut passphrase = if encrypt {
+                let mut p = rpassword::prompt_password("Enter passphrase: ")?;
+                let mut confirm = rpassword::prompt_password("Confirm passphrase: ")?;
+                let matches = p == confirm;
+                confirm.zeroize();
+                if !matches {
+                    p.zeroize();
+                    anyhow::bail!("passphrases do not match");
+                }
+                Some(p)
+            } else {
+                None
+            };
+            log::info!(
+                "[vault] cli init for {} (encrypt={encrypt})",
+                waystone_core::url::redact_userinfo(&server)
+            );
             cli_session::ensure_online(&server).await?;
 
             let mut cfg = config::WaystoneConfig::load()?;
@@ -507,27 +523,40 @@ async fn run() -> Result<()> {
                 &cli_session::prompt_secret,
             )?;
             let dav = webdav::WebDavClient::new(&server, username.clone(), password.clone());
-            let result = vault_ops::init_vault(&dav, &passphrase).await;
+            let result = vault_ops::init_vault(&dav, passphrase.as_deref()).await;
             passphrase.zeroize();
-            let (vault, recovery_key) = match result {
-                Ok(v) => v,
+            let outcome = match result {
+                Ok(o) => o,
                 Err(e) if e.is::<vault_ops::VaultExists>() => {
                     cfg.save()?;
                     eprintln!("{}", vault_ops::VAULT_EXISTS);
                     eprintln!("Run any command (e.g. `waystone sync --dry-run`) to unlock it.");
                     std::process::exit(1);
                 }
-                Err(e) => return Err(e),
+                Err(e) => {
+                    log::warn!("[vault] cli init failed: {e:#}");
+                    return Err(e);
+                }
             };
 
             cfg.save()?;
+            let (vault, recovery_key, joined) = outcome.into_parts();
+            if joined && encrypt {
+                println!("The server is unencrypted; joining without encryption.");
+            }
+            println!(
+                "{}",
+                vault_ops::setup_done_message(recovery_key.is_some(), joined)
+            );
             cli_session::remember(&keychain::OsKeychain, &server, username, &vault, password);
 
-            println!("Vault initialized.");
             println!("Device ID: {}", cfg.device_id);
-            println!();
-            println!("RECOVERY KEY (save this somewhere safe, it cannot be shown again):");
-            println!("  {}", recovery_key);
+            if let Some(mut key) = recovery_key {
+                println!();
+                println!("RECOVERY KEY (save this somewhere safe, it cannot be shown again):");
+                println!("  {key}");
+                key.zeroize();
+            }
 
             Ok(())
         }
@@ -775,6 +804,21 @@ async fn run() -> Result<()> {
 mod tests {
     use super::*;
     use waystone_sync::HistoryEntry;
+
+    fn init_encrypt_flag(args: &[&str]) -> bool {
+        let base = ["waystone", "init", "--server", "http://x"];
+        let cli = Cli::try_parse_from(base.iter().chain(args)).unwrap();
+        match cli.command {
+            Commands::Init { encrypt, .. } => encrypt,
+            _ => panic!("expected init"),
+        }
+    }
+
+    #[test]
+    fn init_is_plain_unless_encrypt_is_passed() {
+        assert!(!init_encrypt_flag(&[]));
+        assert!(init_encrypt_flag(&["--encrypt"]));
+    }
 
     fn make_entries() -> Vec<HistoryEntry> {
         vec![

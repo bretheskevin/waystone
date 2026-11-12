@@ -20,6 +20,8 @@ pub enum CryptoError {
     Hex(hex::FromHexError),
     InvalidCiphertext,
     Rng,
+    SecretRequired,
+    UnknownKeysFormat,
 }
 
 impl core::fmt::Display for CryptoError {
@@ -32,6 +34,10 @@ impl core::fmt::Display for CryptoError {
             Self::Hex(e) => write!(f, "hex error: {e}"),
             Self::InvalidCiphertext => f.write_str("invalid ciphertext"),
             Self::Rng => f.write_str("random number generator failed"),
+            Self::SecretRequired => {
+                f.write_str("a passphrase is required for this encrypted vault")
+            }
+            Self::UnknownKeysFormat => f.write_str("unrecognized keys.json format"),
         }
     }
 }
@@ -61,9 +67,75 @@ pub struct KeysFile {
     pub wrapped_mdk_rec: String,
 }
 
+pub const PLAIN_KEYS_JSON: &[u8] = br#"{"encryption":"none","version":1}"#;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeysMode {
+    Plain,
+    Encrypted,
+}
+
+pub fn keys_mode(keys_json: &[u8]) -> Result<KeysMode, CryptoError> {
+    let value: serde_json::Value =
+        serde_json::from_slice(keys_json).map_err(|_| CryptoError::UnknownKeysFormat)?;
+    match value.get("encryption") {
+        Some(enc) if enc.as_str() == Some("none") => Ok(KeysMode::Plain),
+        Some(_) => Err(CryptoError::UnknownKeysFormat),
+        None => serde_json::from_value::<KeysFile>(value)
+            .map(|_| KeysMode::Encrypted)
+            .map_err(|_| CryptoError::UnknownKeysFormat),
+    }
+}
+
+enum VaultMode {
+    Encrypted { mdk: [u8; 32], keys_file: KeysFile },
+    Plain,
+}
+
 pub struct Vault {
-    mdk: [u8; 32],
-    keys_file: KeysFile,
+    mode: VaultMode,
+}
+
+/// Encrypted blobs' extension, also the FFI fallback for a NULL vault.
+pub const BLOB_EXT_ENCRYPTED: &core::ffi::CStr = c"bin";
+
+const SLUG_MAX_CHARS: usize = 64;
+
+fn is_safe_segment(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= SLUG_MAX_CHARS
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+fn plain_path_segment(name: &str) -> String {
+    if is_safe_segment(name) {
+        return String::from(name);
+    }
+    let mut slug = String::new();
+    for c in name.chars() {
+        let c = if c.is_ascii_alphanumeric() || matches!(c, '.' | '-') {
+            c
+        } else {
+            '_'
+        };
+        if !(c == '_' && slug.ends_with('_')) {
+            slug.push(c);
+        }
+    }
+    let mut slug: String = slug
+        .trim_matches(|c| c == '_' || c == '.')
+        .chars()
+        .take(SLUG_MAX_CHARS)
+        .collect();
+    if slug.is_empty() {
+        slug.push('x');
+    }
+    let digest = crate::packaging::file_hash(name.as_bytes());
+    format!("{slug}-{}", &digest[..8])
 }
 
 fn derive_kek_from_passphrase(passphrase: &str, salt: &[u8]) -> Result<[u8; 32], CryptoError> {
@@ -173,11 +245,85 @@ impl Vault {
             wrapped_mdk_rec: hex::encode(&wrapped_mdk_rec),
         };
 
-        Ok((Vault { mdk, keys_file }, hex::encode(recovery_bytes)))
+        Ok((
+            Vault::encrypted(mdk, keys_file),
+            hex::encode(recovery_bytes),
+        ))
+    }
+
+    fn encrypted(mdk: [u8; 32], keys_file: KeysFile) -> Vault {
+        Vault {
+            mode: VaultMode::Encrypted { mdk, keys_file },
+        }
+    }
+
+    pub fn plain() -> Vault {
+        Vault {
+            mode: VaultMode::Plain,
+        }
+    }
+
+    pub fn open(
+        keys_json: &[u8],
+        secret: Option<&str>,
+        recovery: bool,
+    ) -> Result<Vault, CryptoError> {
+        match keys_mode(keys_json)? {
+            KeysMode::Plain => Ok(Vault::plain()),
+            KeysMode::Encrypted => {
+                let secret = secret.ok_or(CryptoError::SecretRequired)?;
+                if recovery {
+                    Vault::unlock_with_recovery(secret, keys_json)
+                } else {
+                    Vault::unlock_with_passphrase(secret, keys_json)
+                }
+            }
+        }
+    }
+
+    pub fn is_encrypted(&self) -> bool {
+        self.mdk().is_some()
+    }
+
+    /// Blob file extension (no dot) as a C string; the FFI hands it out as-is.
+    pub fn blob_ext_cstr(&self) -> &'static core::ffi::CStr {
+        if self.is_encrypted() {
+            BLOB_EXT_ENCRYPTED
+        } else {
+            c"zip"
+        }
+    }
+
+    pub fn blob_ext(&self) -> &'static str {
+        self.blob_ext_cstr().to_str().unwrap_or_default()
+    }
+
+    fn mdk(&self) -> Option<&[u8; 32]> {
+        match &self.mode {
+            VaultMode::Encrypted { mdk, .. } => Some(mdk),
+            VaultMode::Plain => None,
+        }
     }
 
     pub fn keys_json(&self) -> Result<Vec<u8>, CryptoError> {
-        Ok(serde_json::to_vec(&self.keys_file)?)
+        match &self.mode {
+            VaultMode::Encrypted { keys_file, .. } => Ok(serde_json::to_vec(keys_file)?),
+            VaultMode::Plain => Ok(PLAIN_KEYS_JSON.to_vec()),
+        }
+    }
+
+    fn seal(&self, purpose: &[u8], data: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        match self.mdk() {
+            Some(mdk) => xchacha_encrypt(&derive_purpose_key(mdk, purpose), data),
+            None => Ok(data.to_vec()),
+        }
+    }
+
+    fn open_sealed(&self, purpose: &[u8], data: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        match self.mdk() {
+            Some(mdk) => xchacha_decrypt(&derive_purpose_key(mdk, purpose), data),
+            None => Ok(data.to_vec()),
+        }
     }
 
     pub fn unlock_with_passphrase(
@@ -189,7 +335,7 @@ impl Vault {
         let wrapped = hex::decode(&keys_file.wrapped_mdk_pass)?;
         let pass_kek = derive_kek_from_passphrase(passphrase, &salt)?;
         let mdk = unwrap_mdk(&pass_kek, &wrapped)?;
-        Ok(Vault { mdk, keys_file })
+        Ok(Vault::encrypted(mdk, keys_file))
     }
 
     pub fn unlock_with_recovery(
@@ -202,56 +348,60 @@ impl Vault {
         let recovery_bytes = hex::decode(recovery_key)?;
         let rec_kek = derive_kek_from_recovery(&recovery_bytes, &salt);
         let mdk = unwrap_mdk(&rec_kek, &wrapped)?;
-        Ok(Vault { mdk, keys_file })
+        Ok(Vault::encrypted(mdk, keys_file))
     }
 
     pub fn encrypt_blob(&self, data: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let key = derive_purpose_key(&self.mdk, b"blob");
-        xchacha_encrypt(&key, data)
+        self.seal(b"blob", data)
     }
 
     pub fn decrypt_blob(&self, data: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let key = derive_purpose_key(&self.mdk, b"blob");
-        xchacha_decrypt(&key, data)
+        self.open_sealed(b"blob", data)
     }
 
     pub fn encrypt_heads(&self, data: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let key = derive_purpose_key(&self.mdk, b"heads");
-        xchacha_encrypt(&key, data)
+        self.seal(b"heads", data)
     }
 
     pub fn decrypt_heads(&self, data: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let key = derive_purpose_key(&self.mdk, b"heads");
-        xchacha_decrypt(&key, data)
+        self.open_sealed(b"heads", data)
     }
 
     pub fn blob_name(&self, hash: &str) -> String {
-        hmac_name(&self.mdk, b"blob-name", hash)
+        match self.mdk() {
+            Some(mdk) => hmac_name(mdk, b"blob-name", hash),
+            None => String::from(hash),
+        }
     }
 
     pub fn path_segment(&self, name: &str) -> String {
-        hmac_name(&self.mdk, b"path-segment", name)
+        match self.mdk() {
+            Some(mdk) => hmac_name(mdk, b"path-segment", name),
+            None => plain_path_segment(name),
+        }
     }
 
-    pub fn export_mdk(&self) -> [u8; 32] {
-        self.mdk
+    pub fn export_mdk(&self) -> Option<[u8; 32]> {
+        self.mdk().copied()
     }
 
     pub fn from_mdk(mdk: [u8; 32]) -> Vault {
-        Vault {
+        Vault::encrypted(
             mdk,
-            keys_file: KeysFile {
+            KeysFile {
                 salt: String::new(),
                 wrapped_mdk_pass: String::new(),
                 wrapped_mdk_rec: String::new(),
             },
-        }
+        )
     }
 }
 
 impl Drop for Vault {
     fn drop(&mut self) {
-        self.mdk.zeroize();
+        if let VaultMode::Encrypted { mdk, .. } = &mut self.mode {
+            mdk.zeroize();
+        }
     }
 }
 
@@ -278,6 +428,7 @@ mod console_entropy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::string::ToString;
 
     #[test]
     fn vault_init_produces_valid_keys_json() {
@@ -377,7 +528,7 @@ mod tests {
     #[test]
     fn export_mdk_round_trip() {
         let (vault, _recovery) = Vault::init("test-pass").unwrap();
-        let mdk = vault.export_mdk();
+        let mdk = vault.export_mdk().unwrap();
         let vault2 = Vault::from_mdk(mdk);
         let plaintext = b"round-trip test data";
         let encrypted = vault.encrypt_blob(plaintext).unwrap();
@@ -388,7 +539,7 @@ mod tests {
     #[test]
     fn from_mdk_heads_parity() {
         let (vault, _recovery) = Vault::init("heads-pass").unwrap();
-        let mdk = vault.export_mdk();
+        let mdk = vault.export_mdk().unwrap();
         let vault2 = Vault::from_mdk(mdk);
         let heads = b"{\"device\":\"dev1\",\"hash\":\"abc\"}";
         let encrypted = vault.encrypt_heads(heads).unwrap();
@@ -399,7 +550,7 @@ mod tests {
     #[test]
     fn from_mdk_hmac_parity() {
         let (vault, _recovery) = Vault::init("hmac-pass").unwrap();
-        let mdk = vault.export_mdk();
+        let mdk = vault.export_mdk().unwrap();
         let vault2 = Vault::from_mdk(mdk);
         assert_eq!(vault.blob_name("test-hash"), vault2.blob_name("test-hash"));
         assert_eq!(vault.path_segment("switch"), vault2.path_segment("switch"));
@@ -408,7 +559,159 @@ mod tests {
     #[test]
     fn export_mdk_returns_32_bytes() {
         let (vault, _) = Vault::init("pw").unwrap();
-        let mdk = vault.export_mdk();
+        let mdk = vault.export_mdk().unwrap();
         assert_eq!(mdk.len(), 32);
+    }
+
+    fn h8(name: &str) -> String {
+        crate::packaging::file_hash(name.as_bytes())[..8].to_string()
+    }
+
+    fn encrypted_keys() -> (Vault, String, Vec<u8>) {
+        let (vault, rec) = Vault::init("pw").unwrap();
+        let keys = vault.keys_json().unwrap();
+        (vault, rec, keys)
+    }
+
+    #[test]
+    fn keys_mode_plain() {
+        assert_eq!(keys_mode(PLAIN_KEYS_JSON).unwrap(), KeysMode::Plain);
+    }
+
+    #[test]
+    fn keys_mode_encrypted() {
+        let (_, _, keys) = encrypted_keys();
+        assert_eq!(keys_mode(&keys).unwrap(), KeysMode::Encrypted);
+    }
+
+    #[test]
+    fn keys_mode_unknown_encryption_is_error() {
+        assert!(matches!(
+            keys_mode(br#"{"encryption":"aes"}"#),
+            Err(CryptoError::UnknownKeysFormat)
+        ));
+    }
+
+    #[test]
+    fn keys_mode_garbage_is_error() {
+        assert!(matches!(
+            keys_mode(b"garbage"),
+            Err(CryptoError::UnknownKeysFormat)
+        ));
+        assert!(matches!(
+            keys_mode(br#"{"foo":1}"#),
+            Err(CryptoError::UnknownKeysFormat)
+        ));
+    }
+
+    #[test]
+    fn open_plain_ignores_secret() {
+        let v = Vault::open(PLAIN_KEYS_JSON, None, false).unwrap();
+        assert!(!v.is_encrypted());
+        let v = Vault::open(PLAIN_KEYS_JSON, Some("whatever"), true).unwrap();
+        assert!(!v.is_encrypted());
+    }
+
+    #[test]
+    fn open_encrypted_without_secret_fails() {
+        let (_, _, keys) = encrypted_keys();
+        assert!(matches!(
+            Vault::open(&keys, None, false),
+            Err(CryptoError::SecretRequired)
+        ));
+    }
+
+    #[test]
+    fn open_encrypted_with_passphrase() {
+        let (vault, _, keys) = encrypted_keys();
+        let ct = vault.encrypt_blob(b"data").unwrap();
+        let v = Vault::open(&keys, Some("pw"), false).unwrap();
+        assert!(v.is_encrypted());
+        assert_eq!(v.decrypt_blob(&ct).unwrap(), b"data");
+    }
+
+    #[test]
+    fn open_encrypted_with_recovery() {
+        let (vault, rec, keys) = encrypted_keys();
+        let ct = vault.encrypt_blob(b"data").unwrap();
+        let v = Vault::open(&keys, Some(&rec), true).unwrap();
+        assert_eq!(v.decrypt_blob(&ct).unwrap(), b"data");
+    }
+
+    #[test]
+    fn open_encrypted_wrong_passphrase_fails() {
+        let (_, _, keys) = encrypted_keys();
+        assert!(Vault::open(&keys, Some("nope"), false).is_err());
+    }
+
+    #[test]
+    fn plain_round_trips_are_identity() {
+        let v = Vault::plain();
+        assert_eq!(v.encrypt_blob(b"abc").unwrap(), b"abc");
+        assert_eq!(v.decrypt_blob(b"abc").unwrap(), b"abc");
+        assert_eq!(v.encrypt_heads(b"{}").unwrap(), b"{}");
+        assert_eq!(v.decrypt_heads(b"{}").unwrap(), b"{}");
+        assert_eq!(v.blob_name("abc"), "abc");
+        assert_eq!(v.keys_json().unwrap(), PLAIN_KEYS_JSON);
+    }
+
+    #[test]
+    fn blob_ext_and_export_mdk_by_mode() {
+        let plain = Vault::plain();
+        assert_eq!(plain.blob_ext(), "zip");
+        assert!(plain.export_mdk().is_none());
+        assert!(!plain.is_encrypted());
+        let (enc, _) = Vault::init("pw").unwrap();
+        assert_eq!(enc.blob_ext(), "bin");
+        assert!(enc.export_mdk().is_some());
+        assert!(enc.is_encrypted());
+    }
+
+    #[test]
+    fn plain_path_segment_keeps_safe_names() {
+        let v = Vault::plain();
+        for n in [
+            "switch",
+            "0100ABC000123000",
+            "AGB-BPEE-01",
+            "battery",
+            "a-b",
+        ] {
+            assert_eq!(v.path_segment(n), n);
+        }
+    }
+
+    #[test]
+    fn plain_path_segment_slugs_unsafe_names() {
+        let v = Vault::plain();
+        let n = "Pokemon Emerald (U)";
+        assert_eq!(v.path_segment(n), format!("Pokemon_Emerald_U-{}", h8(n)));
+        assert_eq!(
+            v.path_segment("Pokémon"),
+            format!("Pok_mon-{}", h8("Pokémon"))
+        );
+        assert_eq!(v.path_segment(".."), format!("x-{}", h8("..")));
+        assert_eq!(v.path_segment("."), format!("x-{}", h8(".")));
+        assert_eq!(v.path_segment(""), format!("x-{}", h8("")));
+        assert_eq!(v.path_segment("a b"), format!("a_b-{}", h8("a b")));
+    }
+
+    #[test]
+    fn plain_path_segment_truncates_slug_to_64_chars() {
+        let v = Vault::plain();
+        let n: String = "ab cd ".repeat(34)[..200].to_string();
+        let seg = v.path_segment(&n);
+        let (slug, hash) = seg.rsplit_once('-').unwrap();
+        assert_eq!(slug.chars().count(), 64);
+        assert_eq!(hash, h8(&n));
+    }
+
+    #[test]
+    fn plain_path_segment_slugs_overlong_safe_names() {
+        let v = Vault::plain();
+        let at_limit = "a".repeat(64);
+        assert_eq!(v.path_segment(&at_limit), at_limit);
+        let n = "a".repeat(300);
+        assert_eq!(v.path_segment(&n), format!("{at_limit}-{}", h8(&n)));
     }
 }

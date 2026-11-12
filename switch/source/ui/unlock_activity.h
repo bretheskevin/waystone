@@ -22,6 +22,7 @@ class UnlockActivity : public WizardActivity {
     const uint8_t* keys_data_;
     size_t         keys_len_;
     bool           recovery_mode_ = false;
+    bool           plain_;  // unencrypted server: only the WebDAV password is asked
 
     static const size_t FIELD_PASSPHRASE = 0;
     static const size_t FIELD_PASSWORD   = 1;

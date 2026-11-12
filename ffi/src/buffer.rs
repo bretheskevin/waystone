@@ -38,6 +38,19 @@ impl WsBuf {
     }
 }
 
+/// NULL -> None; otherwise the borrowed UTF-8 C string.
+///
+/// # Safety
+/// A non-null `ptr` must be a valid NUL-terminated C string that outlives `'a`.
+pub(crate) unsafe fn optional_str<'a>(
+    ptr: *const core::ffi::c_char,
+) -> Result<Option<&'a str>, Box<dyn core::error::Error>> {
+    if ptr.is_null() {
+        return Ok(None);
+    }
+    Ok(Some(unsafe { core::ffi::CStr::from_ptr(ptr) }.to_str()?))
+}
+
 pub fn owned_c_string(s: String) -> *mut core::ffi::c_char {
     match CString::new(s) {
         Ok(cs) => cs.into_raw(),

@@ -28,16 +28,26 @@ class SetupValidatorTest {
     fun validateFormReportsFirstProblem() {
         assertEquals(
             SetupValidator.URL_ERROR,
-            SetupValidator.validateForm("dav.example.com", "pw", "pw"),
+            SetupValidator.validateForm("dav.example.com", encrypt = true, "pw", "pw"),
         )
         assertEquals(
             SetupValidator.PASSPHRASE_ERROR,
-            SetupValidator.validateForm("https://dav.example.com", "", ""),
+            SetupValidator.validateForm("https://dav.example.com", encrypt = true, "", ""),
         )
         assertEquals(
             SetupValidator.CONFIRM_ERROR,
-            SetupValidator.validateForm("https://dav.example.com", "pw", "px"),
+            SetupValidator.validateForm("https://dav.example.com", encrypt = true, "pw", "px"),
         )
-        assertNull(SetupValidator.validateForm("https://dav.example.com", "pw", "pw"))
+        assertNull(SetupValidator.validateForm("https://dav.example.com", encrypt = true, "pw", "pw"))
+    }
+
+    @Test
+    fun validateFormWithoutEncryptionIgnoresPassphrase() {
+        assertNull(SetupValidator.validateForm("https://dav.example.com", encrypt = false, "", ""))
+        assertNull(SetupValidator.validateForm("https://dav.example.com", encrypt = false, "pw", "px"))
+        assertEquals(
+            SetupValidator.URL_ERROR,
+            SetupValidator.validateForm("dav.example.com", encrypt = false, "", ""),
+        )
     }
 }

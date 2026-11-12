@@ -87,15 +87,18 @@ void WizardActivity::register_recovery_toggle(bool* recovery_mode, size_t value_
                                               std::function<bool()> active) {
     registerAction(ws_label(WsAction::ToggleRecovery), ws_brls(WsAction::ToggleRecovery),
                    [this, recovery_mode, value_index, active](brls::View*) {
-        if (!active()) return true;
-        *recovery_mode = !*recovery_mode;
-        printf("[ui] wizard: recovery mode -> %s\n", *recovery_mode ? "on" : "off");
-        zeroize_string(values_[value_index]);
-        error_.clear();
-        reload_steps();
-        schedule_refresh();
+        if (active()) toggle_recovery(recovery_mode, value_index);
         return true;
     });
+}
+
+void WizardActivity::toggle_recovery(bool* recovery_mode, size_t value_index) {
+    *recovery_mode = !*recovery_mode;
+    printf("[ui] wizard: recovery mode -> %s\n", *recovery_mode ? "on" : "off");
+    zeroize_string(values_[value_index]);
+    error_.clear();
+    reload_steps();
+    schedule_refresh();
 }
 
 void WizardActivity::edit_field(const WizardFieldDef& f) {

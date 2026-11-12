@@ -19,6 +19,7 @@ private:
     Session*  session_;
     uint8_t*  keys_data_;
     size_t    keys_len_;
+    bool      plain_;
     bool      recovery_mode_;
     Wizard    wizard_;
     bool      unlocking_;

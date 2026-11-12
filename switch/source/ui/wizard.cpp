@@ -92,20 +92,19 @@ brls::Box* WizardRenderer::make_step_content(
             hint->setText(s.hint);
             hint->setFontSize(18.0f);
             hint->setTextColor(hint_color());
+            hint->setSingleLine(false);
             box->addView(hint);
         }
-        return box;
+    } else {
+        auto* title = new brls::Label();
+        title->setText(s.title);
+        title->setFontSize(32.0f);
+        title->setSingleLine(true);
+        title->setMargins(16.0f, 0.0f, 12.0f, 0.0f);
+        box->addView(title);
     }
 
-    // Normal step: top-aligned
     bool multi = s.fields.size() > 1;
-
-    auto* title = new brls::Label();
-    title->setText(s.title);
-    title->setFontSize(32.0f);
-    title->setSingleLine(true);
-    title->setMargins(16.0f, 0.0f, 12.0f, 0.0f);
-    box->addView(title);
 
     for (const auto& f : s.fields) {
         if (multi) {

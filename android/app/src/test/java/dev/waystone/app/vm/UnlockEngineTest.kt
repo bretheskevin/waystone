@@ -8,9 +8,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import uniffi.waystone_mobile.Vault
-import uniffi.waystone_mobile.WaystoneException
 import uniffi.waystone_mobile.WebDav
 import uniffi.waystone_mobile.vaultInit
+import uniffi.waystone_mobile.vaultPlain
 
 private const val PASSPHRASE = "correct horse battery staple"
 private const val DAV_PASSWORD = "dav-secret"
@@ -18,50 +18,6 @@ private const val DAV_PASSWORD = "dav-secret"
 private class FakeSettingsProvider(private val settings: Settings) : SettingsProvider {
     override suspend fun load(): Settings = settings
     override suspend fun save(settings: Settings) {}
-}
-
-private class FakeSessionVaultStore(
-    var mdk: ByteArray? = null,
-    var creds: Pair<String, CharArray>? = null,
-) : SessionVaultStore {
-    val savedCreds = mutableListOf<Pair<String, CharArray>>()
-    var wrapCount = 0
-    var clearCount = 0
-
-    override suspend fun unwrapMdk(): ByteArray? = mdk
-    override suspend fun wrapMdk(mdk: ByteArray): Boolean {
-        wrapCount++
-        mdk.fill(0)
-        return true
-    }
-
-    override suspend fun loadCreds(): Pair<String, CharArray>? = creds
-    override suspend fun saveCreds(username: String, password: CharArray): Boolean {
-        savedCreds += username to password.copyOf()
-        password.fill('\u0000')
-        return true
-    }
-
-    override suspend fun clear() {
-        clearCount++
-        mdk = null
-        creds = null
-    }
-}
-
-private class FakeWebDav(
-    private val keysJson: ByteArray? = null,
-    private val rejectGet: Boolean = false,
-) : WebDav {
-    override fun get(path: String): ByteArray? {
-        if (rejectGet) throw WaystoneException.WebDav("GET $path returned 401")
-        return keysJson
-    }
-
-    override fun put(path: String, body: ByteArray) {}
-    override fun exists(path: String): Boolean = true
-    override fun propfind(path: String): List<String> = emptyList()
-    override fun mkdirP(path: String) {}
 }
 
 private fun davProviderOf(dav: WebDav?): DavProvider = object : DavProvider {
@@ -90,6 +46,7 @@ class UnlockEngineTest {
         sessionVaultStore = store,
         davProvider = current,
         davFactory = factory,
+        log = {},
     )
 
     @Test
@@ -235,5 +192,109 @@ class UnlockEngineTest {
         // Round-trip: unlock a fresh handle from the stored MDK and re-export.
         val fromMdk = Vault.unlockWithPassphrase(PASSPHRASE, init.keysJson)
         assertArrayEquals(fromMdk.exportMdk(), result.vault.exportMdk())
+    }
+
+    @Test
+    fun autoUnlockPlainServerNeedsNoMdk() = runTest {
+        val store = FakeSessionVaultStore(mdk = null, creds = "alice" to DAV_PASSWORD.toCharArray())
+        val engine = engine(store, dav = FakeWebDav(keysJson = vaultPlain().keysJson()))
+
+        val result = engine.attemptAutoUnlock()
+
+        assertTrue(result is UnlockResult.Unlocked)
+        assertFalse((result as UnlockResult.Unlocked).vault.isEncrypted())
+        assertEquals(0, store.wrapCount)
+        assertEquals(0, store.clearCount)
+    }
+
+    @Test
+    fun autoUnlockEncryptedServerWithoutMdkShowsForm() = runTest {
+        val init = vaultInit(PASSPHRASE)
+        val store = FakeSessionVaultStore(mdk = null, creds = "alice" to DAV_PASSWORD.toCharArray())
+        val engine = engine(store, dav = FakeWebDav(keysJson = init.keysJson))
+
+        val result = engine.attemptAutoUnlock()
+
+        assertEquals(UnlockResult.Form(clearedStoredSession = false), result)
+        assertEquals(0, store.clearCount)
+    }
+
+    @Test
+    fun plainSubmitWithEmptySecretUnlocksAndPersistsCreds() = runTest {
+        val store = FakeSessionVaultStore()
+        val factory = RecordingDavFactory(FakeWebDav(keysJson = vaultPlain().keysJson()))
+        val engine = engine(store, factory = factory, current = davProviderOf(null))
+        engine.attemptAutoUnlock()
+        engine.updateWebdavPassword(DAV_PASSWORD)
+
+        val result = engine.submit("", recovery = false)
+
+        assertTrue(result is UnlockResult.Unlocked)
+        assertEquals(0, store.wrapCount)
+        assertEquals(listOf("alice"), store.savedCreds.map { it.first })
+    }
+
+    @Test
+    fun autoUnlockRefusesPlainServerWhileHoldingEncryptedSession() = runTest {
+        val store = FakeSessionVaultStore(mdk = ByteArray(32) { 7 }, creds = "alice" to DAV_PASSWORD.toCharArray())
+        val engine = engine(store, dav = FakeWebDav(keysJson = vaultPlain().keysJson()))
+
+        val result = engine.attemptAutoUnlock()
+
+        assertEquals(UnlockResult.Form(clearedStoredSession = false), result)
+        assertEquals(0, store.clearCount)
+    }
+
+    @Test
+    fun submitRefusesPlainServerWhileHoldingEncryptedSession() = runTest {
+        val store = FakeSessionVaultStore(mdk = ByteArray(32) { 7 })
+        val factory = RecordingDavFactory(FakeWebDav(keysJson = vaultPlain().keysJson()))
+        val engine = engine(store, factory = factory, current = davProviderOf(null))
+        engine.attemptAutoUnlock()
+        engine.updateWebdavPassword(DAV_PASSWORD)
+
+        val result = engine.submit(PASSPHRASE, recovery = false)
+
+        assertEquals(UnlockResult.Failed(DOWNGRADE_ERROR), result)
+        assertTrue(store.savedCreds.isEmpty())
+    }
+
+    @Test
+    fun encryptedSubmitAcceptsWhitespacePassphraseSetupAllows() = runTest {
+        val init = vaultInit("   ")
+        val store = FakeSessionVaultStore()
+        val engine = engine(store, dav = FakeWebDav(keysJson = init.keysJson), current = davProviderOf(null))
+        engine.attemptAutoUnlock()
+        engine.updateWebdavPassword(DAV_PASSWORD)
+
+        val result = engine.submit("   ", recovery = false)
+
+        assertTrue(result is UnlockResult.Unlocked)
+        assertEquals(1, store.wrapCount)
+    }
+
+    @Test
+    fun encryptedSubmitWithEmptySecretFails() = runTest {
+        val init = vaultInit(PASSPHRASE)
+        val store = FakeSessionVaultStore()
+        val engine = engine(store, dav = FakeWebDav(keysJson = init.keysJson), current = davProviderOf(null))
+        engine.attemptAutoUnlock()
+        engine.updateWebdavPassword(DAV_PASSWORD)
+
+        val result = engine.submit("", recovery = false)
+
+        assertEquals(UnlockResult.Failed("Passphrase is required"), result)
+        assertTrue(store.savedCreds.isEmpty())
+        assertEquals(0, store.wrapCount)
+    }
+
+    @Test
+    fun encryptedRecoverySubmitWithEmptySecretAsksForTheRecoveryKey() = runTest {
+        val init = vaultInit(PASSPHRASE)
+        val engine = engine(FakeSessionVaultStore(), dav = FakeWebDav(keysJson = init.keysJson), current = davProviderOf(null))
+        engine.attemptAutoUnlock()
+        engine.updateWebdavPassword(DAV_PASSWORD)
+
+        assertEquals(UnlockResult.Failed("Recovery key is required"), engine.submit("", recovery = true))
     }
 }

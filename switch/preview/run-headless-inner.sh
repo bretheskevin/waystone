@@ -8,6 +8,10 @@
 #   out/setup-field.png    — SetupActivity step 1 (Server URL, pre-filled)
 #   out/creating-vault.png — SetupActivity step 3, "Creating vault…" progress state
 #   out/unlock.png         — UnlockActivity step 0 (Vault Passphrase)
+#   out/setup-plain.png         — SetupActivity vault step, new server (no encryption)
+#   out/setup-plain-encrypt.png — same after Y: passphrase + confirm fields
+#   out/setup-join-plain.png    — SetupActivity vault step, unencrypted server (join)
+#   out/unlock-plain.png        — UnlockActivity on an unencrypted server (WebDAV password only)
 #   out/recovery.png       — RecoveryKeyActivity (full-screen recovery key)
 #   out/no-internet.png    — NoInternetActivity (no connection screen)
 #   demo.png               — borealis demo (regression check, optional)
@@ -155,6 +159,11 @@ capture "$WIZARD_OUT/creating-vault.png" "$PREVIEW_DIR" "$WIZARD_BIN" creating-v
 
 echo "=== Capturing wizard: unlock ==="
 capture "$WIZARD_OUT/unlock.png" "$PREVIEW_DIR" "$WIZARD_BIN" unlock
+
+for mode in setup-plain setup-plain-encrypt setup-join-plain unlock-plain; do
+    echo "=== Capturing wizard: $mode ==="
+    capture "$WIZARD_OUT/$mode.png" "$PREVIEW_DIR" "$WIZARD_BIN" "$mode"
+done
 
 echo "=== Capturing wizard: recovery key ==="
 capture "$WIZARD_OUT/recovery.png" "$PREVIEW_DIR" "$WIZARD_BIN" recovery

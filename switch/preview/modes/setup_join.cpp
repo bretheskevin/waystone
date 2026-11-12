@@ -1,6 +1,7 @@
-// Setup vault-join modes: setup-join, setup-join-recovery, setup-probe-error. They start on the
-// filled WebDAV Login step and press Next, so the real probe -> step switch path runs against
-// the stubbed probe (preview/stubs/vault_remote_stub.cpp).
+// Setup vault-step modes: setup-join, setup-join-recovery, setup-join-plain, setup-plain,
+// setup-plain-encrypt, setup-probe-error. They start on the filled WebDAV Login step and press
+// Next, so the real probe -> step switch path runs against the stubbed probe
+// (preview/stubs/vault_remote_stub.cpp).
 #include "registry.h"
 #include "kit_preview.h"
 #include "setup_activity.h"
@@ -8,6 +9,7 @@
 
 extern RemoteKeysState g_preview_probe_state;
 extern int             g_preview_probe_status;
+extern bool            g_preview_probe_plain;
 
 class PreviewLoginSetupActivity : public SetupActivity {
   public:
@@ -32,9 +34,10 @@ static void press_after(int delay_ms, std::vector<brls::ControllerButton> seq) {
     timer->start(delay_ms);
 }
 
-static void push_login(Session& session, RemoteKeysState probe, int status) {
+static void push_login(Session& session, RemoteKeysState probe, int status, bool plain = false) {
     g_preview_probe_state  = probe;
     g_preview_probe_status = status;
+    g_preview_probe_plain  = plain;
     preview_seed_session(session);
     auto* act = new PreviewLoginSetupActivity(&session);
     act->preset_login();
@@ -52,6 +55,19 @@ static void run_setup_join_recovery(Session& s) {
 
 static void run_setup_probe_error(Session& s) { push_login(s, RemoteKeysState::Error, -1); }
 
+static void run_setup_join_plain(Session& s) { push_login(s, RemoteKeysState::Present, 200, true); }
+
+static void run_setup_plain(Session& s) { push_login(s, RemoteKeysState::Absent, 404); }
+
+static void run_setup_plain_encrypt(Session& s) {
+    push_login(s, RemoteKeysState::Absent, 404);
+    press_after(PREVIEW_READY_DELAY_MS + PREVIEW_AFTER_STEP_MS,
+                {ws_brls(WsAction::ToggleEncryption)});
+}
+
 static PreviewModeReg reg_setup_join("setup-join", &run_setup_join);
 static PreviewModeReg reg_setup_join_recovery("setup-join-recovery", &run_setup_join_recovery);
 static PreviewModeReg reg_setup_probe_error("setup-probe-error", &run_setup_probe_error);
+static PreviewModeReg reg_setup_join_plain("setup-join-plain", &run_setup_join_plain);
+static PreviewModeReg reg_setup_plain("setup-plain", &run_setup_plain);
+static PreviewModeReg reg_setup_plain_encrypt("setup-plain-encrypt", &run_setup_plain_encrypt);

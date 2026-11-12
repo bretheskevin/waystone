@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use waystone_core::crypto::PLAIN_KEYS_JSON;
 use waystone_mobile::decision::{ConflictPolicy, PushOutcome, SyncDecision};
 use waystone_mobile::error::WaystoneError;
 use waystone_mobile::exports::{
@@ -9,7 +10,7 @@ use waystone_mobile::exports::{
 use waystone_mobile::types::{
     Confidence, DeviceHead, FileEntry, NormalizedSave, RawFileEntry, RawTree,
 };
-use waystone_mobile::vault::{Vault, vault_from_mdk};
+use waystone_mobile::vault::{KeysMode, Vault, keys_mode, vault_from_mdk, vault_plain};
 use waystone_mobile::webdav::WebDav;
 
 struct MockWebDav {
@@ -464,7 +465,7 @@ fn mdk_round_trip_matches_passphrase_unlock() {
     let payload = b"mdk payload".to_vec();
     let encrypted = init.vault.encrypt_blob(payload.clone()).unwrap();
 
-    let mdk = init.vault.export_mdk();
+    let mdk = init.vault.export_mdk().expect("encrypted vault has an mdk");
     assert_eq!(mdk.len(), 32);
 
     let from_mdk = vault_from_mdk(mdk).unwrap();
@@ -483,4 +484,45 @@ fn mdk_round_trip_matches_passphrase_unlock() {
     assert_eq!(unlocked.decrypt_blob(encrypted).unwrap(), payload);
 
     assert!(vault_from_mdk(vec![1, 2, 3]).is_err());
+}
+
+#[test]
+fn keys_mode_maps_core_modes() {
+    let init = Vault::init("mode".into()).unwrap();
+    assert_eq!(
+        keys_mode(PLAIN_KEYS_JSON.to_vec()).unwrap(),
+        KeysMode::Plain
+    );
+    assert_eq!(keys_mode(init.keys_json).unwrap(), KeysMode::Encrypted);
+    assert!(matches!(
+        keys_mode(b"garbage".to_vec()),
+        Err(WaystoneError::Crypto { .. })
+    ));
+}
+
+#[test]
+fn vault_plain_is_unencrypted_without_mdk() {
+    let v = vault_plain();
+    assert!(!v.is_encrypted());
+    assert!(v.export_mdk().is_none());
+    assert_eq!(v.keys_json().unwrap(), PLAIN_KEYS_JSON);
+    assert_eq!(v.encrypt_blob(b"x".to_vec()).unwrap(), b"x");
+}
+
+#[test]
+fn vault_open_plain_and_encrypted() {
+    let plain = Vault::open(PLAIN_KEYS_JSON.to_vec(), None, false).unwrap();
+    assert!(!plain.is_encrypted());
+
+    let init = Vault::init("open-pass".into()).unwrap();
+    let ct = init.vault.encrypt_blob(b"payload".to_vec()).unwrap();
+    assert!(matches!(
+        Vault::open(init.keys_json.clone(), None, false),
+        Err(WaystoneError::Crypto { .. })
+    ));
+    let by_pass = Vault::open(init.keys_json.clone(), Some("open-pass".into()), false).unwrap();
+    assert!(by_pass.is_encrypted());
+    assert_eq!(by_pass.decrypt_blob(ct.clone()).unwrap(), b"payload");
+    let by_rec = Vault::open(init.keys_json, Some(init.recovery_hex), true).unwrap();
+    assert_eq!(by_rec.decrypt_blob(ct).unwrap(), b"payload");
 }

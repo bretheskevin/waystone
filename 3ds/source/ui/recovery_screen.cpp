@@ -4,6 +4,7 @@
 #include "theme.h"
 #include "widgets.h"
 #include "keymap_3ds.h"
+#include "setup_model.h"
 #include <cstdio>
 
 RecoveryScreen::RecoveryScreen(Session* session,
@@ -22,10 +23,8 @@ void RecoveryScreen::draw_top(C3D_RenderTarget* target) {
     draw_text_centered(buf, 0, 40.0f, 0.5f, TEXT_2XL,  CLR_TEXT,        "Recovery Key",   (float)SCREEN_TOP_W);
     draw_text_centered(buf, 0, 80.0f, 0.5f, TEXT_BASE,  CLR_ERROR,
         "Write this down or keep it on your SD card.",   (float)SCREEN_TOP_W);
-    draw_text_centered(buf, 0, 100.0f, 0.5f, TEXT_BASE, CLR_ERROR,
-        "If you forget your passphrase, this is the",    (float)SCREEN_TOP_W);
-    draw_text_centered(buf, 0, 116.0f, 0.5f, TEXT_BASE, CLR_ERROR,
-        "ONLY way to recover your vault.",               (float)SCREEN_TOP_W);
+    draw_text_wrapped_centered(buf, (float)SP_XL, 100.0f, 0.5f, TEXT_BASE, CLR_ERROR,
+        recovery_key_warning(), (float)SCREEN_TOP_W - 2.0f * (float)SP_XL, 16.0f);
 }
 
 void RecoveryScreen::draw_bottom(C3D_RenderTarget* target) {

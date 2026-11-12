@@ -6,12 +6,8 @@
 #include "theme.h"
 #include "worker_thread.h"
 #include "vault_helpers.h"
+#include "ffi_err.h"
 #include <cstdio>
-
-extern "C" {
-struct Vault;
-#include "waystone.h"
-}
 
 struct UnlockWorkerCtx {
     UnlockScreen* self;
@@ -19,15 +15,18 @@ struct UnlockWorkerCtx {
     bool          recovery_mode;
 };
 
-// recovery_mode_ must be declared before wizard_ so it is initialized first
+// plain_ and recovery_mode_ must be declared before wizard_ so they are initialized first
 // (C++ initializes members in declaration order, not initializer-list order).
 
 UnlockScreen::UnlockScreen(Session* session, uint8_t* keys_data, size_t keys_len)
     : session_(session), keys_data_(keys_data), keys_len_(keys_len),
+      plain_(ffi_keys_plain(keys_data, keys_len)),
       recovery_mode_(false),
       wizard_(make_steps(), NUM_VALUES),
       unlocking_(false), unlock_done_(false), unlock_thread_(NULL),
-      unlock_success_(false) {}
+      unlock_success_(false) {
+    printf("[unlock] screen created (mode=%s)\n", keys_mode_name(plain_));
+}
 
 UnlockScreen::~UnlockScreen() {
     if (unlocking_) {
@@ -38,17 +37,22 @@ UnlockScreen::~UnlockScreen() {
 }
 
 std::vector<WizardStepDef> UnlockScreen::make_steps() const {
-    WizardFieldDef pass_field = vault_secret_field(FIELD_PASSPHRASE, recovery_mode_);
     WizardFieldDef pwd_field;
     pwd_field.value_index = FIELD_PASSWORD;
     pwd_field.label       = "WebDAV Password";
     pwd_field.is_secret   = true;
     pwd_field.placeholder = "not set";
-    pwd_field.hint        = "your WebDAV password";
+    pwd_field.hint        = unlock_password_hint(plain_);
 
     WizardStepDef step;
-    step.title = "Unlock Vault";
-    step.fields.push_back(pass_field);
+    step.title = unlock_title(plain_);
+    if (plain_) {
+        step.hint = pwd_field.hint;
+    } else {
+        WizardFieldDef pass_field = vault_secret_field(FIELD_PASSPHRASE, recovery_mode_);
+        step.hint = pass_field.hint;
+        step.fields.push_back(pass_field);
+    }
     step.fields.push_back(pwd_field);
 
     std::vector<WizardStepDef> steps;
@@ -58,7 +62,7 @@ std::vector<WizardStepDef> UnlockScreen::make_steps() const {
 
 bool UnlockScreen::validate() {
     wizard_.clear_error();
-    if (wizard_.value(FIELD_PASSPHRASE).empty()) {
+    if (!plain_ && wizard_.value(FIELD_PASSPHRASE).empty()) {
         wizard_.set_error(vault_secret_required(recovery_mode_));
         return false;
     }
@@ -73,25 +77,22 @@ void UnlockScreen::unlock_thread_entry(void* arg) {
     UnlockWorkerCtx* ctx = static_cast<UnlockWorkerCtx*>(arg);
     UnlockScreen* self = ctx->self;
 
-    printf("[unlock] worker: calling ws_vault_unlock\n");
-    WsVault* vault = NULL;
-    if (ctx->recovery_mode) {
-        vault = ws_vault_unlock_recovery(ctx->passphrase.c_str(),
-                                         self->keys_data_, self->keys_len_);
-    } else {
-        vault = ws_vault_unlock_pass(ctx->passphrase.c_str(),
-                                     self->keys_data_, self->keys_len_);
-    }
+    bool plain = self->plain_;
+    printf("[unlock] worker: ws_vault_open (mode=%s, recovery=%d)\n",
+           keys_mode_name(plain), ctx->recovery_mode ? 1 : 0);
+    WsVault* vault = ws_vault_open(self->keys_data_, self->keys_len_,
+                                   plain ? NULL : ctx->passphrase.c_str(), ctx->recovery_mode);
     zeroize_string(ctx->passphrase);
 
+    const char* kind = plain ? "plain login" : "unlock";
     if (vault) {
-        printf("[unlock] worker: unlock succeeded\n");
+        printf("[unlock] worker: %s ok\n", kind);
         self->session_->vault  = vault;
         self->unlock_success_  = true;
     } else {
         const char* err = ws_last_error();
-        printf("[unlock] worker: unlock FAILED: %s\n", err ? err : "unknown");
-        self->unlock_error_   = std::string("Unlock failed: ") + (err ? err : "wrong passphrase or key");
+        printf("[unlock] worker: %s FAILED: %s\n", kind, ffi_err());
+        self->unlock_error_   = unlock_failed_message(plain, err);
         self->unlock_success_ = false;
     }
     self->unlock_done_.store(true);
@@ -109,8 +110,8 @@ void UnlockScreen::do_unlock() {
 
     UnlockWorkerCtx* ctx = new UnlockWorkerCtx();
     ctx->self          = this;
-    ctx->passphrase    = wizard_.value(FIELD_PASSPHRASE);
-    ctx->recovery_mode = recovery_mode_;
+    if (!plain_) ctx->passphrase = wizard_.value(FIELD_PASSPHRASE);
+    ctx->recovery_mode = !plain_ && recovery_mode_;
 
     printf("[unlock] do_unlock: starting worker thread\n");
     unlock_thread_ = start_worker_thread(unlock_thread_entry, ctx);
@@ -124,16 +125,17 @@ void UnlockScreen::do_unlock() {
 }
 
 void UnlockScreen::draw_top(C3D_RenderTarget* target) {
-    wizard_.draw_top(target, App::instance().text_buf(), "Unlock Vault");
+    wizard_.draw_top(target, App::instance().text_buf(), unlock_title(plain_));
 }
 
 void UnlockScreen::draw_bottom(C3D_RenderTarget* target) {
-    wizard_.draw_bottom(target, App::instance().text_buf(), "Unlock");
+    wizard_.draw_bottom(target, App::instance().text_buf(), unlock_finish_label(plain_));
 }
 
 void UnlockScreen::handle_input(u32 kDown, touchPosition touch) {
     if (unlocking_) return;
-    if (vault_secret_toggle(kDown, &recovery_mode_, &wizard_, FIELD_PASSPHRASE,
+    if (!plain_ &&
+        vault_secret_toggle(kDown, &recovery_mode_, &wizard_, FIELD_PASSPHRASE,
                             [this] { return make_steps(); }))
         return;
     int result = wizard_.handle_input(kDown, touch);

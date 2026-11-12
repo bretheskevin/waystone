@@ -34,7 +34,8 @@ pub enum Cmd {
     RefreshStatus(usize),
     RefreshAllStatuses,
     AttemptUnlock {
-        passphrase: String,
+        /// None = empty field (fine for an unencrypted server).
+        passphrase: Option<String>,
         webdav_password: Option<String>,
         recovery: bool,
     },
@@ -52,7 +53,8 @@ pub enum Cmd {
         server_url: String,
         username: String,
         password: String,
-        passphrase: String,
+        /// None = unencrypted setup.
+        passphrase: Option<String>,
     },
     SaveRecoveryFile {
         key: String,
@@ -481,9 +483,33 @@ pub struct SetupForm {
     pub password: String,
     pub passphrase: String,
     pub confirm: String,
+    pub encrypt: bool,
     pub field: usize,
     pub error: Option<String>,
     pub busy: bool,
+}
+
+const SETUP_FIELD_ENCRYPT: usize = 3;
+const SETUP_FIELD_PASSPHRASE: usize = SETUP_FIELD_ENCRYPT + 1;
+const SETUP_FIELD_CONFIRM: usize = SETUP_FIELD_ENCRYPT + 2;
+
+impl SetupForm {
+    fn max_field(&self) -> usize {
+        if self.encrypt {
+            SETUP_FIELD_CONFIRM
+        } else {
+            SETUP_FIELD_ENCRYPT
+        }
+    }
+
+    fn toggle_encrypt(&mut self) {
+        self.encrypt = !self.encrypt;
+        if !self.encrypt {
+            self.passphrase.zeroize();
+            self.confirm.zeroize();
+        }
+        log::info!("[ui] setup: encrypt={}", self.encrypt);
+    }
 }
 
 impl std::fmt::Debug for SetupForm {
@@ -494,6 +520,7 @@ impl std::fmt::Debug for SetupForm {
             .field("password", &"[REDACTED]")
             .field("passphrase", &"[REDACTED]")
             .field("confirm", &"[REDACTED]")
+            .field("encrypt", &self.encrypt)
             .field("field", &self.field)
             .field("error", &self.error)
             .field("busy", &self.busy)
@@ -546,7 +573,10 @@ impl Drop for SettingsForm {
 }
 
 pub struct SetupOk {
-    pub recovery_key: String,
+    /// Some only for a newly created encrypted vault.
+    pub recovery_key: Option<String>,
+    /// Joined an existing unencrypted server.
+    pub joined: bool,
     pub vault: Arc<Vault>,
     pub dav: Arc<WebDavClient>,
     pub blocking_dav: Arc<BlockingWebDav>,
@@ -1109,10 +1139,12 @@ fn update_inner(app: &mut App, msg: Msg) -> Vec<Cmd> {
                 });
                 app.setup = None;
                 app.screen = Screen::Dashboard;
-                app.overlay = Overlay::RecoveryKey {
-                    key: ok.recovery_key,
-                };
-                app.push_log("Vault initialized successfully.".into());
+                let line =
+                    crate::vault_ops::setup_done_message(ok.recovery_key.is_some(), ok.joined);
+                if let Some(key) = ok.recovery_key {
+                    app.overlay = Overlay::RecoveryKey { key };
+                }
+                app.push_log(line.into());
                 vec![Cmd::SaveConfig, Cmd::RefreshAllStatuses]
             }
             Err(err) => {
@@ -1764,18 +1796,11 @@ fn handle_unlock_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
         }
         KeyCode::Enter => {
             *error = Option::None;
-            if passphrase.is_empty() {
-                *error = Some(
-                    if *recovery_mode {
-                        "Recovery key is required."
-                    } else {
-                        "Passphrase is required."
-                    }
-                    .into(),
-                );
+            if passphrase.is_empty() && *recovery_mode {
+                *error = Some("Recovery key is required.".into());
                 return vec![];
             }
-            let pass_clone = passphrase.clone();
+            let pass_clone = (!passphrase.is_empty()).then(|| passphrase.clone());
             let wdav_clone = if needs_webdav && !webdav_password.is_empty() {
                 Some(webdav_password.clone())
             } else if needs_webdav {
@@ -1965,7 +1990,6 @@ fn handle_setup_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
     if form.busy {
         return vec![];
     }
-    let max_field: usize = 4;
 
     match key.code {
         KeyCode::Esc => {
@@ -1975,11 +1999,15 @@ fn handle_setup_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
             vec![Cmd::Quit]
         }
         KeyCode::Tab | KeyCode::Down => {
-            form.field = (form.field + 1).min(max_field);
+            form.field = (form.field + 1).min(form.max_field());
             vec![]
         }
         KeyCode::BackTab | KeyCode::Up => {
             form.field = form.field.saturating_sub(1);
+            vec![]
+        }
+        KeyCode::Enter | KeyCode::Char(' ') if form.field == SETUP_FIELD_ENCRYPT => {
+            form.toggle_encrypt();
             vec![]
         }
         KeyCode::Enter => {
@@ -1988,11 +2016,11 @@ fn handle_setup_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                 form.error = Some(e.into());
                 return vec![];
             }
-            if form.passphrase.is_empty() {
-                form.error = Some("Passphrase is required.".into());
+            if form.encrypt && form.passphrase.is_empty() {
+                form.error = Some(crate::vault_ops::PASSPHRASE_REQUIRED.into());
                 return vec![];
             }
-            if form.passphrase != form.confirm {
+            if form.encrypt && form.passphrase != form.confirm {
                 form.error = Some("Passphrases do not match.".into());
                 form.passphrase.zeroize();
                 form.confirm.zeroize();
@@ -2002,7 +2030,7 @@ fn handle_setup_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                 server_url: form.server_url.clone(),
                 username: form.username.clone(),
                 password: form.password.clone(),
-                passphrase: form.passphrase.clone(),
+                passphrase: form.encrypt.then(|| form.passphrase.clone()),
             };
             form.passphrase.zeroize();
             form.password.zeroize();
@@ -2015,7 +2043,8 @@ fn handle_setup_key(app: &mut App, key: KeyEvent) -> Vec<Cmd> {
                 0 => &mut form.server_url,
                 1 => &mut form.username,
                 2 => &mut form.password,
-                3 => &mut form.passphrase,
+                SETUP_FIELD_ENCRYPT => return vec![],
+                SETUP_FIELD_PASSPHRASE => &mut form.passphrase,
                 _ => &mut form.confirm,
             };
             edit_text(field, key.code);
@@ -2716,6 +2745,7 @@ mod tests {
         let mut app = App::new(&setup_config());
         if let Some(ref mut form) = app.setup {
             form.server_url = "http://localhost".into();
+            form.encrypt = true;
             form.passphrase = "abc".into();
             form.confirm = "xyz".into();
         }
@@ -2739,11 +2769,18 @@ mod tests {
             form.server_url = "http://localhost:5000".into();
             form.username = "alice".into();
             form.password = "secret".into();
+            form.encrypt = true;
             form.passphrase = "pass123".into();
             form.confirm = "pass123".into();
         }
         let cmds = update(&mut app, key(KeyCode::Enter));
-        assert!(cmds.iter().any(|c| matches!(c, Cmd::RunSetup { .. })));
+        assert!(cmds.iter().any(|c| matches!(
+            c,
+            Cmd::RunSetup {
+                passphrase: Some(p),
+                ..
+            } if p == "pass123"
+        )));
         assert!(app.setup.as_ref().unwrap().busy);
     }
 
@@ -2758,7 +2795,8 @@ mod tests {
         let cmds = update(
             &mut app,
             Msg::SetupResult(Ok(SetupOk {
-                recovery_key: "deadbeef".into(),
+                recovery_key: Some("deadbeef".into()),
+                joined: false,
                 vault: Arc::new(vault),
                 dav: Arc::new(dav),
                 blocking_dav: Arc::new(BlockingWebDav::new("http://localhost", None, None)),
@@ -2770,6 +2808,101 @@ mod tests {
         assert!(matches!(app.overlay, Overlay::RecoveryKey { .. }));
         assert!(cmds.iter().any(|c| matches!(c, Cmd::SaveConfig)));
         assert!(cmds.iter().any(|c| matches!(c, Cmd::RefreshAllStatuses)));
+    }
+
+    fn plain_setup_ok(joined: bool) -> Msg {
+        Msg::SetupResult(Ok(SetupOk {
+            recovery_key: None,
+            joined,
+            vault: Arc::new(Vault::plain()),
+            dav: Arc::new(crate::webdav::WebDavClient::new(
+                "http://localhost",
+                None,
+                None,
+            )),
+            blocking_dav: Arc::new(BlockingWebDav::new("http://localhost", None, None)),
+        }))
+    }
+
+    #[test]
+    fn setup_result_plain_goes_straight_to_dashboard() {
+        for (joined, line) in [
+            (false, "Server set up without encryption."),
+            (true, "Joined the server (unencrypted)."),
+        ] {
+            let mut app = App::new(&setup_config());
+            let cmds = update(&mut app, plain_setup_ok(joined));
+            assert_eq!(app.screen, Screen::Dashboard);
+            assert!(matches!(app.overlay, Overlay::None));
+            assert!(app.log.iter().any(|l| l.text == line), "missing {line}");
+            assert!(cmds.iter().any(|c| matches!(c, Cmd::SaveConfig)));
+        }
+    }
+
+    #[test]
+    fn setup_encrypt_toggle_shows_and_hides_passphrase_fields() {
+        let mut app = App::new(&setup_config());
+        for _ in 0..6 {
+            update(&mut app, key(KeyCode::Down));
+        }
+        let form = app.setup.as_ref().unwrap();
+        assert!(!form.encrypt);
+        assert_eq!(form.max_field(), 3);
+        assert_eq!(form.field, 3);
+
+        update(&mut app, key(KeyCode::Char(' ')));
+        assert!(app.setup.as_ref().unwrap().encrypt);
+        assert_eq!(app.setup.as_ref().unwrap().max_field(), 5);
+        update(&mut app, key(KeyCode::Down));
+        update(&mut app, key(KeyCode::Char('a')));
+        update(&mut app, key(KeyCode::Down));
+        update(&mut app, key(KeyCode::Char('a')));
+        assert_eq!(app.setup.as_ref().unwrap().field, 5);
+        assert_eq!(app.setup.as_ref().unwrap().confirm, "a");
+
+        update(&mut app, key(KeyCode::Up));
+        update(&mut app, key(KeyCode::Up));
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(cmds.is_empty(), "Enter on the toggle must not submit");
+        let form = app.setup.as_ref().unwrap();
+        assert!(!form.encrypt);
+        assert!(form.passphrase.is_empty() && form.confirm.is_empty());
+        assert_eq!(form.max_field(), 3);
+    }
+
+    #[test]
+    fn setup_plain_submit_emits_run_setup_without_passphrase() {
+        let mut app = App::new(&setup_config());
+        if let Some(ref mut form) = app.setup {
+            form.server_url = "http://localhost:5000".into();
+        }
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                Cmd::RunSetup {
+                    passphrase: None,
+                    ..
+                }
+            )),
+            "{cmds:?}"
+        );
+        assert!(app.setup.as_ref().unwrap().busy);
+    }
+
+    #[test]
+    fn setup_encrypted_submit_requires_a_passphrase() {
+        let mut app = App::new(&setup_config());
+        if let Some(ref mut form) = app.setup {
+            form.server_url = "http://localhost:5000".into();
+            form.encrypt = true;
+        }
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(cmds.is_empty());
+        assert_eq!(
+            app.setup.as_ref().unwrap().error.as_deref(),
+            Some(crate::vault_ops::PASSPHRASE_REQUIRED)
+        );
     }
 
     #[test]
@@ -3267,6 +3400,25 @@ mod tests {
                 }
             )),
             "should emit AttemptUnlock with recovery: false"
+        );
+    }
+
+    #[test]
+    fn unlock_enter_with_empty_passphrase_attempts_plain_unlock() {
+        let mut app = app_with_unlock_overlay();
+        update(&mut app, key(KeyCode::Tab));
+        update(&mut app, key(KeyCode::Char('w')));
+        let cmds = update(&mut app, key(KeyCode::Enter));
+        assert!(
+            cmds.iter().any(|c| matches!(
+                c,
+                Cmd::AttemptUnlock {
+                    passphrase: None,
+                    recovery: false,
+                    ..
+                }
+            )),
+            "{cmds:?}"
         );
     }
 

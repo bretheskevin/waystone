@@ -222,3 +222,60 @@ fn list_history_empty_when_no_push() {
     let entries = waystone_sync::list_history(&vault, &save, &dav).unwrap();
     assert!(entries.is_empty(), "no push means no history");
 }
+
+fn plain_switch_save(content: &[u8]) -> NormalizedSave {
+    let mut save = make_test_save(content, "2026-01-01T00:00:00Z");
+    save.id.game.key = "0100ABC000123000".into();
+    save.id.game.title_id = Some("0100ABC000123000".into());
+    save.group_key = "switch/0100ABC000123000/main".into();
+    save
+}
+
+#[test]
+fn plain_push_writes_readable_layout() {
+    let vault = Vault::plain();
+    let dav = MemoryDav::new();
+    let save = plain_switch_save(b"plain-save");
+    let (entry, zip_bytes) = waystone_core::packaging::package(&save);
+    let hash = entry.content.hash;
+
+    waystone_sync::push_one(&vault, &save, "dev1", &dav).unwrap();
+
+    let blob = dav
+        .read(&format!("switch/0100ABC000123000/main/blobs/{hash}.zip"))
+        .expect("readable blob path");
+    assert_eq!(blob, zip_bytes);
+    let head: waystone_core::conflict::DeviceHead = serde_json::from_slice(
+        &dav.read("switch/0100ABC000123000/main/heads/dev1.json")
+            .expect("readable head path"),
+    )
+    .unwrap();
+    assert_eq!(head.hash, hash);
+}
+
+#[test]
+fn plain_fetch_and_pull_round_trip() {
+    let vault = Vault::plain();
+    let dav = MemoryDav::new();
+    let old = plain_switch_save(b"old");
+    waystone_sync::push_one(&vault, &old, "dev1", &dav).unwrap();
+    waystone_sync::push_one(&vault, &old, "dev2", &dav).unwrap();
+    let mut new = plain_switch_save(b"new");
+    new.mtime = "2026-01-02T00:00:00Z".into();
+    waystone_sync::push_one(&vault, &new, "dev1", &dav).unwrap();
+
+    let (entry, zip_bytes) = waystone_core::packaging::package(&new);
+    let fetched = waystone_sync::fetch_blob(&vault, &old, &entry.content.hash, &dav).unwrap();
+    assert_eq!(fetched, zip_bytes);
+
+    let outcome = waystone_sync::pull_one(
+        &vault,
+        &old,
+        "dev2",
+        waystone_core::conflict::ConflictPolicy::NewestWins,
+        &dav,
+    )
+    .unwrap();
+    let files = outcome.files.expect("should have pulled files");
+    assert_eq!(files[0].1, b"new");
+}

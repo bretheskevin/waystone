@@ -79,6 +79,16 @@ RealVault make_real_vault(const char* pass) {
     return rv;
 }
 
+std::vector<uint8_t> plain_keys() {
+    WsVault* v = ws_vault_plain();
+    assert(v);
+    WsBuf b = ws_vault_keys_json(v);
+    std::vector<uint8_t> out(b.ptr, b.ptr + b.len);
+    ws_buf_free(b);
+    ws_vault_free(v);
+    return out;
+}
+
 std::string read_file(const std::string& path) {
     FILE* f = fopen(path.c_str(), "rb");
     if (!f) return std::string();
@@ -100,9 +110,9 @@ void test_fetch_states() {
     RemoteKeys r = vault_fetch_remote_keys(d);
     assert(r.state == RemoteKeysState::Absent && r.http_status == 404);
 
-    s.files["/keys.json"] = bytes_of("{}");
+    s.files["/keys.json"] = plain_keys();
     r = vault_fetch_remote_keys(d);
-    assert(r.state == RemoteKeysState::Present && r.bytes == bytes_of("{}"));
+    assert(r.state == RemoteKeysState::Present && r.bytes == plain_keys());
 
     s.files["/keys.json"].clear();
     r = vault_fetch_remote_keys(d);
@@ -132,7 +142,7 @@ void test_create_on_absent_publishes_keys() {
 
 void test_create_refuses_when_present() {
     FakeServer s;
-    s.files["/keys.json"] = bytes_of("{\"v\":1}");
+    s.files["/keys.json"] = plain_keys();
     VaultSetupResult r = vault_create_and_publish(fake_dav(&s), "pw");
     assert(!r.vault);
     assert(r.error == "A vault already exists on this server - join it instead");
@@ -186,17 +196,17 @@ void test_join_with_passphrase() {
     assert(bad.error == "Wrong passphrase");
     assert(bad.keys_json.empty());
 
-    VaultSetupResult rec = vault_join(rv.keys, rv.recovery, true);
+    VaultSetupResult rec = vault_join(rv.keys, rv.recovery.c_str(), true);
     assert(rec.error.empty() && rec.vault && rec.keys_json == rv.keys);
     ws_vault_free(rec.vault);
 
-    VaultSetupResult badrec = vault_join(rv.keys, std::string(64, '0'), true);
+    VaultSetupResult badrec = vault_join(rv.keys, std::string(64, '0').c_str(), true);
     assert(!badrec.vault && badrec.error == "Wrong recovery key");
     printf("test_join_with_passphrase PASSED\n");
 }
 
 void test_publish_if_absent() {
-    std::vector<uint8_t> local = bytes_of("{\"local\":1}");
+    std::vector<uint8_t> local = make_real_vault("mine").keys;
 
     FakeServer absent;
     vault_publish_if_absent(fake_dav(&absent), local.data(), local.size());
@@ -209,10 +219,11 @@ void test_publish_if_absent() {
     assert(same.puts == 0);
 
     FakeServer other;
-    other.files["/keys.json"] = bytes_of("{\"other\":1}");
+    std::vector<uint8_t> theirs = make_real_vault("theirs").keys;
+    other.files["/keys.json"] = theirs;
     vault_publish_if_absent(fake_dav(&other), local.data(), local.size());
     assert(other.puts == 0);
-    assert(other.files["/keys.json"] == bytes_of("{\"other\":1}"));
+    assert(other.files["/keys.json"] == theirs);
 
     FakeServer err;
     err.get_status_override = 500;
@@ -287,6 +298,123 @@ void test_publish_local_if_absent() {
     printf("test_publish_local_if_absent PASSED\n");
 }
 
+void test_probe_reports_mode() {
+    FakeServer s;
+    VaultDav d = fake_dav(&s);
+    s.files["/keys.json"] = plain_keys();
+    RemoteKeys r = vault_fetch_remote_keys(d);
+    assert(r.state == RemoteKeysState::Present && r.plain);
+
+    s.files["/keys.json"] = make_real_vault("enc").keys;
+    r = vault_fetch_remote_keys(d);
+    assert(r.state == RemoteKeysState::Present && !r.plain);
+
+    s.files["/keys.json"] = bytes_of("garbage");
+    r = vault_fetch_remote_keys(d);
+    assert(r.state == RemoteKeysState::Error);
+    assert(r.error == "Unrecognized keys.json on server");
+    assert(r.bytes.empty());
+    printf("test_probe_reports_mode PASSED\n");
+}
+
+void test_plain_create_publishes_marker() {
+    FakeServer s;
+    VaultSetupResult r = vault_create_and_publish(fake_dav(&s), nullptr);
+    assert(r.error.empty());
+    assert(r.vault && !ws_vault_is_encrypted(r.vault));
+    assert(r.recovery_hex.empty());
+    assert(r.keys_json == plain_keys());
+    assert(s.puts == 1 && s.last_put == plain_keys());
+    ws_vault_free(r.vault);
+    printf("test_plain_create_publishes_marker PASSED\n");
+}
+
+void test_plain_create_refusals() {
+    FakeServer present;
+    present.files["/keys.json"] = plain_keys();
+    VaultSetupResult r = vault_create_and_publish(fake_dav(&present), nullptr);
+    assert(!r.vault && r.error == "A vault already exists on this server - join it instead");
+    assert(present.puts == 0 && r.keys_json.empty());
+
+    FakeServer err;
+    err.get_status_override = 503;
+    r = vault_create_and_publish(fake_dav(&err), nullptr);
+    assert(!r.vault && r.error.find("503") != std::string::npos && err.puts == 0);
+
+    FakeServer junk;
+    junk.files["/keys.json"] = bytes_of("garbage");
+    r = vault_create_and_publish(fake_dav(&junk), nullptr);
+    assert(!r.vault && r.error == "Unrecognized keys.json on server" && junk.puts == 0);
+
+    FakeServer race;
+    race.put_status_override = 412;
+    r = vault_create_and_publish(fake_dav(&race), nullptr);
+    assert(!r.vault && r.keys_json.empty());
+    assert(r.error == "A vault already exists on this server - join it instead");
+    printf("test_plain_create_refusals PASSED\n");
+}
+
+void test_plain_join_ignores_secret() {
+    VaultSetupResult r = vault_join(plain_keys(), nullptr, false);
+    assert(r.error.empty() && r.vault && !ws_vault_is_encrypted(r.vault));
+    assert(r.keys_json == plain_keys());
+    ws_vault_free(r.vault);
+    printf("test_plain_join_ignores_secret PASSED\n");
+}
+
+void test_encrypted_join_requires_secret() {
+    RealVault rv = make_real_vault("pw");
+    VaultSetupResult r = vault_join(rv.keys, nullptr, false);
+    assert(!r.vault && r.error == "Passphrase is required");
+    r = vault_join(rv.keys, "", true);
+    assert(!r.vault && r.error == "Recovery key is required");
+    VaultSetupResult ok = vault_join(rv.keys, "pw", false);
+    assert(ok.vault && ws_vault_is_encrypted(ok.vault));
+    ws_vault_free(ok.vault);
+    printf("test_encrypted_join_requires_secret PASSED\n");
+}
+
+void test_publish_local_plain_marker_matches() {
+    char tmpl[] = "/private/tmp/ws_vault_plain_XXXXXX";
+    assert(mkdtemp(tmpl));
+    std::string keys_path = std::string(tmpl) + "/keys.json";
+    VaultSetupResult local = {nullptr, "", plain_keys(), ""};
+    assert(vault_persist_local(local, keys_path.c_str(), ""));
+    FakeServer same;
+    same.files["/keys.json"] = plain_keys();
+    vault_publish_local_if_absent(fake_dav(&same), keys_path.c_str());
+    assert(same.gets == 1 && same.puts == 0);
+    std::string cmd = std::string("rm -rf '") + tmpl + "'";
+    assert(system(cmd.c_str()) == 0);
+    printf("test_publish_local_plain_marker_matches PASSED\n");
+}
+
+void test_open_local_by_mode() {
+    std::vector<uint8_t> plain = plain_keys();
+    WsVault* v = vault_open_local(plain.data(), plain.size(), "ignored");
+    assert(v && !ws_vault_is_encrypted(v));
+    ws_vault_free(v);
+
+    RealVault rv = make_real_vault("local-pw");
+    v = vault_open_local(rv.keys.data(), rv.keys.size(), "local-pw");
+    assert(v && ws_vault_is_encrypted(v));
+    ws_vault_free(v);
+    assert(!vault_open_local(rv.keys.data(), rv.keys.size(), "wrong"));
+    assert(!vault_open_local(rv.keys.data(), rv.keys.size(), nullptr));
+    printf("test_open_local_by_mode PASSED\n");
+}
+
+void test_setup_log_lines_take_both_outcomes() {
+    vault_setup_log_start("create", true);
+    VaultSetupResult failed = {nullptr, "", std::vector<uint8_t>(), "boom"};
+    vault_setup_log_result("join", false, failed);
+    VaultSetupResult ok = vault_join(plain_keys(), nullptr, false);
+    assert(ok.vault);
+    vault_setup_log_result("join", true, ok);
+    ws_vault_free(ok.vault);
+    printf("test_setup_log_lines_take_both_outcomes PASSED\n");
+}
+
 } // namespace
 
 int main() {
@@ -301,6 +429,14 @@ int main() {
     test_persist_local();
     test_setup_persist_writes_keys_and_config();
     test_publish_local_if_absent();
+    test_probe_reports_mode();
+    test_plain_create_publishes_marker();
+    test_plain_create_refusals();
+    test_plain_join_ignores_secret();
+    test_encrypted_join_requires_secret();
+    test_publish_local_plain_marker_matches();
+    test_setup_log_lines_take_both_outcomes();
+    test_open_local_by_mode();
     printf("ALL vault_remote TESTS PASSED\n");
     return 0;
 }

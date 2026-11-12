@@ -12,18 +12,20 @@ static void persist_setup(const Session* session, const VaultSetupResult& r,
 }
 
 VaultSetupResult setup_create_vault(Session* session, const WebDavCfg& dav,
-                                    const std::string& passphrase) {
+                                    const char* passphrase) {
+    vault_setup_log_start("create", !passphrase);
     VaultSetupResult r = vault_create_and_publish(dav, passphrase);
-    if (r.vault) persist_setup(session, r, ws_recovery_path(session->device_id));
-    printf("[vault] setup create: %s\n", r.vault ? "ok" : r.error.c_str());
+    if (r.vault) persist_setup(session, r, passphrase ? ws_recovery_path(session->device_id) : "");
+    vault_setup_log_result("create", !passphrase, r);
     return r;
 }
 
 VaultSetupResult setup_join_vault(Session* session, const std::vector<uint8_t>& server_keys,
-                                  const std::string& secret, bool recovery) {
+                                  const char* secret, bool recovery) {
+    vault_setup_log_start("join", !secret);
     VaultSetupResult r = vault_join(server_keys, secret, recovery);
     if (r.vault) persist_setup(session, r, "");
-    printf("[vault] setup join: %s\n", r.vault ? "ok" : r.error.c_str());
+    vault_setup_log_result("join", !secret, r);
     return r;
 }
 

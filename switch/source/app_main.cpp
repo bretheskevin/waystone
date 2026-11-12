@@ -142,10 +142,17 @@ int main(int argc, char* argv[])
             kbuf = read_keys_file(WS_KEYS_PATH, &klen);
             if (kbuf && klen > 0) {
                 if (session_store_exists()) {
-                    auto worker = [&session]() -> LoadingActivity::LoadResult {
+                    // kbuf lives until after the mainloop (freed below), so the worker may borrow it.
+                    auto worker = [&session, kbuf, klen]() -> LoadingActivity::LoadResult {
                         std::string webdav_pass;
-                        WsVault* vault = session_store_load_vault(webdav_pass);
-                        if (!vault) return {false, "session expired", {}};
+                        WsVault* vault = session_store_load_vault(
+                            webdav_pass, kbuf, static_cast<size_t>(klen));
+                        if (!vault) {
+                            printf("[vault] auto-unlock: session load failed\n");
+                            return {false, "session expired", {}};
+                        }
+                        printf("[vault] auto-unlock: session loaded (encrypted=%d)\n",
+                               ws_vault_is_encrypted(vault) ? 1 : 0);
 
                         session.vault          = vault;
                         session.dav.server_url = session.config.server_url;

@@ -6,14 +6,11 @@
 #include "widgets.h"
 #include "worker_thread.h"
 #include "session_store.h"
+#include "keymap_3ds.h"
+#include "ffi_err.h"
 #include <cstdio>
 #include <cstring>
 #include <utility>
-
-extern "C" {
-struct Vault;
-#include "waystone.h"
-}
 
 std::vector<WizardStepDef> SetupScreen::make_steps() const {
     std::vector<WizardStepDef> steps;
@@ -41,16 +38,21 @@ std::vector<WizardStepDef> SetupScreen::make_steps() const {
     steps.push_back(login);
 
     WizardStepDef vault;
-    vault.title = setup_vault_step_title(vault_mode());
-    if (joining_) {
-        vault.fields.push_back(vault_secret_field(FIELD_PASSPHRASE, recovery_));
+    vault.title = setup_vault_step_title(mode_);
+    if (mode_ == SetupVaultMode::Join) {
+        WizardFieldDef secret = vault_secret_field(FIELD_PASSPHRASE, recovery_);
+        vault.hint = secret.hint;
+        vault.fields.push_back(secret);
     } else {
-        WizardFieldDef ppf; ppf.value_index=FIELD_PASSPHRASE; ppf.label="Passphrase"; ppf.is_secret=true;
-        ppf.placeholder="not set"; ppf.hint="choose a strong passphrase to encrypt your saves";
-        WizardFieldDef cpf; cpf.value_index=FIELD_CONFIRM; cpf.label="Confirm Passphrase"; cpf.is_secret=true;
-        cpf.placeholder="not set"; cpf.hint="re-enter your vault passphrase";
-        vault.fields.push_back(ppf);
-        vault.fields.push_back(cpf);
+        vault.hint = setup_vault_step_hint(mode_, ws_glyph(ws_button(WsAction::ToggleEncryption)));
+        if (mode_ == SetupVaultMode::Create) {
+            WizardFieldDef ppf; ppf.value_index=FIELD_PASSPHRASE; ppf.label=setup_passphrase_label(); ppf.is_secret=true;
+            ppf.placeholder="not set"; ppf.hint=vault.hint;
+            WizardFieldDef cpf; cpf.value_index=FIELD_CONFIRM; cpf.label=setup_confirm_label(); cpf.is_secret=true;
+            cpf.placeholder="not set"; cpf.hint=setup_confirm_hint();
+            vault.fields.push_back(ppf);
+            vault.fields.push_back(cpf);
+        }
     }
     steps.push_back(vault);
 
@@ -60,20 +62,22 @@ std::vector<WizardStepDef> SetupScreen::make_steps() const {
 struct SetupJobCtx {
     SetupScreen*     self;
     SetupScreen::Job job;
+    SetupVaultMode   mode;
     OwnedWebDavCfg   dav;
     std::string      secret;
     bool             recovery;
     std::vector<uint8_t> server_keys;
     std::string      recovery_path;
-    SetupJobCtx() : self(NULL), job(SetupScreen::JOB_NONE), recovery(false) {}
+    SetupJobCtx() : self(NULL), job(SetupScreen::JOB_NONE), mode(SetupVaultMode::CreatePlain), recovery(false) {}
 };
 
 SetupScreen::SetupScreen(Session* session)
-    : session_(session), joining_(false), recovery_(false),
+    : session_(session), mode_(SetupVaultMode::CreatePlain), recovery_(false),
       wizard_(make_steps(), NUM_VALUES),
       job_(JOB_NONE), job_done_(false), job_thread_(NULL), spinner_angle_(0.0f) {
     probe_.state = RemoteKeysState::Error;
     probe_.http_status = -1;
+    probe_.plain = false;
     result_.vault = NULL;
 }
 
@@ -100,13 +104,13 @@ void SetupScreen::draw_top(C3D_RenderTarget* target) {
 void SetupScreen::draw_bottom(C3D_RenderTarget* target) {
     const char* finish_label = NULL;
     if (wizard_.is_last_step())
-        finish_label = setup_finish_label(vault_mode(), job_ == JOB_JOIN || job_ == JOB_CREATE);
+        finish_label = setup_finish_label(mode_, job_ == JOB_JOIN || job_ == JOB_CREATE);
     wizard_.draw_bottom(target, App::instance().text_buf(), finish_label);
 }
 
-void SetupScreen::set_vault_mode(bool joining) {
-    if (joining == joining_) return;
-    joining_  = joining;
+void SetupScreen::set_vault_mode(SetupVaultMode mode) {
+    if (mode == mode_) return;
+    mode_     = mode;
     recovery_ = false;
     zeroize_string(wizard_.value(FIELD_PASSPHRASE));
     zeroize_string(wizard_.value(FIELD_CONFIRM));
@@ -138,17 +142,18 @@ bool SetupScreen::validate_step(size_t step) {
             }
             return true;
         case STEP_VAULT:
+            if (setup_mode_is_plain(mode_)) return true;
             if (wizard_.value(FIELD_PASSPHRASE).empty()) {
-                wizard_.set_error(vault_secret_required(joining_ && recovery_));
+                wizard_.set_error(vault_secret_required(mode_ == SetupVaultMode::Join && recovery_));
                 return false;
             }
-            if (joining_) return true;
+            if (mode_ == SetupVaultMode::Join) return true;
             if (wizard_.value(FIELD_CONFIRM).empty()) {
-                wizard_.set_error("Please confirm your passphrase");
+                wizard_.set_error(setup_confirm_required());
                 return false;
             }
             if (wizard_.value(FIELD_CONFIRM) != wizard_.value(FIELD_PASSPHRASE)) {
-                wizard_.set_error("Passphrases do not match");
+                wizard_.set_error(setup_passphrase_mismatch());
                 zeroize_string(wizard_.value(FIELD_CONFIRM));
                 return false;
             }
@@ -167,18 +172,17 @@ void SetupScreen::job_thread_entry(void* arg) {
         self->probe_ = vault_fetch_remote_keys(cfg);
     } else {
         const char* what = ctx->job == JOB_CREATE ? "create" : "join";
-        printf("[vault] setup worker: %s start\n", what);
+        bool plain = setup_mode_is_plain(ctx->mode);
+        vault_setup_log_start(what, plain);
+        const char* secret = plain ? nullptr : ctx->secret.c_str();
         VaultSetupResult res = ctx->job == JOB_CREATE
-            ? vault_create_and_publish(cfg, ctx->secret)
-            : vault_join(ctx->server_keys, ctx->secret, ctx->recovery);
+            ? vault_create_and_publish(cfg, secret)
+            : vault_join(ctx->server_keys, secret, ctx->recovery);
         zeroize_string(ctx->secret);
-        if (res.vault) {
+        if (res.vault)
             vault_setup_persist(res, WS_KEYS_PATH, ctx->recovery_path, self->session_->config,
                                 self->session_->config_path.c_str());
-            printf("[vault] setup worker: %s succeeded\n", what);
-        } else {
-            printf("[vault] setup worker: %s FAILED: %s\n", what, res.error.c_str());
-        }
+        vault_setup_log_result(what, plain, res);
         std::swap(self->result_, res);
         vault_setup_wipe_recovery(&res);
     }
@@ -191,6 +195,7 @@ void SetupScreen::start_job(Job job) {
     SetupJobCtx* ctx = new SetupJobCtx();
     ctx->self           = this;
     ctx->job            = job;
+    ctx->mode           = mode_;
     ctx->dav.server_url = wizard_.value(FIELD_SERVER);
     ctx->dav.user       = wizard_.value(FIELD_USERNAME);
     ctx->dav.pass       = wizard_.value(FIELD_PASSWORD);
@@ -201,18 +206,21 @@ void SetupScreen::start_job(Job job) {
     } else {
         session_->config.server_url = wizard_.value(FIELD_SERVER);
         session_->config.username   = wizard_.value(FIELD_USERNAME);
-        ctx->secret = wizard_.value(FIELD_PASSPHRASE);
+        bool plain = setup_mode_is_plain(mode_);
+        if (!plain) ctx->secret = wizard_.value(FIELD_PASSPHRASE);
         if (job == JOB_JOIN) {
-            printf("[ui] setup: joining vault (%s)\n", recovery_ ? "recovery key" : "passphrase");
+            printf("[ui] setup: joining server (%s)\n",
+                   plain ? "plain" : (recovery_ ? "recovery key" : "passphrase"));
             ctx->server_keys = server_keys_;
-            ctx->recovery    = recovery_;
-            wizard_.set_status(setup_work_status(SetupVaultMode::Join));
+            ctx->recovery    = !plain && recovery_;
         } else {
-            printf("[ui] setup: creating vault\n");
-            recovery_path_     = ws_recovery_path(session_->device_id);
-            ctx->recovery_path = recovery_path_;
-            wizard_.set_status(setup_work_status(SetupVaultMode::Create));
+            printf("[ui] setup: creating vault (%s)\n", keys_mode_name(plain));
+            if (!plain) {
+                recovery_path_     = ws_recovery_path(session_->device_id);
+                ctx->recovery_path = recovery_path_;
+            }
         }
+        wizard_.set_status(setup_work_status(mode_));
     }
 
     job_done_.store(false);
@@ -229,13 +237,21 @@ void SetupScreen::start_job(Job job) {
 
 void SetupScreen::handle_input(u32 kDown, touchPosition touch) {
     if (job_ != JOB_NONE) return;
-    if (joining_ && wizard_.current_step() == STEP_VAULT &&
-        vault_secret_toggle(kDown, &recovery_, &wizard_, FIELD_PASSPHRASE,
-                            [this] { return make_steps(); }))
-        return;
+    if (wizard_.current_step() == STEP_VAULT) {
+        if (mode_ == SetupVaultMode::Join &&
+            vault_secret_toggle(kDown, &recovery_, &wizard_, FIELD_PASSPHRASE,
+                                [this] { return make_steps(); }))
+            return;
+        if (!setup_mode_is_join(mode_) && (kDown & ws_key(WsAction::ToggleEncryption))) {
+            wizard_.clear_error();
+            set_vault_mode(setup_toggle_encryption(mode_));
+            return;
+        }
+    }
     int result = wizard_.handle_input(kDown, touch);
     if (result == 2 || (result == 3 && wizard_.is_last_step())) {
-        if (validate_step(wizard_.current_step())) start_job(joining_ ? JOB_JOIN : JOB_CREATE);
+        if (validate_step(wizard_.current_step()))
+            start_job(setup_mode_is_join(mode_) ? JOB_JOIN : JOB_CREATE);
     } else if (result == 3) {
         if (!validate_step(wizard_.current_step())) return;
         if (wizard_.current_step() == STEP_LOGIN) start_job(JOB_PROBE);
@@ -248,20 +264,21 @@ void SetupScreen::handle_input(u32 kDown, touchPosition touch) {
 void SetupScreen::on_probe_done() {
     switch (probe_.state) {
         case RemoteKeysState::Present:
-            printf("[ui] setup: server has a vault -> join step\n");
+            printf("[ui] setup: probe mode=%s -> join step\n", keys_mode_name(probe_.plain));
             server_keys_.swap(probe_.bytes);
-            set_vault_mode(true);
+            set_vault_mode(setup_mode_after_probe(true, probe_.plain, mode_));
             wizard_.go_next();
             break;
         case RemoteKeysState::Absent:
-            printf("[ui] setup: no vault on server -> create step\n");
+            printf("[ui] setup: probe mode=absent -> create step\n");
             server_keys_.clear();
-            set_vault_mode(false);
+            set_vault_mode(setup_mode_after_probe(false, false, mode_));
             wizard_.go_next();
             break;
         case RemoteKeysState::Error:
-            printf("[ui] setup: server probe failed (http=%d)\n", probe_.http_status);
-            wizard_.set_error(setup_probe_error(probe_.http_status));
+            printf("[ui] setup: server probe failed (http=%d, err=%s)\n", probe_.http_status,
+                   probe_.error.c_str());
+            wizard_.set_error(setup_probe_error(probe_.http_status, probe_.error));
             break;
     }
     probe_.bytes.clear();
@@ -285,8 +302,10 @@ void SetupScreen::on_vault_done(Job job) {
     printf("[vault] setup: session persist %s\n", persisted ? "ok" : "FAILED");
     wizard_.zeroize_secrets();
 
-    if (job == JOB_JOIN) {
-        printf("[ui] setup: joined vault -> loading titles\n");
+    if (!setup_mode_shows_recovery_key(mode_)) {
+        printf("[ui] setup: %s (%s) -> loading titles\n", job == JOB_JOIN ? "joined" : "created",
+               keys_mode_name(setup_mode_is_plain(mode_)));
+        vault_setup_wipe_recovery(&result_);
         // set_screen deletes 'this' — no member access after this point
         App::instance().set_screen(new LoadingScreen(session_, false));
         return;

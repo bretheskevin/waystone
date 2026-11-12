@@ -1,10 +1,85 @@
-use crate::buffer::{WsBuf, owned_c_string};
+use crate::buffer::{WsBuf, optional_str, owned_c_string};
 use crate::error::{catch_and_set_error, set_last_error};
 use alloc::boxed::Box;
 use core::ffi::{CStr, c_char};
-use waystone_core::crypto::Vault;
+use waystone_core::crypto::{BLOB_EXT_ENCRYPTED, KeysMode, Vault, keys_mode};
 
 pub type WsVault = Vault;
+
+pub const WS_KEYS_MODE_PLAIN: i32 = 0;
+pub const WS_KEYS_MODE_ENCRYPTED: i32 = 1;
+
+/// Returns WS_KEYS_MODE_PLAIN / WS_KEYS_MODE_ENCRYPTED, or -1 (last error set)
+/// on NULL or unrecognized keys.json.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_keys_mode(keys_json: *const u8, len: usize) -> i32 {
+    if keys_json.is_null() {
+        set_last_error("null pointer argument");
+        return -1;
+    }
+    catch_and_set_error(|| {
+        let keys = unsafe { core::slice::from_raw_parts(keys_json, len) };
+        Ok(match keys_mode(keys)? {
+            KeysMode::Plain => WS_KEYS_MODE_PLAIN,
+            KeysMode::Encrypted => WS_KEYS_MODE_ENCRYPTED,
+        })
+    })
+    .unwrap_or(-1)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_vault_plain() -> *mut WsVault {
+    Box::into_raw(Box::new(Vault::plain()))
+}
+
+/// Opens a vault from keys.json. `secret` may be NULL for an unencrypted vault;
+/// it is the passphrase, or the recovery hex when `recovery` is true.
+/// Returns NULL with the last error set on failure.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_vault_open(
+    keys_json: *const u8,
+    len: usize,
+    secret: *const c_char,
+    recovery: bool,
+) -> *mut WsVault {
+    if keys_json.is_null() {
+        set_last_error("null pointer argument");
+        return core::ptr::null_mut();
+    }
+    catch_and_set_error(|| {
+        let keys = unsafe { core::slice::from_raw_parts(keys_json, len) };
+        let secret = unsafe { optional_str(secret) }?;
+        let vault = Vault::open(keys, secret, recovery)?;
+        Ok(Box::into_raw(Box::new(vault)))
+    })
+    .unwrap_or(core::ptr::null_mut())
+}
+
+/// NULL vault -> false.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_vault_is_encrypted(vault: *const WsVault) -> bool {
+    !vault.is_null() && unsafe { &*vault }.is_encrypted()
+}
+
+/// Blob file extension without the dot ("zip" plain, "bin" encrypted; NULL vault -> "bin").
+/// The returned string is static: do not free it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_vault_blob_ext(vault: *const WsVault) -> *const c_char {
+    if vault.is_null() {
+        return BLOB_EXT_ENCRYPTED.as_ptr();
+    }
+    unsafe { &*vault }.blob_ext_cstr().as_ptr()
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ws_vault_keys_json(vault: *const WsVault) -> WsBuf {
+    if vault.is_null() {
+        set_last_error("null pointer argument");
+        return WsBuf::null();
+    }
+    catch_and_set_error(|| Ok(WsBuf::from_vec(unsafe { &*vault }.keys_json()?)))
+        .unwrap_or_else(WsBuf::null)
+}
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ws_vault_init(
@@ -195,9 +270,13 @@ pub unsafe extern "C" fn ws_vault_export_mdk(vault: *const WsVault) -> WsBuf {
         set_last_error("null pointer argument");
         return WsBuf::null();
     }
-    let vault = unsafe { &*vault };
-    let mdk = vault.export_mdk();
-    WsBuf::from_vec(mdk.to_vec())
+    match unsafe { &*vault }.export_mdk() {
+        Some(mdk) => WsBuf::from_vec(mdk.to_vec()),
+        None => {
+            set_last_error("unencrypted vault has no key");
+            WsBuf::null()
+        }
+    }
 }
 
 #[unsafe(no_mangle)]

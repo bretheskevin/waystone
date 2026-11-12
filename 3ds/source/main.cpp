@@ -88,7 +88,7 @@ int main(int argc, char* argv[]) {
                 if (kbuf) {
                     size_t got = fread(kbuf, 1, static_cast<size_t>(klen), kf);
                     if (got == static_cast<size_t>(klen))
-                        vault = ws_vault_unlock_pass(WAYSTONE_VAULT_PASS, kbuf, got);
+                        vault = vault_open_local(kbuf, got, WAYSTONE_VAULT_PASS);
                     free(kbuf);
                 }
             }

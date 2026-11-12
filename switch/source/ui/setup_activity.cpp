@@ -1,6 +1,8 @@
 #include "setup_activity.h"
 #include "recovery_key_activity.h"
 #include "session_store.h"
+#include "keymap_switch.h"
+#include "ffi_err.h"
 #include <borealis.hpp>
 #include <cstdio>
 
@@ -30,16 +32,19 @@ std::vector<WizardStepDef> SetupActivity::get_steps() const {
              "your WebDAV password (stored in RAM only)"},
         }},
     };
+    const char* toggle_glyph = ws_glyph(ws_button(WsAction::ToggleEncryption));
     if (mode_ == SetupVaultMode::Join) {
         steps.push_back({setup_vault_step_title(mode_), "",
                          {vault_secret_field(FIELD_PASSPHRASE, join_recovery_)}});
-    } else {
+    } else if (mode_ == SetupVaultMode::Create) {
         steps.push_back({setup_vault_step_title(mode_), "", {
-            {FIELD_PASSPHRASE, "Passphrase",         true, "not set",
-             "choose a strong passphrase to encrypt your saves"},
-            {FIELD_CONFIRM,    "Confirm Passphrase", true, "not set",
-             "re-enter your vault passphrase"},
+            {FIELD_PASSPHRASE, setup_passphrase_label(), true, "not set",
+             setup_vault_step_hint(mode_, toggle_glyph)},
+            {FIELD_CONFIRM,    setup_confirm_label(),    true, "not set", setup_confirm_hint()},
         }});
+    } else {
+        steps.push_back({setup_vault_step_title(mode_), setup_vault_step_hint(mode_, toggle_glyph),
+                         {}});
     }
     return steps;
 }
@@ -78,17 +83,18 @@ bool SetupActivity::validate_step(size_t step) {
             start_probe();  // advances from on_probe_done
             return false;
         case STEP_VAULT:
+            if (setup_mode_is_plain(mode_)) return true;
             if (values_[FIELD_PASSPHRASE].empty()) {
                 error_ = vault_secret_required(mode_ == SetupVaultMode::Join && join_recovery_);
                 return false;
             }
             if (mode_ == SetupVaultMode::Join) return true;
             if (values_[FIELD_CONFIRM].empty()) {
-                error_ = "Please confirm your passphrase";
+                error_ = setup_confirm_required();
                 return false;
             }
             if (values_[FIELD_CONFIRM] != values_[FIELD_PASSPHRASE]) {
-                error_ = "Passphrases do not match";
+                error_ = setup_passphrase_mismatch();
                 zeroize_string(values_[FIELD_CONFIRM]);
                 return false;
             }
@@ -104,6 +110,30 @@ void SetupActivity::register_extra_actions() {
     register_recovery_toggle(&join_recovery_, FIELD_PASSPHRASE, [this] {
         return current_step_ == STEP_VAULT && mode_ == SetupVaultMode::Join && !busy_;
     });
+    // borealis keeps one action per button: when ToggleEncryption shares ToggleRecovery's button
+    // this registration replaces it, so the Join case is forwarded here.
+    registerAction(ws_label(WsAction::ToggleEncryption), ws_brls(WsAction::ToggleEncryption),
+                   [this](brls::View*) {
+        if (current_step_ != STEP_VAULT || busy_) return true;
+        if (mode_ == SetupVaultMode::Join &&
+            ws_button(WsAction::ToggleEncryption) == ws_button(WsAction::ToggleRecovery)) {
+            toggle_recovery(&join_recovery_, FIELD_PASSPHRASE);
+        } else if (!setup_mode_is_join(mode_)) {
+            toggle_encryption();
+        }
+        return true;
+    });
+}
+
+void SetupActivity::toggle_encryption() {
+    if (mode_ == SetupVaultMode::Create) {
+        zeroize_string(values_[FIELD_PASSPHRASE]);
+        zeroize_string(values_[FIELD_CONFIRM]);
+    }
+    mode_ = setup_toggle_encryption(mode_);
+    error_.clear();
+    reload_steps();
+    schedule_refresh();
 }
 
 void SetupActivity::run_worker(std::function<void()> work, std::function<void()> on_done) {
@@ -137,14 +167,17 @@ void SetupActivity::start_probe() {
 
 void SetupActivity::on_probe_done() {
     if (probe_.state == RemoteKeysState::Error) {
-        printf("[ui] setup: probe failed (http=%d) - staying on login step\n", probe_.http_status);
-        error_ = setup_probe_error(probe_.http_status);
+        printf("[ui] setup: probe failed (http=%d, err=%s) - staying on login step\n",
+               probe_.http_status, probe_.error.empty() ? "-" : probe_.error.c_str());
+        error_ = setup_probe_error(probe_.http_status, probe_.error);
         schedule_refresh();
         return;
     }
-    SetupVaultMode mode = probe_.state == RemoteKeysState::Present ? SetupVaultMode::Join
-                                                                   : SetupVaultMode::Create;
-    printf("[ui] setup: probe -> %s vault step\n", mode == SetupVaultMode::Join ? "join" : "create");
+    bool present = probe_.state == RemoteKeysState::Present;
+    printf("[ui] setup: probe mode=%s\n",
+           present ? keys_mode_name(probe_.plain) : "absent");
+    SetupVaultMode mode = setup_mode_after_probe(present, probe_.plain, mode_);
+    printf("[ui] setup: probe -> %s step\n", setup_vault_step_title(mode));
     if (mode != mode_) {
         mode_          = mode;
         join_recovery_ = false;
@@ -158,20 +191,22 @@ void SetupActivity::on_probe_done() {
 
 void SetupActivity::start_setup() {
     if (busy_) return;
-    bool join = mode_ == SetupVaultMode::Join;
+    bool join  = setup_mode_is_join(mode_);
+    bool plain = setup_mode_is_plain(mode_);
     session_->config.server_url = values_[FIELD_SERVER];
     session_->config.username   = values_[FIELD_USERNAME];
 
-    printf("[ui] setup: %s vault start\n", join ? "join" : "create");
+    printf("[ui] setup: %s %s start\n", join ? "join" : "create", keys_mode_name(plain));
     status_ = setup_work_status(mode_);
-    run_worker([this, join] {
+    run_worker([this, join, plain] {
+        const char* secret = plain ? nullptr : values_[FIELD_PASSPHRASE].c_str();
         if (join) {
-            setup_result_ = setup_join_vault(session_, probe_.bytes, values_[FIELD_PASSPHRASE],
-                                             join_recovery_);
+            setup_result_ = setup_join_vault(session_, probe_.bytes, secret,
+                                             !plain && join_recovery_);
         } else {
             WebDavCfg cfg{values_[FIELD_SERVER].c_str(), values_[FIELD_USERNAME].c_str(),
                           values_[FIELD_PASSWORD].c_str()};
-            setup_result_ = setup_create_vault(session_, cfg, values_[FIELD_PASSPHRASE]);
+            setup_result_ = setup_create_vault(session_, cfg, secret);
         }
     }, [this, join] { on_setup_done(join); });
     schedule_refresh();
@@ -186,8 +221,9 @@ void SetupActivity::on_setup_done(bool join) {
         schedule_refresh();
         return;
     }
+    bool to_dashboard = !setup_mode_shows_recovery_key(mode_);
     printf("[ui] setup: %s ok -> %s\n", join ? "join" : "create",
-           join ? "dashboard" : "recovery key");
+           to_dashboard ? "dashboard" : "recovery key");
 
     session_->vault          = vault;
     session_->dav.server_url = values_[FIELD_SERVER];
@@ -198,7 +234,8 @@ void SetupActivity::on_setup_done(bool join) {
 
     persist_session(session_->vault, session_->dav.pass);
 
-    if (join) {
+    if (to_dashboard) {
+        vault_setup_wipe_recovery(&setup_result_);
         push_dashboard(session_);
         return;
     }

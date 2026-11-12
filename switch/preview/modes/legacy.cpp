@@ -1,5 +1,5 @@
-// Pre-kit preview modes: setup-welcome, setup-field, creating-vault, unlock, recovery,
-// no-internet, transition, loading.
+// Pre-kit preview modes: setup-welcome, setup-field, creating-vault, unlock, unlock-plain,
+// recovery, no-internet, transition, loading.
 #include "registry.h"
 #include "kit_preview.h"
 #include <borealis.hpp>
@@ -29,6 +29,7 @@ public:
         values_[0]       = "https://dav.example.com";  // FIELD_SERVER
         values_[1]       = "waystone";                  // FIELD_USERNAME
         current_step_    = 3;
+        mode_            = SetupVaultMode::Create;
         busy_            = true;
         status_          = setup_work_status(SetupVaultMode::Create);
     }
@@ -69,6 +70,12 @@ static void run_unlock(Session& session) {
     brls::Application::pushActivity(new UnlockActivity(&session, nullptr, 0));
 }
 
+static void run_unlock_plain(Session& session) {
+    static const char keys[] = "{\"encryption\":\"none\",\"version\":1}";
+    brls::Application::pushActivity(new UnlockActivity(
+        &session, reinterpret_cast<const uint8_t*>(keys), sizeof(keys) - 1));
+}
+
 static void run_recovery(Session& session) {
     static const std::string hex =
         "DEAD001100000001DEAD002200000002"
@@ -98,6 +105,7 @@ static PreviewModeReg reg_setup_welcome("setup-welcome", &run_setup_welcome);
 static PreviewModeReg reg_setup_field("setup-field", &run_setup_field);
 static PreviewModeReg reg_creating_vault("creating-vault", &run_creating_vault);
 static PreviewModeReg reg_unlock("unlock", &run_unlock);
+static PreviewModeReg reg_unlock_plain("unlock-plain", &run_unlock_plain);
 static PreviewModeReg reg_recovery("recovery", &run_recovery);
 static PreviewModeReg reg_no_internet("no-internet", &run_no_internet);
 static PreviewModeReg reg_transition("transition", &run_transition);

@@ -22,7 +22,7 @@
 | Conflict policy | Configurable; default **newest-wins + archive loser** |
 | Game matching | Strong IDs auto-group; **filename-only matches confirmed once** |
 | Save states | **Backed up per-device, never cross-shared** |
-| Encryption | **Mandatory client-side E2EE** (passphrase + recovery key) |
+| Encryption | **Optional, per server**, chosen at setup: unencrypted (default) or client-side E2EE (passphrase + recovery key) |
 | Design language | Premium, **native to each platform**, one shared design system |
 | Desktop form | Thin CLI/TUI utility for v1 (GUI later) |
 
@@ -152,12 +152,28 @@ Weak matches across devices are grouped only after a **one-time user confirmatio
   identical content yields an identical archive and hash on any platform.
 - `ContentRef.hash = sha256(canonical_plaintext_zip)`.
 - Content-addressed: blobs are immutable; the plaintext hash is the identity used
-  for dedup and change detection (see §6 for how it's obfuscated on the server).
+  for dedup and change detection (see §6 for its server-side name in each mode).
 
 ---
 
-## 5. Encryption (mandatory, zero-knowledge)
+## 5. Encryption (optional, per server)
 
+The mode is chosen once at server setup and recorded in `/keys.json`; every device
+reads it (`core::crypto::keys_mode`) and opens a `Vault` in that mode
+(`Vault::open`), so sync code is mode-agnostic.
+
+**Unencrypted (default).** `/keys.json` = `{"encryption":"none","version":1}`.
+Devices need only the WebDAV login; confidentiality relies on the WebDAV
+credentials + HTTPS. The server layout is human-readable: blobs are the plain
+canonical zip (`blobs/<sha256>.zip`), heads/history are plain JSON, and path
+segments go through a readable slug rule (`path_segment`, cross-device contract):
+
+- a name that is non-empty, at most 64 bytes, not `.`/`..`, and only `[A-Za-z0-9._-]` is kept as is;
+- otherwise: each other char → `_`, collapse `_` runs, trim `_`/`.` at both ends,
+  truncate to 64 chars (empty → `x`), then append `-<first 8 hex of sha256(name)>`
+  (e.g. `Pokemon Emerald (U)` → `Pokemon_Emerald_U-3531057c`).
+
+**Encrypted (zero-knowledge, unchanged).** `/keys.json` holds the wrapped MDK.
 Key hierarchy (all client-side; server never sees a key or plaintext):
 
 ```
@@ -178,7 +194,7 @@ recovery-key (one-time, shown at setup) ─► KEK_rec ┘
   unwrap MDK.
 - Crypto crates are `no_std + alloc` compatible (`argon2`, `chacha20poly1305`,
   `sha2`, `hmac`) so encryption lives in the pure core.
-- **Consequence (accepted):** because metadata is obfuscated, saves are NOT plain
+- **Consequence (accepted, encrypted mode only):** because metadata is obfuscated, saves are NOT plain
   inspectable/rclone-able zips on the server — this is the cost of "most private".
 
 ---
@@ -189,13 +205,16 @@ Race-safety by data model (no server logic, no shared-file writes):
 
 ```
 webdav:/waystone/
-  keys.json                         # wrapped MDK (pass + recovery), salts
+  keys.json                         # mode marker (plain) or wrapped MDK + salts (encrypted)
   devices.json                      # deviceId registry (append-only per device)
-  <hmac_sys>/<hmac_game>/<hmac_slot>/
+  <sys>/<game>/<slot>/              # plain: path_segment slugs; encrypted: HMAC hex
     heads/<deviceId>.json           # each device writes ONLY its own file
-    blobs/<hmac(plaintext_hash)>.bin # immutable, encrypted, content-addressed
+    blobs/<sha256>.zip              # plain; encrypted: <hmac(sha256)>.bin
     history/<ts>-<deviceId>.json     # append-only pointers
 ```
+
+Heads/history are plain JSON in the unencrypted mode and encrypted with the MDK
+otherwise.
 
 Every mutable pointer is **per-device** (`heads/<deviceId>.json`); blobs and
 history are **immutable/append-only**. No two clients ever write the same path →

@@ -419,6 +419,134 @@ fn vault_export_mdk_null_vault_returns_null() {
     assert_eq!(buf.len, 0);
 }
 
+fn last_error_string() -> String {
+    let err = unsafe { ws_last_error() };
+    assert!(!err.is_null());
+    unsafe { CStr::from_ptr(err) }.to_str().unwrap().to_string()
+}
+
+fn init_encrypted_vault(pass: &str) -> (*mut WsVault, Vec<u8>) {
+    let pass = CString::new(pass).unwrap();
+    let mut recovery_buf = WsBuf::null();
+    let mut keys_buf = WsBuf::null();
+    let vault = unsafe { ws_vault_init(pass.as_ptr(), &mut recovery_buf, &mut keys_buf) };
+    assert!(!vault.is_null());
+    let keys = unsafe { std::slice::from_raw_parts(keys_buf.ptr, keys_buf.len) }.to_vec();
+    unsafe {
+        ws_buf_free(recovery_buf);
+        ws_buf_free(keys_buf);
+    }
+    (vault, keys)
+}
+
+#[test]
+fn keys_mode_plain_and_encrypted() {
+    let plain = waystone_core::crypto::PLAIN_KEYS_JSON;
+    assert_eq!(
+        unsafe { ws_keys_mode(plain.as_ptr(), plain.len()) },
+        WS_KEYS_MODE_PLAIN
+    );
+    let (vault, keys) = init_encrypted_vault("mode");
+    assert_eq!(
+        unsafe { ws_keys_mode(keys.as_ptr(), keys.len()) },
+        WS_KEYS_MODE_ENCRYPTED
+    );
+    unsafe { ws_vault_free(vault) };
+}
+
+#[test]
+fn keys_mode_garbage_and_null_return_minus_one() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
+    let garbage = b"garbage";
+    assert_eq!(unsafe { ws_keys_mode(garbage.as_ptr(), garbage.len()) }, -1);
+    assert!(last_error_string().contains("keys.json"));
+    assert_eq!(unsafe { ws_keys_mode(std::ptr::null(), 0) }, -1);
+    let _ = last_error_string();
+}
+
+#[test]
+fn vault_open_plain_with_null_secret() {
+    let plain = waystone_core::crypto::PLAIN_KEYS_JSON;
+    let vault = unsafe { ws_vault_open(plain.as_ptr(), plain.len(), std::ptr::null(), false) };
+    assert!(!vault.is_null());
+    assert!(!unsafe { ws_vault_is_encrypted(vault) });
+    let ext = unsafe { CStr::from_ptr(ws_vault_blob_ext(vault)) };
+    assert_eq!(ext.to_str().unwrap(), "zip");
+    let keys = unsafe { ws_vault_keys_json(vault) };
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(keys.ptr, keys.len) },
+        plain
+    );
+    unsafe {
+        ws_buf_free(keys);
+        ws_vault_free(vault);
+    }
+}
+
+#[test]
+fn vault_open_encrypted_without_secret_fails() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
+    let (vault, keys) = init_encrypted_vault("needs-secret");
+    let opened = unsafe { ws_vault_open(keys.as_ptr(), keys.len(), std::ptr::null(), false) };
+    assert!(opened.is_null());
+    assert!(last_error_string().contains("passphrase"));
+    unsafe { ws_vault_free(vault) };
+}
+
+#[test]
+fn vault_open_encrypted_with_passphrase_decrypts() {
+    let (vault, keys) = init_encrypted_vault("right-pass");
+    let pass = CString::new("right-pass").unwrap();
+    let opened = unsafe { ws_vault_open(keys.as_ptr(), keys.len(), pass.as_ptr(), false) };
+    assert!(!opened.is_null());
+    assert!(unsafe { ws_vault_is_encrypted(opened) });
+    let ext = unsafe { CStr::from_ptr(ws_vault_blob_ext(opened)) };
+    assert_eq!(ext.to_str().unwrap(), "bin");
+
+    let plaintext = b"open me";
+    let ct = unsafe { ws_vault_encrypt_blob(vault, plaintext.as_ptr(), plaintext.len()) };
+    let pt = unsafe { ws_vault_decrypt_blob(opened, ct.ptr, ct.len) };
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(pt.ptr, pt.len) },
+        plaintext
+    );
+
+    let reexported = unsafe { ws_vault_keys_json(opened) };
+    assert_eq!(
+        unsafe { std::slice::from_raw_parts(reexported.ptr, reexported.len) },
+        keys.as_slice()
+    );
+    unsafe {
+        ws_buf_free(reexported);
+        ws_buf_free(ct);
+        ws_buf_free(pt);
+        ws_vault_free(opened);
+        ws_vault_free(vault);
+    }
+}
+
+#[test]
+fn vault_plain_handle_and_null_defaults() {
+    let vault = unsafe { ws_vault_plain() };
+    assert!(!vault.is_null());
+    assert!(!unsafe { ws_vault_is_encrypted(vault) });
+    assert!(!unsafe { ws_vault_is_encrypted(std::ptr::null()) });
+    let ext = unsafe { CStr::from_ptr(ws_vault_blob_ext(std::ptr::null())) };
+    assert_eq!(ext.to_str().unwrap(), "bin");
+    unsafe { ws_vault_free(vault) };
+}
+
+#[test]
+fn vault_export_mdk_plain_returns_null_with_error() {
+    let _guard = ERROR_TEST_LOCK.lock().unwrap();
+    let vault = unsafe { ws_vault_plain() };
+    let buf = unsafe { ws_vault_export_mdk(vault) };
+    assert!(buf.ptr.is_null());
+    assert_eq!(buf.len, 0);
+    assert_eq!(last_error_string(), "unencrypted vault has no key");
+    unsafe { ws_vault_free(vault) };
+}
+
 // ── Packaging ABI tests ──────────────────────────────────────────────────────
 
 #[test]

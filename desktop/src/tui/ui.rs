@@ -750,7 +750,7 @@ fn render_unlock_overlay(frame: &mut Frame, app: &App) {
         return;
     };
     let height = if needs_webdav { 11 } else { 9 };
-    let area = centered_rect(50, height, frame.area());
+    let area = centered_rect(72, height, frame.area());
     frame.render_widget(Clear, area);
 
     let title = if recovery_mode {
@@ -774,7 +774,7 @@ fn render_unlock_overlay(frame: &mut Frame, app: &App) {
     let secret_label = if recovery_mode {
         "Recovery key: "
     } else {
-        "Passphrase: "
+        "Passphrase (leave empty if the server is unencrypted): "
     };
     let pass_display: String = if passphrase.is_empty() {
         " ".into()
@@ -960,21 +960,25 @@ fn render_setup(frame: &mut Frame, app: &App) {
                 .fg(theme::SYNC)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" | First-run vault initialization"),
+        Span::raw(" | First-run server setup"),
     ]);
     frame.render_widget(Paragraph::new(header), chunks[0]);
 
-    let fields = [
+    let encrypt_box = if form.encrypt { "[x]" } else { "[ ]" };
+    let mut fields = vec![
         ("Server URL", form.server_url.as_str(), false),
         ("Username", form.username.as_str(), false),
         ("WebDAV Password", form.password.as_str(), true),
-        ("Passphrase", form.passphrase.as_str(), true),
-        ("Confirm Passphrase", form.confirm.as_str(), true),
+        ("Encrypt saves", encrypt_box, false),
     ];
+    if form.encrypt {
+        fields.push(("Passphrase", form.passphrase.as_str(), true));
+        fields.push(("Confirm Passphrase", form.confirm.as_str(), true));
+    }
 
     let mut lines = vec![
         Line::styled(
-            "Initialize Vault",
+            "Set up Waystone",
             Style::default()
                 .fg(theme::PRIMARY)
                 .add_modifier(Modifier::BOLD),
@@ -1009,7 +1013,11 @@ fn render_setup(frame: &mut Frame, app: &App) {
     if form.busy {
         lines.push(Line::raw(""));
         lines.push(Line::styled(
-            "Initializing vault...",
+            if form.encrypt {
+                "Initializing vault..."
+            } else {
+                "Setting up..."
+            },
             Style::default().fg(theme::SYNC),
         ));
     }
@@ -1029,7 +1037,7 @@ fn render_setup(frame: &mut Frame, app: &App) {
     frame.render_widget(Paragraph::new(lines).block(block), chunks[1]);
 
     let footer = Line::from(vec![Span::styled(
-        "Enter=submit  Esc=quit  Tab=next field",
+        "Enter=submit  Esc=quit  Tab=next field  Space=toggle encryption",
         Style::default().fg(theme::NEUTRAL_500),
     )]);
     frame.render_widget(Paragraph::new(footer), chunks[2]);
@@ -1318,6 +1326,45 @@ mod tests {
         let text = render_text(&app);
         assert!(
             text.contains("Sync complete") && text.contains("Enter close"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn setup_shows_passphrase_fields_only_when_encrypting() {
+        use crate::tui::app::{Screen, SetupForm};
+        let mut app = ui_test_app();
+        app.screen = Screen::Setup;
+        app.setup = Some(SetupForm::default());
+        let text = render_text(&app);
+        assert!(text.contains("Set up Waystone"), "{text}");
+        assert!(text.contains("Encrypt saves: [ ]"), "{text}");
+        assert!(!text.contains("Passphrase"), "{text}");
+
+        let form = app.setup.as_mut().unwrap();
+        form.encrypt = true;
+        form.busy = true;
+        let text = render_text(&app);
+        assert!(text.contains("Encrypt saves: [x]"), "{text}");
+        assert!(text.contains("Confirm Passphrase"), "{text}");
+        assert!(text.contains("Initializing vault..."), "{text}");
+
+        app.setup.as_mut().unwrap().encrypt = false;
+        assert!(render_text(&app).contains("Setting up..."));
+    }
+
+    #[test]
+    fn unlock_overlay_hints_that_plain_servers_need_no_passphrase() {
+        let mut app = ui_test_app();
+        crate::tui::app::update(
+            &mut app,
+            crate::tui::app::Msg::Key(crossterm::event::KeyEvent::from(
+                crossterm::event::KeyCode::Char('p'),
+            )),
+        );
+        let text = render_text(&app);
+        assert!(
+            text.contains("Passphrase (leave empty if the server is unencrypted)"),
             "{text}"
         );
     }

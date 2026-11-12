@@ -879,9 +879,13 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_waystone_mobile_checksum_func_install_log_sink(
     ): Int
+    external fun uniffi_waystone_mobile_checksum_func_keys_mode(
+    ): Int
     external fun uniffi_waystone_mobile_checksum_func_vault_from_mdk(
     ): Int
     external fun uniffi_waystone_mobile_checksum_func_vault_init(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_func_vault_plain(
     ): Int
     external fun uniffi_waystone_mobile_checksum_method_saveio_restore(
     ): Int
@@ -905,6 +909,8 @@ internal object IntegrityCheckingUniffiLib {
     ): Int
     external fun uniffi_waystone_mobile_checksum_method_vault_export_mdk(
     ): Int
+    external fun uniffi_waystone_mobile_checksum_method_vault_is_encrypted(
+    ): Int
     external fun uniffi_waystone_mobile_checksum_method_vault_keys_json(
     ): Int
     external fun uniffi_waystone_mobile_checksum_method_vault_path_segment(
@@ -918,6 +924,8 @@ internal object IntegrityCheckingUniffiLib {
     external fun uniffi_waystone_mobile_checksum_method_webdav_propfind(
     ): Int
     external fun uniffi_waystone_mobile_checksum_method_webdav_mkdir_p(
+    ): Int
+    external fun uniffi_waystone_mobile_checksum_constructor_vault_open(
     ): Int
     external fun uniffi_waystone_mobile_checksum_constructor_vault_unlock_with_passphrase(
     ): Int
@@ -977,6 +985,8 @@ internal object UniffiLib {
     ): Long
     external fun uniffi_waystone_mobile_fn_free_vault(`handle`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Unit
+    external fun uniffi_waystone_mobile_fn_constructor_vault_open(`keysJson`: RustBuffer.ByValue,`secret`: RustBuffer.ByValue,`recovery`: Byte,uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
     external fun uniffi_waystone_mobile_fn_constructor_vault_unlock_with_passphrase(`passphrase`: RustBuffer.ByValue,`keysJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun uniffi_waystone_mobile_fn_constructor_vault_unlock_with_recovery(`recoveryHex`: RustBuffer.ByValue,`keysJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -993,6 +1003,8 @@ internal object UniffiLib {
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_method_vault_export_mdk(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_method_vault_is_encrypted(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
+    ): Byte
     external fun uniffi_waystone_mobile_fn_method_vault_keys_json(`ptr`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_method_vault_path_segment(`ptr`: Long,`name`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1095,10 +1107,14 @@ internal object UniffiLib {
     ): Byte
     external fun uniffi_waystone_mobile_fn_func_install_log_sink(`sink`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): Byte
+    external fun uniffi_waystone_mobile_fn_func_keys_mode(`keysJson`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
+    ): RustBuffer.ByValue
     external fun uniffi_waystone_mobile_fn_func_vault_from_mdk(`mdk`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): Long
     external fun uniffi_waystone_mobile_fn_func_vault_init(`passphrase`: RustBuffer.ByValue,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
+    external fun uniffi_waystone_mobile_fn_func_vault_plain(uniffi_out_err: UniffiRustCallStatus, 
+    ): Long
     external fun ffi_waystone_mobile_rustbuffer_alloc(`size`: Long,uniffi_out_err: UniffiRustCallStatus, 
     ): RustBuffer.ByValue
     external fun ffi_waystone_mobile_rustbuffer_from_bytes(`bytes`: ForeignBytes.ByValue,uniffi_out_err: UniffiRustCallStatus, 
@@ -1341,10 +1357,16 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_waystone_mobile_checksum_func_install_log_sink() != 37303) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
+    if (lib.uniffi_waystone_mobile_checksum_func_keys_mode() != 61798) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
     if (lib.uniffi_waystone_mobile_checksum_func_vault_from_mdk() != 58647) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_func_vault_init() != 27030) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_func_vault_plain() != 29915) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_method_saveio_restore() != 2171) {
@@ -1377,7 +1399,10 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
     if (lib.uniffi_waystone_mobile_checksum_method_vault_encrypt_heads() != 15492) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
-    if (lib.uniffi_waystone_mobile_checksum_method_vault_export_mdk() != 20854) {
+    if (lib.uniffi_waystone_mobile_checksum_method_vault_export_mdk() != 30389) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_method_vault_is_encrypted() != 63418) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_method_vault_keys_json() != 47337) {
@@ -1399,6 +1424,9 @@ private fun uniffiCheckApiChecksums(lib: IntegrityCheckingUniffiLib) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_method_webdav_mkdir_p() != 21704) {
+        throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
+    }
+    if (lib.uniffi_waystone_mobile_checksum_constructor_vault_open() != 18856) {
         throw RuntimeException("UniFFI API checksum mismatch: try cleaning and rebuilding your project")
     }
     if (lib.uniffi_waystone_mobile_checksum_constructor_vault_unlock_with_passphrase() != 21804) {
@@ -2876,7 +2904,9 @@ public interface VaultInterface {
     
     fun `encryptHeads`(`data`: kotlin.ByteArray): kotlin.ByteArray
     
-    fun `exportMdk`(): kotlin.ByteArray
+    fun `exportMdk`(): kotlin.ByteArray?
+    
+    fun `isEncrypted`(): kotlin.Boolean
     
     fun `keysJson`(): kotlin.ByteArray
     
@@ -3060,11 +3090,24 @@ open class Vault: Disposable, AutoCloseable, VaultInterface
     }
     
 
-    override fun `exportMdk`(): kotlin.ByteArray {
-            return FfiConverterByteArray.lift(
+    override fun `exportMdk`(): kotlin.ByteArray? {
+            return FfiConverterOptionalByteArray.lift(
     callWithHandle {
     uniffiRustCall() { _status ->
     UniffiLib.uniffi_waystone_mobile_fn_method_vault_export_mdk(
+        it,
+        _status)
+}
+    }
+    )
+    }
+    
+
+    override fun `isEncrypted`(): kotlin.Boolean {
+            return FfiConverterBoolean.lift(
+    callWithHandle {
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_method_vault_is_encrypted(
         it,
         _status)
 }
@@ -3108,6 +3151,21 @@ open class Vault: Disposable, AutoCloseable, VaultInterface
 
     
     companion object {
+        
+    @Throws(WaystoneException::class) fun `open`(`keysJson`: kotlin.ByteArray, `secret`: kotlin.String?, `recovery`: kotlin.Boolean): Vault {
+            return FfiConverterTypeVault.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_constructor_vault_open(
+    
+        
+        FfiConverterByteArray.lower(`keysJson`),
+        FfiConverterOptionalString.lower(`secret`),
+        FfiConverterBoolean.lower(`recovery`),_status)
+}
+    )
+    }
+    
+
         
     @Throws(WaystoneException::class) fun `unlockWithPassphrase`(`passphrase`: kotlin.String, `keysJson`: kotlin.ByteArray): Vault {
             return FfiConverterTypeVault.lift(
@@ -4306,6 +4364,40 @@ public object FfiConverterTypeConflictPolicy: FfiConverterRustBuffer<ConflictPol
     override fun allocationSize(value: ConflictPolicy) = 4UL
 
     override fun write(value: ConflictPolicy, buf: ByteBuffer) {
+        buf.putInt(value.ordinal + 1)
+    }
+}
+
+
+
+
+
+
+enum class KeysMode {
+    
+    PLAIN,
+    ENCRYPTED;
+
+    
+
+
+    companion object
+}
+
+
+/**
+ * @suppress
+ */
+public object FfiConverterTypeKeysMode: FfiConverterRustBuffer<KeysMode> {
+    override fun read(buf: ByteBuffer) = try {
+        KeysMode.values()[buf.getInt() - 1]
+    } catch (e: IndexOutOfBoundsException) {
+        throw RuntimeException("invalid enum value, something is very wrong!!", e)
+    }
+
+    override fun allocationSize(value: KeysMode) = 4UL
+
+    override fun write(value: KeysMode, buf: ByteBuffer) {
         buf.putInt(value.ordinal + 1)
     }
 }
@@ -5816,6 +5908,18 @@ public object FfiConverterSequenceTypeSyncPlanEntry: FfiConverterRustBuffer<List
     }
     
 
+    @Throws(WaystoneException::class) fun `keysMode`(`keysJson`: kotlin.ByteArray): KeysMode {
+            return FfiConverterTypeKeysMode.lift(
+    uniffiRustCallWithError(WaystoneException) { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_keys_mode(
+    
+        
+        FfiConverterByteArray.lower(`keysJson`),_status)
+}
+    )
+    }
+    
+
     @Throws(WaystoneException::class) fun `vaultFromMdk`(`mdk`: kotlin.ByteArray): Vault {
             return FfiConverterTypeVault.lift(
     uniffiRustCallWithError(WaystoneException) { _status ->
@@ -5835,6 +5939,16 @@ public object FfiConverterSequenceTypeSyncPlanEntry: FfiConverterRustBuffer<List
     
         
         FfiConverterString.lower(`passphrase`),_status)
+}
+    )
+    }
+    
+ fun `vaultPlain`(): Vault {
+            return FfiConverterTypeVault.lift(
+    uniffiRustCall() { _status ->
+    UniffiLib.uniffi_waystone_mobile_fn_func_vault_plain(
+    
+        _status)
 }
     )
     }

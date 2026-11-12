@@ -33,10 +33,12 @@ enum class RemoteKeysState { Absent, Present, Error };
 struct RemoteKeys {
     RemoteKeysState state;
     std::vector<uint8_t> bytes;
-    int http_status; // -1 = transport error
+    int http_status;   // -1 = transport error
+    bool plain;        // unencrypted server; valid only when state == Present
+    std::string error; // set when a 2xx body is not a recognized keys.json
 };
 
-// GET /keys.json: 404 -> Absent; 2xx non-empty -> Present; anything else -> Error.
+// GET /keys.json: 404 -> Absent; 2xx recognized keys.json -> Present; anything else -> Error.
 RemoteKeys vault_fetch_remote_keys(const VaultDav& dav);
 RemoteKeys vault_fetch_remote_keys(const WebDavCfg& dav);
 
@@ -47,15 +49,20 @@ struct VaultSetupResult {
     std::string error;           // non-empty on failure
 };
 
-// Creates a vault, re-probes the server right before publishing (refuses when a vault already
-// exists or the probe fails) and PUTs /keys.json. Any refusal or failed PUT frees the vault and
-// returns an error.
-VaultSetupResult vault_create_and_publish(const VaultDav& dav, const std::string& passphrase);
-VaultSetupResult vault_create_and_publish(const WebDavCfg& dav, const std::string& passphrase);
+// Creates a vault (passphrase == nullptr: unencrypted), re-probes the server right before
+// publishing (refuses when a vault already exists or the probe fails) and PUTs /keys.json. Any
+// refusal or failed PUT frees the vault and returns an error.
+VaultSetupResult vault_create_and_publish(const VaultDav& dav, const char* passphrase);
+VaultSetupResult vault_create_and_publish(const WebDavCfg& dav, const char* passphrase);
 
-// Unlocks the server's keys.json with the passphrase (or the recovery key when `recovery`).
-VaultSetupResult vault_join(const std::vector<uint8_t>& server_keys, const std::string& secret,
+// Opens the server's keys.json: an unencrypted server ignores `secret` (may be null); an
+// encrypted one needs the passphrase (or the recovery key when `recovery`).
+VaultSetupResult vault_join(const std::vector<uint8_t>& server_keys, const char* secret,
                             bool recovery);
+
+// Opens a local keys.json with the passphrase (ignored when unencrypted); logs the outcome.
+// NULL (last error set) on failure.
+WsVault* vault_open_local(const uint8_t* keys, size_t len, const char* passphrase);
 
 // Writes keys.json (creating its parent dir) and, when recovery_hex is set, the recovery file.
 bool vault_persist_local(const VaultSetupResult& r, const char* keys_path,
@@ -70,6 +77,10 @@ void vault_setup_persist(const VaultSetupResult& r, const char* keys_path,
 
 // Zeroizes and clears r->recovery_hex.
 void vault_setup_wipe_recovery(VaultSetupResult* r);
+
+// Shell setup workers' log lines: "[vault] setup <what> <mode>: start" / ": ok" / ": failed (err)".
+void vault_setup_log_start(const char* what, bool plain);
+void vault_setup_log_result(const char* what, bool plain, const VaultSetupResult& r);
 
 // Legacy local-only vaults: upload local keys.json when the server has none. Never overwrites;
 // a different server vault only logs a warning.

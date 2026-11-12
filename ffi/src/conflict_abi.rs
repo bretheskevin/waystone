@@ -1,7 +1,6 @@
-use crate::buffer::owned_c_string;
+use crate::buffer::{optional_str, owned_c_string};
 use crate::error::{catch_and_set_error, set_last_error};
 use alloc::boxed::Box;
-use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::ffi::{CStr, c_char, c_int};
 use waystone_core::conflict::{self, ConflictPolicy, DeviceHead};
@@ -10,15 +9,6 @@ fn policy_from_int(v: c_int) -> ConflictPolicy {
     match v {
         1 => ConflictPolicy::Prompt,
         _ => ConflictPolicy::NewestWins,
-    }
-}
-
-unsafe fn optional_str(ptr: *const c_char) -> Result<Option<String>, Box<dyn core::error::Error>> {
-    if ptr.is_null() {
-        Ok(None)
-    } else {
-        let s = unsafe { CStr::from_ptr(ptr) }.to_str()?;
-        Ok(Some(s.to_string()))
     }
 }
 
@@ -68,9 +58,9 @@ pub unsafe extern "C" fn ws_three_way_sync(
             .to_str()
             .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)?;
         let decision = conflict::three_way_sync(
-            local.as_deref(),
-            base.as_deref(),
-            head.as_deref(),
+            local,
+            base,
+            head,
             local_mtime_str,
             head_mtime_str,
             policy_from_int(policy),
@@ -106,7 +96,7 @@ pub unsafe extern "C" fn ws_decide_pull(
             .map_err(|e| Box::new(e) as Box<dyn core::error::Error>)?;
         let heads: Vec<DeviceHead> = serde_json::from_str(heads_str)?;
         let decision = conflict::decide_pull(
-            local.as_deref(),
+            local,
             local_mtime_str,
             &heads,
             device_str,
