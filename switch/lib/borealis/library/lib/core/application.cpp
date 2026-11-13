@@ -578,6 +578,10 @@ void Application::pushActivity(Activity* activity, TransitionAnimation animation
     {
         activity->setInFadeAnimation(true); // set the new activity translucent until the fade out animation is done playing
 
+        // Waystone fix: a fresh view is not "hidden", so show() early-returned and left the new
+        // activity at alpha 0 forever (black screen). Mark it hidden so show() fades it in.
+        activity->hide([] {}, false, 0.0f);
+
         // Animate the new activity directly
         if (!wait)
         {
@@ -603,8 +607,6 @@ void Application::pushActivity(Activity* activity, TransitionAnimation animation
 
     if (!fadeOut)
         activity->show([] { Application::unblockInputs(); }, true, activity->getShowAnimationDuration(animation));
-    else
-        activity->setAlpha(0.0f);
 
     // Focus
     if (Application::activitiesStack.size() > 0 && Application::currentFocus != nullptr)

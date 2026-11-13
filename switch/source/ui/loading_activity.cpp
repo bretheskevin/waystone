@@ -136,13 +136,6 @@ void LoadingActivity::show_error_ui(const std::string& error) {
 }
 
 void LoadingActivity::push_dashboard_deferred() {
-    // BUG 2 fix: make LoadingActivity translucent before pushActivity so borealis
-    // uses fadeOut=false. With fadeOut=true, setAlpha(0.0f) is called on the incoming
-    // activity; View::show() early-returns (hidden=false on a fresh view), so alpha
-    // is never animated back → permanent black screen.
-    // With fadeOut=false (last->isTranslucent()), setAlpha(0) is skipped entirely
-    // and the dashboard stays at alpha=1.0f (Animatable default).
-    if (auto* cv = getContentView()) cv->setInFadeAnimation(true);
     auto* ctrl = new SyncController(session_->vault, session_->uid, session_->device_id,
                                     &session_->dav, std::move(result_.titles), &session_->config);
     brls::Application::pushActivity(new TitleListActivity(ctrl, session_));

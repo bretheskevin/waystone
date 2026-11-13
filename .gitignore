@@ -45,3 +45,6 @@ android/.kotlin/
 android/**/build/
 android/local.properties
 android/engine/src/main/jniLibs/
+
+# Preview repro fixtures (switch/preview/modes/repro.cpp writes keys.json here)
+switch/preview/sdmc:/

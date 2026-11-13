@@ -1,9 +1,13 @@
 // Scripted crash repros over the real dashboard; pair with the PREVIEW_SANITIZE=1 build.
 // repro-sync-a: tile -> A -> GamePanel "Sync now" -> sync dialog Done -> B -> A on the tile again
 // after REPRO_DELAY_MS, for REPRO_CYCLES cycles, then quit.
+// repro-logout: Settings -> Log out -> log in again; every screen must end visible (alpha 1).
 #include <borealis.hpp>
 #include "registry.h"
 #include "kit_preview.h"
+#include "keys_file.h"
+#include <sys/stat.h>
+#include <cstdio>
 #include <cstdlib>
 #include <deque>
 #include <typeinfo>
@@ -40,7 +44,9 @@ void dump_stack(const char* when) {
            peek(FocusStackTag{})->size(), *peek(TokensTag{}), (void*)brls::Application::getCurrentFocus());
     for (size_t i = 0; i < stack.size(); i++) {
         brls::Activity* a = stack[i];
-        printf("[repro]   [%zu] %s %p hidden=%d\n", i, typeid(*a).name(), (void*)a, (int)a->isHidden());
+        brls::View* cv    = a->getContentView();
+        printf("[repro]   [%zu] %s %p hidden=%d translucent=%d alpha=%.2f\n", i, typeid(*a).name(), (void*)a,
+               (int)a->isHidden(), (int)a->isTranslucent(), cv ? cv->getAlpha() : -1.0f);
     }
 }
 
@@ -161,7 +167,45 @@ void run_repro_confirm(Session& session) {
     finish(s, 300);
 }
 
+// SettingsPane::do_logout reads WS_KEYS_PATH (relative to the run dir on desktop).
+void write_keys_fixture() {
+    mkdir("sdmc:", 0755);
+    mkdir("sdmc:/waystone", 0755);
+    size_t len = 0;
+    const uint8_t* keys = preview_plain_keys(&len);
+    FILE* f = fopen(WS_KEYS_PATH, "wb");
+    const bool ok = f && fwrite(keys, 1, len, f) == len;
+    if (f) fclose(f);
+    printf("[repro] keys fixture %s -> %s\n", WS_KEYS_PATH, ok ? "written" : "FAILED");
+}
+
+// Every hop pushes an opaque activity onto an opaque one (dashboard -> Unlock -> Loading ->
+// dashboard): the regression was Unlock left at alpha 0 (blank screen after Log out).
+void run_repro_logout(Session& session) {
+    printf("[repro] logout start\n");
+    write_keys_fixture();
+    preview_seed_session(session);
+    brls::Application::pushActivity(new TitleListActivity(preview_sync_controller(&session.config), &session));
+    auto* s = new ReproScript();
+    s->add(PREVIEW_READY_DELAY_MS, [] {
+        printf("[repro] sidebar -> Settings\n");
+        for (int i = 0; i < 3; i++) preview_press(brls::BUTTON_DOWN);
+    });
+    s->add(300, [] { press("Right (enter settings)", brls::BUTTON_RIGHT); });
+    s->add(300, [] {
+        printf("[repro] settings -> Log out row\n");
+        for (int i = 0; i < 10; i++) preview_press(brls::BUTTON_DOWN);
+    });
+    s->add(300, [] { press("A (log out)", ws_brls(WsAction::Select)); });
+    s->add(1500, [] { dump_stack("1.5 s after log out"); });
+    s->add(0, [] { press("A (edit password)", ws_brls(WsAction::WizardEdit)); });
+    s->add(300, [] { press("R (log in)", ws_brls(WsAction::WizardNext)); });
+    s->add(2000, [] { dump_stack("2 s after log in"); });
+    s->start();
+}
+
 }
 
 static PreviewModeReg reg_repro("repro-sync-a", &run_repro);
+static PreviewModeReg reg_repro_logout("repro-logout", &run_repro_logout);
 static PreviewModeReg reg_repro_confirm("repro-confirm-a", &run_repro_confirm);
