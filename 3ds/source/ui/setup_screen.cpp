@@ -16,8 +16,8 @@ std::vector<WizardStepDef> SetupScreen::make_steps() const {
     std::vector<WizardStepDef> steps;
 
     WizardStepDef welcome;
-    welcome.title = "Welcome to Waystone";
-    welcome.hint  = "Press (R) to begin setup";
+    welcome.title = setup_welcome_title();
+    welcome.hint  = setup_welcome_hint(ws_glyph(ws_button(WsAction::WizardNext)));
     steps.push_back(welcome);
 
     WizardStepDef server;
@@ -74,11 +74,23 @@ struct SetupJobCtx {
 SetupScreen::SetupScreen(Session* session)
     : session_(session), mode_(SetupVaultMode::CreatePlain), recovery_(false),
       wizard_(make_steps(), NUM_VALUES),
-      job_(JOB_NONE), job_done_(false), job_thread_(NULL), spinner_angle_(0.0f) {
+      job_(JOB_NONE), job_done_(false), job_thread_(NULL), spinner_angle_(0.0f),
+      hint_step_((size_t)-1) {
     probe_.state = RemoteKeysState::Error;
     probe_.http_status = -1;
     probe_.plain = false;
     result_.vault = NULL;
+    wizard_.value(FIELD_SERVER)   = session->config.server_url;
+    wizard_.value(FIELD_USERNAME) = session->config.username;
+    setup_log_prefill(session->config.server_url, session->config.username);
+    sync_footer_extras();
+}
+
+void SetupScreen::sync_footer_extras() {
+    size_t step = wizard_.current_step();
+    if (step == hint_step_) return;
+    hint_step_ = step;
+    wizard_.set_extra_hint_actions(setup_extra_actions(step));
 }
 
 SetupScreen::~SetupScreen() {
@@ -102,6 +114,8 @@ void SetupScreen::draw_top(C3D_RenderTarget* target) {
 }
 
 void SetupScreen::draw_bottom(C3D_RenderTarget* target) {
+    if (job_ == JOB_NONE && update_.draw_banner(App::instance().text_buf())) return;  // input is ignored during a job
+    sync_footer_extras();
     const char* finish_label = NULL;
     if (wizard_.is_last_step())
         finish_label = setup_finish_label(mode_, job_ == JOB_JOIN || job_ == JOB_CREATE);
@@ -237,6 +251,8 @@ void SetupScreen::start_job(Job job) {
 
 void SetupScreen::handle_input(u32 kDown, touchPosition touch) {
     if (job_ != JOB_NONE) return;
+    if (update_.handle_wizard_input(kDown, &wizard_, "setup",
+                                    setup_step_offers_updates(wizard_.current_step()))) return;
     if (wizard_.current_step() == STEP_VAULT) {
         if (mode_ == SetupVaultMode::Join &&
             vault_secret_toggle(kDown, &recovery_, &wizard_, FIELD_PASSPHRASE,
@@ -306,6 +322,7 @@ void SetupScreen::on_vault_done(Job job) {
         printf("[ui] setup: %s (%s) -> loading titles\n", job == JOB_JOIN ? "joined" : "created",
                keys_mode_name(setup_mode_is_plain(mode_)));
         vault_setup_wipe_recovery(&result_);
+        update_.release();
         // set_screen deletes 'this' — no member access after this point
         App::instance().set_screen(new LoadingScreen(session_, false));
         return;
@@ -316,12 +333,14 @@ void SetupScreen::on_vault_done(Job job) {
     vault_setup_wipe_recovery(&result_);
     std::string recovery_path = recovery_path_;
     Session* session          = session_;
+    update_.release();
     // set_screen deletes 'this' — no member access after this point
     App::instance().set_screen(new RecoveryScreen(session, recovery_hex, recovery_path));
     zeroize_string(recovery_hex);
 }
 
 void SetupScreen::poll() {
+    update_.poll_into(&wizard_, job_ != JOB_NONE);
     if (job_ != JOB_NONE) spinner_angle_ += 0.05f;
     if (job_ == JOB_NONE || !job_done_.load()) return;
 

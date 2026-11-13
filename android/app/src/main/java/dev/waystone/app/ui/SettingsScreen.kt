@@ -9,12 +9,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -28,7 +26,6 @@ import dev.waystone.app.ui.theme.LocalWaystoneSpacing
 import dev.waystone.app.ui.theme.LocalWaystoneTypography
 import dev.waystone.app.vm.SettingsReady
 import dev.waystone.app.vm.UiState
-import dev.waystone.app.vm.UpdatePhase
 
 @Composable
 fun SettingsScreen(
@@ -37,11 +34,7 @@ fun SettingsScreen(
     onPolicyChange: (String) -> Unit,
     onSafetyBackupChange: (Boolean) -> Unit,
     onLogout: () -> Unit,
-    updatePhase: UpdatePhase,
-    onCheckUpdates: () -> Unit,
-    onInstallUpdate: () -> Unit,
-    onCancelUpdate: () -> Unit,
-    onOpenInstallPermission: () -> Unit,
+    updates: @Composable () -> Unit,
     logsStatus: String?,
     onShareLogs: () -> Unit,
 ) {
@@ -127,7 +120,7 @@ fun SettingsScreen(
 
                 Text("Version", style = LocalWaystoneTypography.current.sm)
                 Text("Waystone v${ready.appVersion}", style = LocalWaystoneTypography.current.monoSm)
-                UpdateSection(updatePhase, onCheckUpdates, onInstallUpdate, onCancelUpdate, onOpenInstallPermission)
+                updates()
 
                 OutlinedButton(onClick = onShareLogs, modifier = Modifier.fillMaxWidth()) { Text("Share logs") }
                 logsStatus?.let { Text(it, style = LocalWaystoneTypography.current.sm) }
@@ -135,48 +128,6 @@ fun SettingsScreen(
                 OutlinedButton(onClick = onLogout, modifier = Modifier.fillMaxWidth()) {
                     Text("Log out")
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun UpdateSection(
-    phase: UpdatePhase,
-    onCheck: () -> Unit,
-    onInstall: () -> Unit,
-    onCancel: () -> Unit,
-    onOpenPermission: () -> Unit,
-) {
-    val checkButton = @Composable {
-        OutlinedButton(onClick = onCheck, modifier = Modifier.fillMaxWidth()) { Text("Check for updates") }
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(LocalWaystoneSpacing.current.Sm)) {
-        when (phase) {
-            UpdatePhase.Idle -> checkButton()
-            UpdatePhase.Checking -> Text("Checking\u2026")
-            is UpdatePhase.UpToDate -> {
-                Text("Up to date (latest v${phase.latest})")
-                checkButton()
-            }
-            is UpdatePhase.Available -> {
-                Text("Version ${phase.release.version} available")
-                Button(onClick = onInstall, modifier = Modifier.fillMaxWidth()) { Text("Download & install") }
-            }
-            is UpdatePhase.Downloading -> {
-                LinearProgressIndicator(progress = { phase.percent / 100f }, modifier = Modifier.fillMaxWidth())
-                Text("Downloading\u2026 ${phase.percent}%")
-                TextButton(onClick = onCancel) { Text("Cancel") }
-            }
-            UpdatePhase.NeedsPermission -> {
-                Text("Allow Waystone to install updates: Android asks once per app.")
-                Button(onClick = onOpenPermission, modifier = Modifier.fillMaxWidth()) { Text("Open settings") }
-                TextButton(onClick = onInstall) { Text("Retry") }
-            }
-            UpdatePhase.Installing -> Text("Installing\u2026 confirm the system prompt")
-            is UpdatePhase.Error -> {
-                Text(phase.message, color = MaterialTheme.colorScheme.error)
-                checkButton()
             }
         }
     }

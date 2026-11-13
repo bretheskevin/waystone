@@ -3,12 +3,23 @@
 #include "vault_helpers.h"
 #include "session_store.h"
 #include "ffi_err.h"
+#include "setup_activity.h"
+#include "keys_file.h"
+#include "keymap_switch.h"
+#include "vault_remote.h"
+#include "kit/confirm_dialog.h"
+#include "kit/overlay.h"
 #include <cstdio>
 
 UnlockActivity::UnlockActivity(Session* session, const uint8_t* keys_data, size_t keys_len)
     : WizardActivity(NUM_VALUES), session_(session), keys_data_(keys_data), keys_len_(keys_len),
       plain_(ffi_keys_plain(keys_data, keys_len)) {
     printf("[unlock] local keys mode=%s (len=%zu)\n", keys_mode_name(plain_), keys_len);
+    add_ticker([this] { run_forget(); });
+}
+
+UnlockActivity::~UnlockActivity() {
+    *alive_ = false;
 }
 
 std::vector<WizardStepDef> UnlockActivity::get_steps() const {
@@ -39,9 +50,53 @@ bool UnlockActivity::validate_step(size_t /*step*/) {
 void UnlockActivity::on_finish() { do_unlock(); }
 
 void UnlockActivity::register_extra_actions() {
+    registerAction(ws_label(WsAction::ForgetServer), ws_brls(WsAction::ForgetServer),
+                   [this](brls::View*) {
+        request_forget();
+        return true;
+    });
+    register_update_check(&update_, "unlock", [] { return true; });
     if (plain_) return;
     register_recovery_toggle(&recovery_mode_, FIELD_PASSPHRASE,
                              [this] { return current_step_ == 0; });
+}
+
+std::vector<WsAction> UnlockActivity::extra_hint_actions() const {
+    return unlock_extra_actions();
+}
+
+void UnlockActivity::request_forget() {
+    if (forget_pending_ || forget_done_) {
+        printf("[ui] unlock: forget ignored (already %s)\n", forget_done_ ? "done" : "pending");
+        return;
+    }
+    if (update_.busy()) {
+        printf("[ui] unlock: forget ignored: update in progress\n");
+        return;
+    }
+    printf("[ui] unlock: forget requested -> confirm dialog\n");
+    OverlayActivity::push(new ConfirmDialog(
+        forget_server_title(), forget_server_detail(),
+        ws_if_alive(alive_, "forget", [this] {
+            printf("[ui] unlock: forget confirmed (runs next frame)\n");
+            forget_pending_ = true;
+        }),
+        ws_if_alive(alive_, "forget cancel", [] { printf("[ui] unlock: forget cancelled\n"); }),
+        WsAction::Confirm, forget_server_confirm_label(), nullptr));
+}
+
+// Pump ticker: runs on the frame after the confirm, never inside the dialog's action.
+void UnlockActivity::run_forget() {
+    if (!forget_pending_ || forget_done_) return;
+    forget_pending_ = false;
+    forget_done_    = true;
+    printf("[ui] unlock: forgetting server (device=%s)\n", session_->device_id.c_str());
+    bool ok = vault_forget_local(WS_KEYS_PATH, ws_recovery_path(session_->device_id),
+                                 session_->vault, session_->dav.user, session_->dav.pass);
+    zeroize_secrets();
+    printf("[ui] unlock: forget %s -> SetupActivity (pushed, unlock stays below)\n",
+           ok ? "done" : "partially FAILED");
+    brls::Application::pushActivity(new SetupActivity(session_));
 }
 
 // Task 5 + 7b: run Argon2 KDF + title listing off the render thread; persist session.

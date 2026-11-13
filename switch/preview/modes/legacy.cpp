@@ -71,9 +71,9 @@ static void run_unlock(Session& session) {
 }
 
 static void run_unlock_plain(Session& session) {
-    static const char keys[] = "{\"encryption\":\"none\",\"version\":1}";
-    brls::Application::pushActivity(new UnlockActivity(
-        &session, reinterpret_cast<const uint8_t*>(keys), sizeof(keys) - 1));
+    size_t len = 0;
+    const uint8_t* keys = preview_plain_keys(&len);
+    brls::Application::pushActivity(new UnlockActivity(&session, keys, len));
 }
 
 static void run_recovery(Session& session) {

@@ -32,6 +32,20 @@ class SetupViewModel(
     private val _navigateTo = MutableStateFlow<String?>(null)
     val navigateTo: StateFlow<String?> = _navigateTo.asStateFlow()
 
+    private val _prefill = MutableStateFlow(SetupPrefill.EMPTY)
+    val prefill: StateFlow<SetupPrefill> = _prefill.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            runCatchingCancellable { SetupPrefill.of(settings.load()) }
+                .onSuccess {
+                    Log.i(TAG, "prefill: server=${redactUrl(it.serverUrl)} username=${if (it.username.isEmpty()) "none" else "set"}")
+                    _prefill.value = it
+                }
+                .onFailure { e -> Log.e(TAG, "prefill load failed, starting empty", e) }
+        }
+    }
+
     fun submit(
         serverUrl: String,
         username: String,

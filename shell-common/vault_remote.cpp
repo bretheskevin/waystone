@@ -2,9 +2,11 @@
 #include "ffi_err.h"
 #include "keys_file.h"
 #include "secure_clear.h"
+#include "session_store.h"
 #include "setup_model.h"
 #include "snapshot.h"
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 
@@ -225,6 +227,34 @@ void vault_setup_persist(const VaultSetupResult& r, const char* keys_path,
         printf("[vault] setup: local persist FAILED (server copy is intact)\n");
     bool cfg_ok = wsconfig_save(cfg, config_path);
     printf("[vault] setup: config.json save %s\n", cfg_ok ? "ok" : "FAILED");
+}
+
+static bool forget_file(const char* path, char* out, size_t out_sz) {
+    if (!path || !path[0]) {
+        snprintf(out, out_sz, "absent");
+        return true;
+    }
+    if (remove(path) == 0) {
+        snprintf(out, out_sz, "ok");
+        return true;
+    }
+    int err = errno;
+    if (err == ENOENT) {
+        snprintf(out, out_sz, "absent");
+        return true;
+    }
+    snprintf(out, out_sz, "FAILED errno=%d", err);
+    return false;
+}
+
+bool vault_forget_local(const char* keys_path, const std::string& recovery_path, WsVault*& vault,
+                        std::string& dav_user, std::string& dav_pass) {
+    char keys_res[32], rec_res[32];
+    bool keys_ok = forget_file(keys_path, keys_res, sizeof keys_res);
+    bool rec_ok = forget_file(recovery_path.c_str(), rec_res, sizeof rec_res);
+    printf("[vault] forget local: keys=%s recovery=%s\n", keys_res, rec_res);
+    session_drop_login(vault, dav_user, dav_pass);
+    return keys_ok && rec_ok;
 }
 
 void vault_setup_wipe_recovery(VaultSetupResult* r) {

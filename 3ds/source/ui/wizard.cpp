@@ -63,7 +63,9 @@ void Wizard::draw_bottom(C3D_RenderTarget* target, C2D_TextBuf buf, const char* 
     draw_text_centered(buf, 0, 20.0f, 0.5f, TEXT_LG, CLR_TEXT, step.title.c_str(), (float)SCREEN_BOT_W);
     if (step.fields.empty() && !step.hint.empty() && !has_finish_) {
         draw_text_centered(buf, 0, (float)SCREEN_BOT_H-60.0f, 0.5f, TEXT_BASE, CLR_TEXT_HINT, step.hint.c_str(), (float)SCREEN_BOT_W);
-        if (current_step_ != 0) draw_footer_hint(buf, ws_hint(WsAction::WizardNext).c_str());
+        static const WsAction next_act[] = { WsAction::WizardNext };
+        if (current_step_ != 0) draw_footer_hint(buf, footer_hint(next_act, 1).c_str());
+        else if (!extra_acts_.empty()) draw_footer_hint(buf, footer_hint(next_act, 0).c_str());
         return;
     }
     for (size_t i=0;i<step.fields.size();i++) {
@@ -84,8 +86,14 @@ void Wizard::draw_bottom(C3D_RenderTarget* target, C2D_TextBuf buf, const char* 
     }
     static const WsAction first_acts[] = { WsAction::WizardEdit, WsAction::WizardNext };
     static const WsAction rest_acts[]  = { WsAction::WizardEdit, WsAction::WizardNext, WsAction::WizardPrev };
-    std::string hint = (current_step_ == 0) ? ws_hint_bar(first_acts) : ws_hint_bar(rest_acts);
+    std::string hint = (current_step_ == 0) ? footer_hint(first_acts, sizeof(first_acts) / sizeof(first_acts[0]))
+                                           : footer_hint(rest_acts, sizeof(rest_acts) / sizeof(rest_acts[0]));
     draw_footer_hint(buf, hint.c_str());
+}
+std::string Wizard::footer_hint(const WsAction* base, size_t n) const {
+    std::vector<WsAction> acts(base, base + n);
+    acts.insert(acts.end(), extra_acts_.begin(), extra_acts_.end());
+    return acts.empty() ? std::string() : ws_format_hint_bar(acts.data(), acts.size(), ws_hint_style());
 }
 void Wizard::edit_field_at_cursor() {
     const WizardStepDef& step = steps_[current_step_];

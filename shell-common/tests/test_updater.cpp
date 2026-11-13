@@ -118,7 +118,62 @@ static void test_suffix_selects_asset() {
     printf("test_suffix_selects_asset PASSED\n");
 }
 
+static void test_check_outcome_available() {
+    UpdateCheckOutcome o = update_check_outcome(UP_OK, "0.7.0", "0.6.0", ".nro");
+    assert(o.kind == UpdateCheckOutcome::Available);
+    assert(o.status == "Update available: v0.7.0");
+    printf("test_check_outcome_available PASSED\n");
+}
+
+static void test_check_outcome_up_to_date() {
+    UpdateCheckOutcome same = update_check_outcome(UP_OK, "0.6.0", "0.6.0", ".nro");
+    assert(same.kind == UpdateCheckOutcome::UpToDate);
+    assert(same.status == "Up to date (v0.6.0)");
+    UpdateCheckOutcome older = update_check_outcome(UP_OK, "0.5.0", "0.6.0", ".nro");
+    assert(older.kind == UpdateCheckOutcome::UpToDate);
+    printf("test_check_outcome_up_to_date PASSED\n");
+}
+
+static void test_check_outcome_failed() {
+    UpdateCheckOutcome o = update_check_outcome(UP_NET, "", "0.6.0", ".3dsx");
+    assert(o.kind == UpdateCheckOutcome::Failed);
+    assert(o.status == updater_check_message(UP_NET, ".3dsx"));
+    UpdateCheckOutcome na = update_check_outcome(UP_NO_ASSET, nullptr, "0.6.0", ".cia");
+    assert(na.kind == UpdateCheckOutcome::Failed);
+    assert(na.status == updater_check_message(UP_NO_ASSET, ".cia"));
+    printf("test_check_outcome_failed PASSED\n");
+}
+
+static void test_update_status_text() {
+    assert(update_status_checking() == std::string("Checking for updates..."));
+    assert(update_status_downloading(0) == "Downloading... 0%");
+    assert(update_status_downloading(42) == "Downloading... 42%");
+    assert(update_status_installing(100) == "Installing... 100%");
+    assert(update_status_updated("0.7.0") == "Updated to v0.7.0");
+    assert(update_status_installed("0.7.0") == "Updated to v0.7.0 - restart to apply");
+    assert(update_status_restart_to_apply("0.7.0") == "Updated to v0.7.0. Restart to apply.");
+    assert(update_status_restarting() == std::string("Restarting..."));
+    assert(update_status_cancelled() == std::string("Update cancelled"));
+    assert(update_status_postponed() == std::string("Update postponed"));
+    printf("test_update_status_text PASSED\n");
+}
+
+static void test_update_dialog_text() {
+    assert(update_offer_title() == std::string("Update available"));
+    assert(update_offer_detail("0.7.0") == "Waystone 0.7.0 is ready to install.");
+    assert(update_restart_title() == std::string("Update installed"));
+    assert(update_restart_detail() == std::string("Restart Waystone now?"));
+    assert(update_restart_now_label() == std::string("Restart now"));
+    assert(update_restart_later_label() == std::string("Later"));
+    printf("test_update_dialog_text PASSED\n");
+}
+
 int main() {
+    test_check_outcome_available();
+    test_check_outcome_up_to_date();
+    test_check_outcome_failed();
+    test_update_status_text();
+    test_update_dialog_text();
     test_version_newer();
     test_parse_release_picks_3dsx();
     test_parse_release_3dsx_before_cia();

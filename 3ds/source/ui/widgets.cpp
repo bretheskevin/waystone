@@ -145,8 +145,8 @@ void draw_confirm_banner(C2D_TextBuf buf, float area_y, float area_h,
         draw_text_centered(buf, 0, banner_y + 36.0f, 0.61f, TEXT_SM,
                            CLR_NEUTRAL_800, line3, (float)SCREEN_BOT_W);
     } else {
-        draw_text_centered(buf, 0, banner_y + 22.0f, 0.61f, TEXT_SM,
-                           CLR_NEUTRAL_800, line2, (float)SCREEN_BOT_W);
+        draw_text_wrapped_centered(buf, (float)SP_MD, banner_y + 22.0f, 0.61f, TEXT_SM,
+                                   CLR_NEUTRAL_800, line2, (float)SCREEN_BOT_W - 2.0f * SP_MD, 14.0f);
     }
 }
 void draw_footer_hint(C2D_TextBuf buf, const char* text) {

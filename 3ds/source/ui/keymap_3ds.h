@@ -48,7 +48,8 @@ inline std::string ws_hint_bar(const WsAction (&acts)[N]) {
     return ws_format_hint_bar(acts, N, ws_hint_style());
 }
 
-inline std::string ws_confirm_cancel_hint() {
-    static const WsAction acts[] = { WsAction::Confirm, WsAction::Cancel };
-    return ws_hint_bar(acts);
+inline std::string ws_confirm_cancel_hint(const char* confirm_label = nullptr,
+                                          const char* cancel_label = nullptr) {
+    return ws_hint(WsAction::Confirm, confirm_label) + ws_hint_style().item_sep +
+           ws_hint(WsAction::Cancel, cancel_label);
 }

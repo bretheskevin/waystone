@@ -15,6 +15,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import dev.waystone.app.BuildConfig
 import dev.waystone.app.ServiceLocator
 import androidx.compose.runtime.rememberCoroutineScope
 import dev.waystone.app.log.Log
@@ -30,6 +31,7 @@ import dev.waystone.app.ui.SetupScreen
 import dev.waystone.app.ui.SettingsScreen
 import dev.waystone.app.ui.SnapshotsScreen
 import dev.waystone.app.ui.UnlockScreen
+import dev.waystone.app.ui.UpdateSection
 import dev.waystone.app.vm.ConflictsViewModel
 import dev.waystone.app.vm.DashboardViewModel
 import dev.waystone.app.vm.HistoryViewModel
@@ -38,12 +40,18 @@ import dev.waystone.app.vm.SettingsViewModel
 import dev.waystone.app.vm.SetupViewModel
 import dev.waystone.app.vm.SnapshotsViewModel
 import dev.waystone.app.vm.UnlockViewModel
+import dev.waystone.app.vm.UpdateViewModel
 
 @Composable
 fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
     val navController = rememberNavController()
     val activity = LocalContext.current as ComponentActivity
     val session: SessionViewModel = viewModel(viewModelStoreOwner = activity)
+    val updates: UpdateViewModel = viewModel(
+        viewModelStoreOwner = activity,
+        factory = viewModelFactory { initializer { UpdateViewModel(activity.application, BuildConfig.VERSION_NAME) } },
+    )
+    val updateSection: @Composable () -> Unit = { UpdateSection(updates) }
 
     NavHost(navController = navController, startDestination = startDestination) {
         composable(Routes.NO_INTERNET) {
@@ -85,11 +93,14 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                 },
             )
             val state by vm.uiState.collectAsState()
+            val prefill by vm.prefill.collectAsState()
             NavEventEffect(vm.navigateTo, navController, vm::consumeNavigation)
             SetupScreen(
                 state = state,
+                prefill = prefill,
                 onSubmit = vm::submit,
                 onRecoveryAcknowledged = vm::acknowledgeRecovery,
+                updates = updateSection,
             )
         }
 
@@ -121,6 +132,8 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                 onSecretChange = { vm.passphrase.value = it },
                 onWebdavPasswordChange = vm::updateWebdavPassword,
                 onSubmit = vm::submit,
+                onForgetServer = vm::forgetServer,
+                updates = updateSection,
             )
         }
 
@@ -235,14 +248,13 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                         ServiceLocator.settingsProvider,
                         ServiceLocator.sessionVaultStore,
                         session,
-                        dev.waystone.app.BuildConfig.VERSION_NAME,
+                        BuildConfig.VERSION_NAME,
                     )
                     }
                 },
             )
             val state by vm.uiState.collectAsState()
             NavEventEffect(vm.navigateTo, navController, vm::consumeNavigation)
-            val updatePhase by vm.updater.phase.collectAsState()
             val logsStatus by vm.logsStatus.collectAsState()
             val shareIntent by vm.shareLogsIntent.collectAsState()
             val context = LocalContext.current
@@ -258,11 +270,7 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
                 onPolicyChange = vm::setConflictPolicy,
                 onSafetyBackupChange = vm::setSafetyBackup,
                 onLogout = vm::logout,
-                updatePhase = updatePhase,
-                onCheckUpdates = vm.updater::check,
-                onInstallUpdate = vm.updater::downloadAndInstall,
-                onCancelUpdate = vm.updater::cancel,
-                onOpenInstallPermission = vm::openInstallPermissionSettings,
+                updates = updateSection,
                 logsStatus = logsStatus,
                 onShareLogs = vm::shareLogs,
             )
@@ -273,10 +281,25 @@ fun WaystoneNavHost(startDestination: String = Routes.SETUP) {
 /** Collects [events] so a nav event fires even when nothing else on the screen recomposes. */
 @Composable
 private fun NavEventEffect(events: StateFlow<String?>, navController: NavHostController, onConsumed: () -> Unit) {
+    val route by events.collectAsState()
+    NavEventEffect(route?.let { NavEvent(it) }, navController, onConsumed)
+}
+
+@JvmName("NavEventEffectWithOptions")
+@Composable
+private fun NavEventEffect(events: StateFlow<NavEvent?>, navController: NavHostController, onConsumed: () -> Unit) {
     val event by events.collectAsState()
+    NavEventEffect(event, navController, onConsumed)
+}
+
+@Composable
+private fun NavEventEffect(event: NavEvent?, navController: NavHostController, onConsumed: () -> Unit) {
     LaunchedEffect(event) {
         event?.let {
-            navController.navigate(it)
+            Log.i("WS:APP", "navigate -> ${it.route} (clearBackStack=${it.clearBackStack})")
+            navController.navigate(it.route) {
+                if (it.clearBackStack) popUpTo(navController.graph.id) { inclusive = true }
+            }
             onConsumed()
         }
     }

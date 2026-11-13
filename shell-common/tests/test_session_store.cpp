@@ -141,6 +141,21 @@ void test_ffi_keys_plain_and_mode_name() {
     printf("test_ffi_keys_plain_and_mode_name PASSED\n");
 }
 
+void test_drop_login_clears_everything() {
+    WsVault* v = ws_vault_plain();
+    assert(persist_session(v, "pw"));
+    assert(session_store_exists());
+    std::string user = "alice";
+    std::string pass = "pw";
+    session_drop_login(v, user, pass);
+    assert(v == nullptr);
+    assert(user.empty() && pass.empty());
+    assert(!session_store_exists());
+    session_drop_login(v, user, pass);
+    assert(v == nullptr);
+    printf("test_drop_login_clears_everything PASSED\n");
+}
+
 } // namespace
 
 int main() {
@@ -156,6 +171,7 @@ int main() {
     test_invalid_local_keys_fail();
     test_update_webdav_pass_on_plain_vault();
     test_ffi_keys_plain_and_mode_name();
+    test_drop_login_clears_everything();
 
     std::string cmd = std::string("rm -rf '") + tmpl + "'";
     assert(system(cmd.c_str()) == 0);

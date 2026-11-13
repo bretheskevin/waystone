@@ -3,6 +3,7 @@
 #include "wizard.h"
 #include "session.h"
 #include "vault_helpers.h"
+#include "update_flow.h"
 #include <3ds.h>
 #include <atomic>
 #include <cstdint>
@@ -28,10 +29,13 @@ private:
     VaultSetupResult result_;
     std::string recovery_path_;
     float spinner_angle_;
+    UpdateFlow update_;
+    size_t hint_step_;  // step the footer extras were last set for
     static const size_t FIELD_SERVER=0, FIELD_USERNAME=1, FIELD_PASSWORD=2, FIELD_PASSPHRASE=3, FIELD_CONFIRM=4, NUM_VALUES=5;
     static const size_t STEP_SERVER=1, STEP_LOGIN=2, STEP_VAULT=3;
     std::vector<WizardStepDef> make_steps() const;
     void set_vault_mode(SetupVaultMode mode);
+    void sync_footer_extras();
     bool validate_step(size_t step);
     void start_job(Job job);
     void on_probe_done();

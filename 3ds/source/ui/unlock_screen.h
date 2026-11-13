@@ -2,6 +2,7 @@
 #include "screen.h"
 #include "wizard.h"
 #include "session.h"
+#include "update_flow.h"
 #include <3ds.h>
 #include <atomic>
 #include <string>
@@ -27,10 +28,13 @@ private:
     Thread    unlock_thread_;
     bool      unlock_success_;
     std::string unlock_error_;
+    UpdateFlow update_;
+    bool       forget_confirm_;
     static const size_t FIELD_PASSPHRASE = 0, FIELD_PASSWORD = 1, NUM_VALUES = 2;
     std::vector<WizardStepDef> make_steps() const;
     bool validate();
     void do_unlock();
+    void forget_server();  // deletes this screen; caller must return
     static void unlock_thread_entry(void* arg);
     UnlockScreen(const UnlockScreen&);
     UnlockScreen& operator=(const UnlockScreen&);

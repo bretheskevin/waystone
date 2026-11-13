@@ -49,4 +49,30 @@ int updater_install(const char* url, const char* self_path,
 std::string updater_check_message(int rc, const char* asset_suffix);
 std::string updater_install_message(int rc);
 
+struct UpdateCheckOutcome {
+    enum Kind { Available, UpToDate, Failed } kind;
+    std::string status;
+};
+
+// Classifies a finished check: Available when rc == UP_OK and latest > current.
+UpdateCheckOutcome update_check_outcome(int rc, const char* latest, const char* current,
+                                        const char* asset_suffix);
+
+// Shared ASCII update status / dialog text (3DS font has no unicode punctuation).
+const char* update_status_checking();
+std::string update_status_downloading(int pct);
+std::string update_status_installing(int pct);
+std::string update_status_updated(const char* ver);
+std::string update_status_installed(const char* ver);
+std::string update_status_restart_to_apply(const char* ver);
+const char* update_status_restarting();
+const char* update_status_cancelled();
+const char* update_status_postponed();
+const char* update_offer_title();
+std::string update_offer_detail(const char* ver);
+const char* update_restart_title();
+const char* update_restart_detail();
+const char* update_restart_now_label();
+const char* update_restart_later_label();
+
 #endif

@@ -6,7 +6,12 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -33,13 +38,33 @@ fun UnlockScreen(
     onSecretChange: (String) -> Unit,
     onWebdavPasswordChange: (String) -> Unit,
     onSubmit: () -> Unit,
+    onForgetServer: () -> Unit,
+    updates: @Composable () -> Unit,
 ) {
     var webdavPassword by remember { mutableStateOf("") }
+    var confirmForget by remember { mutableStateOf(false) }
+    if (confirmForget) {
+        AlertDialog(
+            onDismissRequest = { confirmForget = false },
+            title = { Text("Forget this server?") },
+            text = { Text("Deletes the login saved on this device. Saves on the server are not touched.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmForget = false
+                    onForgetServer()
+                }) { Text("Forget", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmForget = false }) { Text("Cancel") }
+            },
+        )
+    }
     when (state) {
         is UiState.Loading -> LoadingView()
         else -> Column(
             modifier = Modifier
                 .fillMaxSize()
+                .verticalScroll(rememberScrollState())
                 .padding(LocalWaystoneSpacing.current.Lg),
             verticalArrangement = Arrangement.spacedBy(LocalWaystoneSpacing.current.Md),
         ) {
@@ -80,6 +105,14 @@ fun UnlockScreen(
             ) {
                 Text("Unlock")
             }
+            TextButton(
+                onClick = { confirmForget = true },
+                enabled = state !is UiState.Loading,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Forget this server", color = MaterialTheme.colorScheme.error)
+            }
+            updates()
         }
     }
 }

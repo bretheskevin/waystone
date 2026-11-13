@@ -10,12 +10,7 @@
 static void push_dashboard(Session& session, std::initializer_list<brls::ControllerButton> presses) {
     preview_seed_session(session);
     brls::Application::pushActivity(new TitleListActivity(preview_sync_controller(&session.config), &session));
-    std::vector<brls::ControllerButton> seq(presses);
-    auto* timer = new brls::Timer();
-    timer->setEndCallback([seq](bool) {
-        for (brls::ControllerButton b : seq) preview_press(b);
-    });
-    timer->start(PREVIEW_READY_DELAY_MS);
+    preview_press_after(PREVIEW_READY_DELAY_MS, std::vector<brls::ControllerButton>(presses));
 }
 
 static void run_dashboard(Session& s) {

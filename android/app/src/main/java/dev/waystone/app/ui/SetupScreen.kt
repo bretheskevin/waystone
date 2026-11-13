@@ -37,6 +37,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import dev.waystone.app.ui.theme.LocalWaystoneSpacing
 import dev.waystone.app.ui.theme.LocalWaystoneTypography
+import dev.waystone.app.vm.SetupPrefill
 import dev.waystone.app.vm.SetupReady
 import dev.waystone.app.vm.UiState
 
@@ -44,11 +45,13 @@ import dev.waystone.app.vm.UiState
 @Composable
 fun SetupScreen(
     state: UiState<SetupReady>,
+    prefill: SetupPrefill,
     onSubmit: (serverUrl: String, username: String, password: String, encrypt: Boolean, passphrase: String, confirm: String) -> Unit,
     onRecoveryAcknowledged: () -> Unit,
+    updates: @Composable () -> Unit,
 ) {
-    var serverUrl by remember { mutableStateOf("") }
-    var username by remember { mutableStateOf("") }
+    var serverUrl by remember(prefill.serverUrl) { mutableStateOf(prefill.serverUrl) }
+    var username by remember(prefill.username) { mutableStateOf(prefill.username) }
     var password by remember { mutableStateOf("") }
     var encrypt by remember { mutableStateOf(false) }
     var passphrase by remember { mutableStateOf("") }
@@ -154,6 +157,7 @@ fun SetupScreen(
                 },
             )
         }
+        updates()
     }
 }
 

@@ -12,6 +12,7 @@ enum class WsAction {
     ToggleRecovery, Retry, ExitApp, Continue, Update, Quit,
     OpenGame, JumpUp, JumpDown,
     ToggleEncryption,
+    ForgetServer, CheckUpdates,
     Count
 };
 
@@ -49,6 +50,8 @@ inline const WsBinding* ws_binding_table() {
         { WsAction::JumpUp,         WsButton::L,      "Jump" },
         { WsAction::JumpDown,       WsButton::R,      "Jump" },
         { WsAction::ToggleEncryption, WsButton::Y,    "Encryption" },
+        { WsAction::ForgetServer,   WsButton::X,      "Forget server" },
+        { WsAction::CheckUpdates,   WsButton::Select, "Updates" },
     };
     static_assert(sizeof(table) / sizeof(table[0]) == WS_ACTION_COUNT,
                   "keymap table must cover every WsAction");

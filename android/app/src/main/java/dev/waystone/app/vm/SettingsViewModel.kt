@@ -2,16 +2,12 @@ package dev.waystone.app.vm
 
 import android.app.Application
 import android.content.Intent
-import android.net.Uri
 import dev.waystone.app.log.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import dev.waystone.app.log.LogShare
-import dev.waystone.app.update.ApkInstaller
-import dev.waystone.app.update.InstallEvents
 import dev.waystone.data.config.Settings
-import dev.waystone.data.update.Updater
-import java.io.File
+import dev.waystone.data.sync.runCatchingCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -47,30 +43,8 @@ class SettingsViewModel(
     private val _logsStatus = MutableStateFlow<String?>(null)
     val logsStatus: StateFlow<String?> = _logsStatus.asStateFlow()
 
-    private val releases = Updater()
-
-    val updater = UpdateController(
-        scope = viewModelScope,
-        currentVersion = appVersion,
-        check = { current -> releases.checkLatest(current) },
-        download = { url, onProgress, isCancelled ->
-            val dest = File(getApplication<Application>().cacheDir, "update.apk")
-            dest.takeIf { releases.download(url, it, onProgress, isCancelled) }
-        },
-        canInstall = { getApplication<Application>().packageManager.canRequestPackageInstalls() },
-        install = { apk -> ApkInstaller.install(getApplication(), apk) },
-    )
-
     init {
         load()
-        viewModelScope.launch {
-            InstallEvents.results.collect { r ->
-                if (r != null) {
-                    updater.onInstallResult(r.success, r.message)
-                    InstallEvents.results.value = null
-                }
-            }
-        }
     }
 
     fun shareLogs() {
@@ -90,15 +64,6 @@ class SettingsViewModel(
         _shareLogsIntent.value = null
     }
 
-    fun openInstallPermissionSettings() {
-        val app = getApplication<Application>()
-        Log.i("WS:UPDATE", "opening unknown-sources settings for ${app.packageName}")
-        app.startActivity(
-            Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${app.packageName}"))
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
-    }
-
     fun load() {
         viewModelScope.launch {
             _uiState.value = UiState.Loading
@@ -113,13 +78,12 @@ class SettingsViewModel(
     // Changing the server invalidates the wrapped MDK and stored WebDAV creds.
     fun changeServer(serverUrl: String, username: String, password: String) {
         viewModelScope.launch {
-            runCatching {
+            runCatchingCancellable {
                 val old = settings.load()
                 val new = old.copy(serverUrl = serverUrl.trim(), username = username)
                 if (dev.waystone.data.config.SettingsStore.serverChanged(old, new)) {
-                    sessionVaultStore.clear()
-                    session.clear()
-                    Log.i(TAG, "server changed: ${redactUrl(old.serverUrl)} -> ${redactUrl(new.serverUrl)}; session credentials cleared")
+                    Log.i(TAG, "server changed: ${redactUrl(old.serverUrl)} -> ${redactUrl(new.serverUrl)}")
+                    forgetSession(sessionVaultStore, session::clear) { Log.i(TAG, it) }
                 }
                 settings.save(new)
                 new.toReady()
@@ -138,9 +102,9 @@ class SettingsViewModel(
 
     fun logout() {
         viewModelScope.launch {
-            runCatching {
-                sessionVaultStore.clear()
-                session.clear()
+            Log.i(TAG, "logout requested")
+            runCatchingCancellable {
+                forgetSession(sessionVaultStore, session::clear) { Log.i(TAG, it) }
             }.onSuccess {
                 Log.i(TAG, "logged out, session credentials cleared")
                 _navigateTo.value = "unlock"

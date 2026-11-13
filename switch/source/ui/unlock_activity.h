@@ -1,13 +1,16 @@
 #pragma once
 #include "wizard_activity.h"
 #include "session.h"
+#include "update_flow.h"
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
 class UnlockActivity : public WizardActivity {
   public:
     UnlockActivity(Session* session, const uint8_t* keys_data, size_t keys_len);
+    ~UnlockActivity() override;
 
   protected:
     std::vector<WizardStepDef> get_steps()                const override;
@@ -16,6 +19,7 @@ class UnlockActivity : public WizardActivity {
     bool                       validate_step(size_t step)       override;
     void                       on_finish()                      override;
     void                       register_extra_actions()         override;
+    std::vector<WsAction>      extra_hint_actions()       const override;
 
   private:
     Session*       session_;
@@ -28,5 +32,12 @@ class UnlockActivity : public WizardActivity {
     static const size_t FIELD_PASSWORD   = 1;
     static const size_t NUM_VALUES       = 2;
 
+    bool forget_pending_ = false;
+    bool forget_done_    = false;
+    std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
+    UpdateFlow update_{status_sink(), "unlock"};
+
     void do_unlock();
+    void request_forget();
+    void run_forget();
 };

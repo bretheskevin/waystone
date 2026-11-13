@@ -75,6 +75,12 @@ void vault_setup_persist(const VaultSetupResult& r, const char* keys_path,
                          const std::string& recovery_path, const WaystoneShellConfig& cfg,
                          const char* config_path);
 
+// Forget server: deletes the local keys.json and recovery file (config.json is kept so Setup
+// pre-fills; a missing file counts as success), then session_drop_login(vault, dav_user, dav_pass).
+// false when a file could not be deleted (the login is dropped anyway).
+bool vault_forget_local(const char* keys_path, const std::string& recovery_path, WsVault*& vault,
+                        std::string& dav_user, std::string& dav_pass);
+
 // Zeroizes and clears r->recovery_hex.
 void vault_setup_wipe_recovery(VaultSetupResult* r);
 

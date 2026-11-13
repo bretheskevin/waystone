@@ -6,3 +6,8 @@ bool session_store_load(uint8_t*, size_t, std::string&) { return false; }
 bool session_store_exists() { return false; }
 void session_store_clear() {}
 bool persist_session(WsVault*, const std::string&) { return true; }
+void session_drop_login(WsVault*& vault, std::string& dav_user, std::string& dav_pass) {
+    vault = nullptr;
+    dav_user.clear();
+    dav_pass.clear();
+}

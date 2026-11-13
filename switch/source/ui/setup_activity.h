@@ -3,6 +3,7 @@
 #include "setup_model.h"
 #include "vault_helpers.h"
 #include "session.h"
+#include "update_flow.h"
 #include <atomic>
 #include <functional>
 #include <string>
@@ -24,6 +25,7 @@ class SetupActivity : public WizardActivity {
     void                       on_finish()                  override;
     void                       register_extra_actions()     override;
     bool                       nav_locked()            const override { return busy_; }
+    std::vector<WsAction>      extra_hint_actions()    const override;
 
     // A probe / create / join worker is running (main thread only).
     bool           busy_          = false;
@@ -49,6 +51,8 @@ class SetupActivity : public WizardActivity {
     VaultSetupResult  setup_result_{nullptr, "", {}, ""};
     std::atomic<bool> worker_done_{false};
     std::thread       worker_;
+
+    UpdateFlow update_{status_sink(), "setup"};
 
     void run_worker(std::function<void()> work, std::function<void()> on_done);
     void start_probe();

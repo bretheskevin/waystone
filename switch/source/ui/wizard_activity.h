@@ -3,9 +3,12 @@
 #include "wizard.h"
 #include "deferred_refresh_pump.h"
 #include "setup_model.h"
+#include "keymap.h"
 #include <functional>
 #include <string>
 #include <vector>
+
+class UpdateFlow;
 
 // Base class for wizard-style activities sharing the step-navigation
 // state machine: members, view construction, action registration, and
@@ -34,6 +37,16 @@ class WizardActivity : public brls::Activity {
     // clear poll_fn_ without destroying the currently-running instance.
     std::function<void()> poll_fn_;
 
+    // Persistent per-frame callbacks, ticked after poll_fn_.
+    // Never removed; may be added from the ctor, register_extra_actions() or an action.
+    void add_ticker(std::function<void()> fn);
+
+    // UpdateFlow status sink: shows the text in the wizard status line.
+    std::function<void(const std::string&)> status_sink();
+    // CheckUpdates (Select) starts flow->start_check() while allowed() holds; ticks flow every frame.
+    // Call from register_extra_actions().
+    void register_update_check(UpdateFlow* flow, const char* origin, std::function<bool()> allowed);
+
     void refresh();
     void schedule_refresh();
     void reload_steps();
@@ -57,15 +70,19 @@ class WizardActivity : public brls::Activity {
     virtual void                       register_extra_actions();
     // True while a background worker owns the wizard: Next/Back/field edits are ignored.
     virtual bool                       nav_locked()      const { return false; }
+    // Extra footer hints, shown before Quit; re-read on every refresh (may depend on current_step_).
+    virtual std::vector<WsAction>      extra_hint_actions() const { return {}; }
 
   private:
     std::vector<WizardStepDef> steps_;
     bool step_changed_ = false;
     bool go_forward_   = true;
+    std::vector<std::function<void()>> tickers_;
+
+    void pump_refresh();
+    void pump_tick();
 
     // Deferred pump: on_refresh rebuilds the view; on_tick forwards to poll_fn_
-    // (copy-before-call so the lambda can safely clear poll_fn_ without UAF).
-    DeferredRefreshPump pump_{
-        [this]{ refresh(); },
-        [this]{ if (poll_fn_) { auto fn = poll_fn_; fn(); } }};
+    // (copy-before-call so the lambda can safely clear poll_fn_ without UAF) and tickers_.
+    DeferredRefreshPump pump_{[this] { pump_refresh(); }, [this] { pump_tick(); }};
 };

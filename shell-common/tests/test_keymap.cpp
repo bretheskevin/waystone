@@ -44,7 +44,9 @@ static void test_no_button_clash_per_screen() {
     static const A setup_create[]    = { A::WizardEdit, A::WizardNext, A::WizardPrev,
                                          A::WizardPrevAlt, A::ToggleEncryption, A::Quit };
     static const A unlock[]          = { A::WizardEdit, A::WizardNext, A::WizardPrev,
-                                         A::WizardPrevAlt, A::ToggleRecovery, A::Quit };
+                                         A::WizardPrevAlt, A::ToggleRecovery, A::Quit,
+                                         A::ForgetServer, A::CheckUpdates };
+    static const A setup_welcome[]   = { A::WizardEdit, A::WizardNext, A::CheckUpdates, A::Quit };
     static const A recovery_key[]    = { A::Continue, A::Quit };
     static const A no_internet[]     = { A::Retry, A::ExitApp, A::Quit };
     static const A sync_progress[]   = { A::Continue, A::Quit };
@@ -58,6 +60,7 @@ static void test_no_button_clash_per_screen() {
     CHECK_SCREEN(wizard);
     CHECK_SCREEN(setup_create);
     CHECK_SCREEN(unlock);
+    CHECK_SCREEN(setup_welcome);
     CHECK_SCREEN(recovery_key);
     CHECK_SCREEN(no_internet);
     CHECK_SCREEN(sync_progress);
@@ -96,7 +99,11 @@ static void test_decided_bindings() {
     assert(ws_button(WsAction::JumpDown)      == WsButton::R);
     assert(ws_button(WsAction::ToggleEncryption) == WsButton::Y);
     assert(strcmp(ws_label(WsAction::ToggleEncryption), "Encryption") == 0);
-    assert(static_cast<size_t>(WsAction::ToggleEncryption) == WS_ACTION_COUNT - 1);
+    assert(ws_button(WsAction::ForgetServer) == WsButton::X);
+    assert(strcmp(ws_label(WsAction::ForgetServer), "Forget server") == 0);
+    assert(ws_button(WsAction::CheckUpdates) == WsButton::Select);
+    assert(strcmp(ws_label(WsAction::CheckUpdates), "Updates") == 0);
+    assert(static_cast<size_t>(WsAction::CheckUpdates) == WS_ACTION_COUNT - 1);
     assert(strcmp(ws_label(WsAction::OpenGame), "Open") == 0);
     assert(strcmp(ws_label(WsAction::JumpUp), "Jump") == 0);
     assert(strcmp(ws_label(WsAction::JumpDown), "Jump") == 0);

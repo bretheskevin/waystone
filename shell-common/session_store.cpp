@@ -220,6 +220,19 @@ void session_store_clear() {
     remove(SESSION_STORE_PATH);
 }
 
+void session_drop_login(WsVault*& vault, std::string& dav_user, std::string& dav_pass) {
+    session_store_clear();
+    const bool had_vault = vault != nullptr;
+    if (vault) {
+        ws_vault_free(vault);
+        vault = nullptr;
+    }
+    zeroize_string(dav_pass);
+    zeroize_string(dav_user);
+    printf("[vault] login dropped: session.bin cleared, vault %s, webdav creds wiped\n",
+           had_vault ? "freed" : "absent");
+}
+
 bool persist_session(WsVault* vault, const std::string& webdav_pass) {
     if (!vault) {
         printf("[vault] persist_session: no vault - FAILED\n");

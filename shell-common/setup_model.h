@@ -2,6 +2,8 @@
 #define WAYSTONE_SETUP_MODEL_H
 #include <cstdio>
 #include <string>
+#include <vector>
+#include "keymap.h"
 
 // Setup / unlock wizard text shared by the Switch and 3DS shells (plain ASCII: 3DS system font).
 
@@ -134,6 +136,35 @@ inline std::string vault_secret_hint(bool recovery, const char* toggle_glyph) {
 
 inline const char* vault_secret_required(bool recovery) {
     return recovery ? "Recovery key is required" : "Passphrase is required";
+}
+
+inline const char* forget_server_title() { return "Forget this server?"; }
+inline const char* forget_server_detail() {
+    return "Deletes the local login (keys, session, recovery file). "
+           "Saves on the server are not touched.";
+}
+inline const char* forget_server_confirm_label() { return "Forget"; }
+
+// Setup pre-filled from config.json (e.g. after Forget server): logs presence only, never the URL.
+inline void setup_log_prefill(const std::string& server_url, const std::string& username) {
+    printf("[ui] setup: prefill server=%s user=%s\n", server_url.empty() ? "none" : "set",
+           username.empty() ? "none" : "set");
+}
+
+// Pre-login footer extras: Unlock always offers Forget server + Updates; Setup offers Updates on
+// its welcome step only (the step that also accepts the CheckUpdates button).
+inline std::vector<WsAction> unlock_extra_actions() {
+    return {WsAction::ForgetServer, WsAction::CheckUpdates};
+}
+inline bool setup_step_offers_updates(size_t step) { return step == 0; }
+inline std::vector<WsAction> setup_extra_actions(size_t step) {
+    return setup_step_offers_updates(step) ? std::vector<WsAction>{WsAction::CheckUpdates}
+                                           : std::vector<WsAction>();
+}
+
+inline const char* setup_welcome_title() { return "Welcome to Waystone"; }
+inline std::string setup_welcome_hint(const char* next_glyph) {
+    return std::string("Press ") + next_glyph + " to begin setup";
 }
 
 #endif

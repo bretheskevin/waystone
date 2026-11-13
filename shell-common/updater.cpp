@@ -259,3 +259,53 @@ std::string updater_install_message(int rc) {
     default:         return "SD write failed";
     }
 }
+
+UpdateCheckOutcome update_check_outcome(int rc, const char* latest, const char* current,
+                                        const char* asset_suffix) {
+    UpdateCheckOutcome o;
+    if (rc != UP_OK) {
+        o.kind = UpdateCheckOutcome::Failed;
+        o.status = updater_check_message(rc, asset_suffix);
+        printf("[update] check failed rc=%d\n", rc);
+        return o;
+    }
+    std::string ver = latest ? latest : "";
+    if (version_newer(ver.c_str(), current)) {
+        o.kind = UpdateCheckOutcome::Available;
+        o.status = "Update available: v" + ver;
+        printf("[update] newer version available: v%s (current v%s)\n", ver.c_str(), current);
+    } else {
+        o.kind = UpdateCheckOutcome::UpToDate;
+        o.status = "Up to date (v" + ver + ")";
+        printf("[update] up to date (latest v%s, current v%s)\n", ver.c_str(), current);
+    }
+    return o;
+}
+
+static std::string progress_text(const char* verb, int pct) {
+    char buf[48];
+    snprintf(buf, sizeof buf, "%s... %d%%", verb, pct);
+    return buf;
+}
+
+const char* update_status_checking() { return "Checking for updates..."; }
+std::string update_status_downloading(int pct) { return progress_text("Downloading", pct); }
+std::string update_status_installing(int pct) { return progress_text("Installing", pct); }
+std::string update_status_updated(const char* ver) { return std::string("Updated to v") + ver; }
+std::string update_status_installed(const char* ver) {
+    return update_status_updated(ver) + " - restart to apply";
+}
+std::string update_status_restart_to_apply(const char* ver) {
+    return update_status_updated(ver) + ". Restart to apply.";
+}
+const char* update_status_restarting() { return "Restarting..."; }
+const char* update_status_cancelled() { return "Update cancelled"; }
+const char* update_status_postponed() { return "Update postponed"; }
+const char* update_offer_title() { return "Update available"; }
+std::string update_offer_detail(const char* ver) {
+    return std::string("Waystone ") + ver + " is ready to install.";
+}
+const char* update_restart_title() { return "Update installed"; }
+const char* update_restart_detail() { return "Restart Waystone now?"; }
+const char* update_restart_now_label() { return "Restart now"; }
+const char* update_restart_later_label() { return "Later"; }

@@ -2,6 +2,9 @@ package dev.waystone.app.vm
 
 import android.app.Application
 import dev.waystone.app.log.Log
+import dev.waystone.app.nav.NavEvent
+import dev.waystone.app.nav.Routes
+import dev.waystone.data.sync.runCatchingCancellable
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,7 +17,7 @@ data object UnlockReady
 class UnlockViewModel(
     application: Application,
     settings: SettingsProvider,
-    sessionVaultStore: SessionVaultStore,
+    private val sessionVaultStore: SessionVaultStore,
     davProvider: DavProvider,
     davFactory: DavFactory,
     private val session: SessionViewModel,
@@ -25,8 +28,8 @@ class UnlockViewModel(
     private val _uiState = MutableStateFlow<UiState<UnlockReady>>(UiState.Loading)
     val uiState: StateFlow<UiState<UnlockReady>> = _uiState.asStateFlow()
 
-    private val _navigateTo = MutableStateFlow<String?>(null)
-    val navigateTo: StateFlow<String?> = _navigateTo.asStateFlow()
+    private val _navigateTo = MutableStateFlow<NavEvent?>(null)
+    val navigateTo: StateFlow<NavEvent?> = _navigateTo.asStateFlow()
 
     val passphrase = MutableStateFlow("")
     val useRecoveryKey = MutableStateFlow(false)
@@ -44,7 +47,7 @@ class UnlockViewModel(
                 is UnlockResult.Unlocked -> {
                     passphrase.value = ""
                     session.attach(result.vault, result.dav, result.sync)
-                    _navigateTo.value = "dashboard"
+                    _navigateTo.value = NavEvent(Routes.DASHBOARD)
                     Log.i(TAG, "auto-unlock succeeded (${if (result.vault.isEncrypted()) "keystore MDK" else "plain server"})")
                 }
                 is UnlockResult.Form -> {
@@ -72,7 +75,7 @@ class UnlockViewModel(
                 is UnlockResult.Unlocked -> {
                     passphrase.value = ""
                     session.attach(result.vault, result.dav, result.sync)
-                    _navigateTo.value = "dashboard"
+                    _navigateTo.value = NavEvent(Routes.DASHBOARD)
                     Log.i(TAG, "unlock succeeded (${if (recovery) "recovery key" else "passphrase"})")
                 }
                 is UnlockResult.Failed -> {
@@ -80,6 +83,25 @@ class UnlockViewModel(
                     _uiState.value = UiState.Error(result.message)
                 }
                 is UnlockResult.Form -> Log.w(TAG, "unexpected Form result from submit; ignoring")
+            }
+        }
+    }
+
+    /** Drops this device's login but keeps Settings, so Setup opens pre-filled. Server data is untouched. */
+    fun forgetServer() {
+        viewModelScope.launch {
+            Log.i(TAG, "forget server requested")
+            _uiState.value = UiState.Loading
+            runCatchingCancellable {
+                forgetSession(sessionVaultStore, session::clear) { Log.i(TAG, it) }
+            }.onSuccess {
+                passphrase.value = ""
+                engine.zeroizeWebdavPassword()
+                Log.i(TAG, "forget server done, navigating to setup (back stack cleared)")
+                _navigateTo.value = NavEvent(Routes.SETUP, clearBackStack = true)
+            }.onFailure { e ->
+                Log.e(TAG, "forget server failed", e)
+                _uiState.value = UiState.Error(e.message ?: "Could not forget this server")
             }
         }
     }

@@ -12,6 +12,9 @@
 #   out/setup-plain-encrypt.png — same after Y: passphrase + confirm fields
 #   out/setup-join-plain.png    — SetupActivity vault step, unencrypted server (join)
 #   out/unlock-plain.png        — UnlockActivity on an unencrypted server (WebDAV password only)
+#   out/unlock-forget.png       — UnlockActivity after X: "Forget this server?" confirm dialog
+#   out/unlock-update.png       — UnlockActivity after Select: stubbed v9.9.9 install dialog
+#   out/setup-prefilled.png     — SetupActivity login step pre-filled from config (after forget)
 #   out/recovery.png       — RecoveryKeyActivity (full-screen recovery key)
 #   out/no-internet.png    — NoInternetActivity (no connection screen)
 #   demo.png               — borealis demo (regression check, optional)
@@ -160,7 +163,8 @@ capture "$WIZARD_OUT/creating-vault.png" "$PREVIEW_DIR" "$WIZARD_BIN" creating-v
 echo "=== Capturing wizard: unlock ==="
 capture "$WIZARD_OUT/unlock.png" "$PREVIEW_DIR" "$WIZARD_BIN" unlock
 
-for mode in setup-plain setup-plain-encrypt setup-join-plain unlock-plain; do
+for mode in setup-plain setup-plain-encrypt setup-join-plain unlock-plain \
+            unlock-forget unlock-update setup-prefilled; do
     echo "=== Capturing wizard: $mode ==="
     capture "$WIZARD_OUT/$mode.png" "$PREVIEW_DIR" "$WIZARD_BIN" "$mode"
 done

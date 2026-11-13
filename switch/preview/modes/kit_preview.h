@@ -5,8 +5,10 @@
 #include <cstdio>
 #include <functional>
 #include <string>
+#include <vector>
 #include "keymap_switch.h"
 #include "session.h"
+#include "setup_activity.h"
 #include "sync_controller.h"
 #include "kit/shell_frame.h"
 #include "kit/ws_nvg.h"
@@ -25,11 +27,40 @@ inline void preview_press(brls::ControllerButton b) {
     brls::Application::onControllerButtonPressed(b, false);
 }
 
+// Unencrypted-server keys.json fixture for UnlockActivity (plain login).
+inline const uint8_t* preview_plain_keys(size_t* len) {
+    static const char keys[] = "{\"encryption\":\"none\",\"version\":1}";
+    *len = sizeof(keys) - 1;
+    return reinterpret_cast<const uint8_t*>(keys);
+}
+
+// Leaked self-firing timer: presses `seq` once `delay_ms` has elapsed.
+inline void preview_press_after(int delay_ms, std::vector<brls::ControllerButton> seq) {
+    auto* timer = new brls::Timer();
+    timer->setEndCallback([seq](bool) {
+        for (brls::ControllerButton b : seq) preview_press(b);
+    });
+    timer->start(delay_ms);
+}
+
 inline void preview_seed_session(Session& session) {
     session.config.server_url = "https://dav.example.com";
     session.config.username   = "waystone";
     session.device_id         = "switch-7f3a91c2";
 }
+
+// SetupActivity opened on the WebDAV Login step; server + username come from the session config
+// (preview_seed_session), as after Forget server.
+class PreviewLoginSetupActivity : public SetupActivity {
+  public:
+    explicit PreviewLoginSetupActivity(Session* s) : SetupActivity(s) {}
+
+    // Call BEFORE pushActivity(): borealis calls onContentAvailable() synchronously inside it.
+    void preset_login(const char* password = "") {
+        values_[FIELD_PASSWORD] = password;
+        current_step_           = STEP_LOGIN;
+    }
+};
 
 // Stubbed controller (preview/stubs/sync_controller_stub.cpp): fixture titles, canned progress.
 inline SyncController* preview_sync_controller(const WaystoneShellConfig* cfg) {

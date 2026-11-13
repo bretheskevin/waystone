@@ -220,6 +220,8 @@ OBJS+=( $(cxx "$SHELL_COMMON/sync_summary.cpp"    sc_sync_summary) )
 OBJS+=( $(cxx "$SHELL_COMMON/rom_parse.cpp"       sc_rom_parse) )
 # read_keys_file is called by settings_pane.cpp (log out -> UnlockActivity).
 OBJS+=( $(cxx "$SHELL_COMMON/keys_file.cpp"       sc_keys_file) )
+# Update status/dialog text + check outcome (UpdateFlow); HTTP stubbed in stubs/updater_net_stub.cpp.
+OBJS+=( $(cxx "$SHELL_COMMON/updater.cpp"         sc_updater) )
 
 # ---------------------------------------------------------------------------
 # Preview stubs (replace Switch-only or complex real implementations)

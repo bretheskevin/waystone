@@ -1,10 +1,9 @@
 #pragma once
 #include <borealis.hpp>
-#include <memory>
 #include <string>
 #include "deferred_refresh_pump.h"
 #include "session.h"
-#include "update_controller.h"
+#include "update_flow.h"
 
 class MenuList;
 class MenuRow;
@@ -26,22 +25,14 @@ class SettingsPane : public brls::Box {
     void edit_password();
     void toggle_policy();
     void toggle_backup();
-    void check_updates();
     void save_settings();
     // Workers borrow the vault (History also reads the Session's WebDAV strings): no logout
     // or credential edit while one runs. Logs + toasts the refusal.
     bool refuse_while_busy(const char* what) const;
     void request_logout();
     void do_logout();
-    void poll_update();
-    void offer_install();
-    void offer_restart();
-    void start_install();
-    void restart_now();
-    void set_update_status(const std::string& text);
 
-    Session*          session_;
-    UpdateController* updater_ = nullptr;
+    Session* session_;
 
     MenuList* list_         = nullptr;
     MenuRow*  server_row_   = nullptr;
@@ -52,14 +43,9 @@ class SettingsPane : public brls::Box {
     MenuRow*  device_row_   = nullptr;
     MenuRow*  update_row_   = nullptr;
 
-    bool        logout_pending_  = false;
-    bool        install_started_ = false;
-    bool        dialog_open_     = false;
-    UpdatePhase last_phase_      = UpdatePhase::Idle;
-    std::string pending_ver_;
+    bool logout_pending_ = false;
 
-    // Dialog callbacks run after the dialog is deleted; they bail out once the pane is gone.
-    std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
+    UpdateFlow update_;  // status sink = update_row_ detail
 
-    DeferredRefreshPump pump_{[this] { do_logout(); }, [this] { poll_update(); }};
+    DeferredRefreshPump pump_{[this] { do_logout(); }, [this] { update_.tick(); }};
 };

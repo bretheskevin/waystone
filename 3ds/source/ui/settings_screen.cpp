@@ -9,7 +9,6 @@
 #include "saves.h"
 #include "keys_file.h"
 #include "version.h"
-#include "updater.h"
 #include "keymap_3ds.h"
 #include <cstdio>
 #include <cstdlib>
@@ -21,81 +20,12 @@ extern "C" {
 
 SettingsScreen::SettingsScreen(Session* session)
     : session_(session),
-      worker_(new UpdateWorker()),
-      cursor_(0),
-      phase_(UpdatePhase::Idle),
-      last_phase_(UpdatePhase::Idle),
-      confirm_update_(false),
-      update_cancelled_(false),
-      install_started_(false),
-      restart_prompt_(false) {
+      cursor_(0) {
     for (size_t i = 0; i < NUM_ROWS; i++) row_rects_[i] = Rect();
 }
 
-SettingsScreen::~SettingsScreen() {
-    // Only join if we still own the worker (not detached by handle_input B).
-    if (worker_) { worker_->request_cancel(); worker_->join(); delete worker_; }
-}
-
 void SettingsScreen::poll() {
-    if (!worker_) return;
-    phase_ = worker_->phase();
-
-    // Live progress while phases run.
-    if (phase_ == UpdatePhase::Checking) {
-        status_text_ = "Checking for updates...";
-    } else if (phase_ == UpdatePhase::Downloading || phase_ == UpdatePhase::Installing) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%s... %d%%",
-                 phase_ == UpdatePhase::Installing ? "Installing" : "Downloading",
-                 worker_->progress_percent());
-        status_text_ = buf;
-    }
-    if (phase_ == UpdatePhase::Installing && last_phase_ != UpdatePhase::Installing) {
-        printf("[update] ui: download done, installing CIA\n");
-    }
-
-    // ---- Finished a check ----
-    if (last_phase_ == UpdatePhase::Checking &&
-        (phase_ == UpdatePhase::Done || phase_ == UpdatePhase::Error)) {
-        int rc = worker_->check_rc();
-        if (rc == UP_OK) {
-            std::string ver = worker_->latest_version();
-            if (version_newer(ver.c_str(), WS_APP_VERSION)) {
-                pending_ver_ = ver;
-                pending_url_ = worker_->asset_url();
-                confirm_update_ = true;
-                status_text_ = "Update available: v" + ver;
-                printf("[update] newer version available: v%s (%s)\n",
-                       ver.c_str(), worker_->asset_suffix());
-            } else {
-                status_text_ = "Up to date (v" + ver + ")";
-            }
-        } else {
-            status_text_ = updater_check_message(rc, worker_->asset_suffix());
-            printf("[update] check failed rc=%d\n", rc);
-        }
-    }
-
-    // ---- Finished an install ----
-    if (install_started_ &&
-        (last_phase_ == UpdatePhase::Downloading || last_phase_ == UpdatePhase::Installing) &&
-        (phase_ == UpdatePhase::Done || phase_ == UpdatePhase::Error)) {
-        int rc = worker_->install_rc();
-        if (rc == UP_OK && worker_->cia_mode()) {
-            status_text_ = "Updated to v" + pending_ver_;
-            restart_prompt_ = true;
-            printf("[update] cia install succeeded -> restart prompt\n");
-        } else if (rc == UP_OK) {
-            status_text_ = "Updated to v" + pending_ver_ + ". Restart to apply.";
-            printf("[update] install succeeded\n");
-        } else {
-            status_text_ = updater_install_message(rc);
-            printf("[update] install failed rc=%d\n", rc);
-        }
-    }
-
-    last_phase_ = phase_;
+    if (update_.poll()) status_text_ = update_.status();
 }
 
 void SettingsScreen::draw_top(C3D_RenderTarget* target) {
@@ -106,13 +36,7 @@ void SettingsScreen::draw_top(C3D_RenderTarget* target) {
     draw_text_centered(buf, 0, 10.0f, 0.5f, TEXT_SM, CLR_NEUTRAL_400, header, (float)SCREEN_TOP_W);
     draw_text_centered(buf, 0, 30.0f, 0.5f, TEXT_XL, CLR_TEXT, "Settings", (float)SCREEN_TOP_W);
     if (!status_text_.empty()) {
-        u32 clr = CLR_NEUTRAL_400;
-        if (phase_ == UpdatePhase::Error) clr = CLR_ERROR;
-        else if (phase_ == UpdatePhase::Done && !confirm_update_ && !update_cancelled_)
-            clr = CLR_SUCCESS;
-        else if (phase_ == UpdatePhase::Checking ||
-                 phase_ == UpdatePhase::Downloading ||
-                 phase_ == UpdatePhase::Installing) clr = CLR_SYNC;
+        u32 clr = update_.status_color();
         draw_text_centered(buf, 0, 80.0f, 0.5f, TEXT_BASE, clr, status_text_.c_str(), (float)SCREEN_TOP_W);
     }
 }
@@ -128,28 +52,7 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
     // Cleared each frame: while a banner replaces the row list there is nothing to tap.
     for (size_t i = 0; i < NUM_ROWS; i++) row_rects_[i] = Rect();
 
-    // ---- CIA installed: restart now or later ----
-    if (restart_prompt_) {
-        char line[128];
-        snprintf(line, sizeof(line), "v%s installed", pending_ver_.c_str());
-        std::string restart_hint = ws_hint(WsAction::Confirm, "Restart now") +
-                                   ws_hint_style().item_sep +
-                                   ws_hint(WsAction::Cancel, "Later");
-        draw_confirm_banner(buf, y, 150.0f, line, restart_hint.c_str(), 0, 56.0f);
-        draw_footer_hint(buf, restart_hint.c_str());
-        return;
-    }
-
-    // ---- Confirm banner replaces the row list while deciding ----
-    if (confirm_update_) {
-        char line[128];
-        snprintf(line, sizeof(line), "v%s available", pending_ver_.c_str());
-        static const WsAction update_acts[] = { WsAction::Update, WsAction::Cancel };
-        std::string update_hint = ws_hint_bar(update_acts);
-        draw_confirm_banner(buf, y, 150.0f, line, update_hint.c_str(), 0, 56.0f);
-        draw_footer_hint(buf, update_hint.c_str());
-        return;
-    }
+    if (update_.draw_banner(buf)) return;
 
     const char* policy_str = (session_->config.conflict_policy == WsConflictPolicy::Prompt)
         ? "Prompt" : "Newest Wins";
@@ -187,47 +90,13 @@ void SettingsScreen::draw_bottom(C3D_RenderTarget* target) {
 
 void SettingsScreen::handle_input(u32 kDown, touchPosition touch) {
 
-    // ---- Restart prompt (CIA installed) ----
-    if (restart_prompt_) {
-        if (kDown & ws_key(WsAction::Confirm)) {
-            printf("[update] restart now: aptSetChainloaderToSelf + quit (v%s)\n",
-                   pending_ver_.c_str());
-            restart_prompt_ = false;
-            status_text_ = "Restarting...";
-            aptSetChainloaderToSelf();
-            App::instance().quit();  // normal teardown; aptExit performs the relaunch
-        } else if (kDown & ws_key(WsAction::Cancel)) {
-            printf("[update] restart later (v%s installed)\n", pending_ver_.c_str());
-            restart_prompt_ = false;
-            status_text_ = "Updated to v" + pending_ver_ + " \xe2\x80\x94 restart to apply";
-        }
-        return;
-    }
-
-    // ---- Confirm mode (update now?) ----
-    if (confirm_update_) {
-        if (kDown & ws_key(WsAction::Update)) {
-            printf("[update] confirmed: installing v%s\n", pending_ver_.c_str());
-            confirm_update_ = false;
-            update_cancelled_ = false;
-            install_started_ = true;
-            status_text_ = "Downloading...";
-            worker_->start_install(pending_url_);
-            last_phase_ = UpdatePhase::Downloading;  // e.g. UP_NO_SELF lands before the next poll
-        } else if (kDown & ws_key(WsAction::Cancel)) {
-            printf("[update] update cancelled\n");
-            confirm_update_ = false;
-            update_cancelled_ = true;  // keep "Update cancelled" out of the success color
-            status_text_ = "Update cancelled";
-        }
-        return;
-    }
+    if (update_.handle_input(kDown)) return;
 
     if (kDown & KEY_DUP)   { cursor_ = (cursor_ == 0) ? NUM_ROWS - 1 : cursor_ - 1; }
     if (kDown & KEY_DDOWN) { cursor_ = (cursor_ + 1) % NUM_ROWS; }
     if (kDown & ws_key(WsAction::Back)) {
         printf("[ui] settings back\n");
-        reap_worker(worker_);  // instant pop: dtor never joins a live worker
+        update_.release();  // instant pop: dtor never joins a live worker
         App::instance().pop_screen();
         return;
     }
@@ -283,22 +152,7 @@ void SettingsScreen::activate_row(size_t row) {
             break;
         }
         case 5: {
-            if (worker_->is_running()) {
-                printf("[update] check ignored -- update worker busy\n");
-                break;
-            }
-            printf("[update] check requested from settings (mode=%s)\n",
-                   worker_->cia_mode() ? "cia" : "3dsx");
-            install_started_ = false;
-            confirm_update_ = false;
-            restart_prompt_ = false;
-            update_cancelled_ = false;
-            pending_ver_.clear();
-            pending_url_.clear();
-            status_text_ = "Checking for updates...";
-            phase_ = UpdatePhase::Checking;
-            worker_->start_check();
-            last_phase_ = UpdatePhase::Checking;  // a check that fails before the next poll still reports
+            update_.start_check("settings");
             break;
         }
         case 6: {
@@ -316,11 +170,8 @@ void SettingsScreen::activate_row(size_t row) {
             printf("[ui] settings: log out\n");
             // set_screen/pop_screen below delete this screen; detach first so
             // ~SettingsScreen never joins a running worker on the render thread.
-            reap_worker(worker_);
-            session_store_clear();
-            if (session_->vault) { ws_vault_free(session_->vault); session_->vault = 0; }
-            zeroize_string(session_->dav.pass);
-            zeroize_string(session_->dav.user);
+            update_.release();
+            session_drop_login(session_->vault, session_->dav.user, session_->dav.pass);
             long klen = 0;
             uint8_t* kbuf = read_keys_file(WS_KEYS_PATH, &klen);
             if (kbuf && klen > 0) {

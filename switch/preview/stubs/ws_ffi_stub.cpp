@@ -114,3 +114,8 @@ WsBuf ws_mgba_normalize(const char*, const uint8_t*, uintptr_t)                 
 int32_t ws_mgba_to_native(const char*, const uint8_t*, uintptr_t, WsBuf*)       { return 0; }
 WsBuf ws_twilight_normalize(const uint8_t*, uintptr_t)                          { return {nullptr, 0}; }
 int32_t ws_twilight_to_native(const char*, const uint8_t*, uintptr_t, WsBuf*)   { return 0; }
+
+// Preview only: any version other than the running one counts as newer (the real compare is core's).
+bool ws_version_newer(const char* latest, const char* current) {
+    return latest && current && std::strcmp(latest, current) != 0;
+}

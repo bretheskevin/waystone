@@ -1,5 +1,6 @@
 #include "unlock_screen.h"
 #include "title_list_screen.h"
+#include "setup_screen.h"
 #include "loading_screen.h"
 #include "session_store.h"
 #include "app.h"
@@ -7,6 +8,11 @@
 #include "worker_thread.h"
 #include "vault_helpers.h"
 #include "ffi_err.h"
+#include "keys_file.h"
+#include "vault_remote.h"
+#include "setup_model.h"
+#include "widgets.h"
+#include "keymap_3ds.h"
 #include <cstdio>
 
 struct UnlockWorkerCtx {
@@ -24,7 +30,8 @@ UnlockScreen::UnlockScreen(Session* session, uint8_t* keys_data, size_t keys_len
       recovery_mode_(false),
       wizard_(make_steps(), NUM_VALUES),
       unlocking_(false), unlock_done_(false), unlock_thread_(NULL),
-      unlock_success_(false) {
+      unlock_success_(false), forget_confirm_(false) {
+    wizard_.set_extra_hint_actions(unlock_extra_actions());
     printf("[unlock] screen created (mode=%s)\n", keys_mode_name(plain_));
 }
 
@@ -129,11 +136,56 @@ void UnlockScreen::draw_top(C3D_RenderTarget* target) {
 }
 
 void UnlockScreen::draw_bottom(C3D_RenderTarget* target) {
-    wizard_.draw_bottom(target, App::instance().text_buf(), unlock_finish_label(plain_));
+    C2D_TextBuf buf = App::instance().text_buf();
+    if (!unlocking_ && update_.draw_banner(buf)) return;  // input is ignored while unlocking
+    if (forget_confirm_) {
+        std::string hint = ws_confirm_cancel_hint(forget_server_confirm_label());
+        draw_confirm_banner(buf, (float)SP_MD, 150.0f, forget_server_title(), forget_server_detail(),
+                            0, 64.0f);
+        draw_footer_hint(buf, hint.c_str());
+        return;
+    }
+    wizard_.draw_bottom(target, buf, unlock_finish_label(plain_));
+}
+
+void UnlockScreen::forget_server() {
+    printf("[ui] unlock: forget confirmed\n");
+    bool ok = vault_forget_local(WS_KEYS_PATH, ws_recovery_path(session_->device_id),
+                                 session_->vault, session_->dav.user, session_->dav.pass);
+    printf("[ui] unlock: local login removed %s (config kept)\n", ok ? "ok" : "with errors");
+    wizard_.zeroize_secrets();
+    update_.release();
+    Session* session = session_;
+    printf("[ui] unlock: forget done -> SetupScreen\n");
+    // set_screen deletes 'this' -- no member access after this point
+    App::instance().set_screen(new SetupScreen(session));
 }
 
 void UnlockScreen::handle_input(u32 kDown, touchPosition touch) {
     if (unlocking_) return;
+    if (update_.handle_wizard_input(kDown, &wizard_, "unlock", !forget_confirm_)) return;
+    if (forget_confirm_) {
+        if (kDown & ws_key(WsAction::Confirm)) {
+            forget_confirm_ = false;
+            forget_server();  // deletes this screen
+            return;
+        }
+        if (kDown & ws_key(WsAction::Cancel)) {
+            printf("[ui] unlock: forget cancelled\n");
+            forget_confirm_ = false;
+        }
+        return;
+    }
+    if (kDown & ws_key(WsAction::ForgetServer)) {
+        if (update_.busy()) {
+            printf("[ui] unlock: forget ignored: update in progress\n");
+            return;
+        }
+        printf("[ui] unlock: forget requested\n");
+        wizard_.clear_error();
+        forget_confirm_ = true;
+        return;
+    }
     if (!plain_ &&
         vault_secret_toggle(kDown, &recovery_mode_, &wizard_, FIELD_PASSPHRASE,
                             [this] { return make_steps(); }))
@@ -145,6 +197,7 @@ void UnlockScreen::handle_input(u32 kDown, touchPosition touch) {
 }
 
 void UnlockScreen::poll() {
+    update_.poll_into(&wizard_, unlocking_);
     if (!unlocking_ || !unlock_done_.load()) return;
 
     threadJoin(unlock_thread_, U64_MAX);
@@ -165,6 +218,7 @@ void UnlockScreen::poll() {
     // Persist the session for auto-unlock on next launch
     persist_session(session_->vault, session_->dav.pass);
     wizard_.zeroize_secrets();
+    update_.release();
 
     // set_screen deletes 'this' — no member access after this point
     // list_titles runs off the render thread inside LoadingScreen

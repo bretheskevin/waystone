@@ -7,7 +7,11 @@
 #include <cstdio>
 
 SetupActivity::SetupActivity(Session* session)
-    : WizardActivity(NUM_VALUES), session_(session) {}
+    : WizardActivity(NUM_VALUES), session_(session) {
+    values_[FIELD_SERVER]   = session->config.server_url;
+    values_[FIELD_USERNAME] = session->config.username;
+    setup_log_prefill(values_[FIELD_SERVER], values_[FIELD_USERNAME]);
+}
 
 SetupActivity::~SetupActivity() {
     poll_fn_ = nullptr;
@@ -21,7 +25,7 @@ SetupActivity::~SetupActivity() {
 
 std::vector<WizardStepDef> SetupActivity::get_steps() const {
     std::vector<WizardStepDef> steps = {
-        {"Welcome to Waystone", "Press (R) to begin setup", {}},
+        {setup_welcome_title(), setup_welcome_hint(ws_glyph(ws_button(WsAction::WizardNext))), {}},
         {"Server URL",          "",                          {
             {FIELD_SERVER, "Server URL", false, "not set",
              "your Waystone server, e.g. https://dav.example.com"},
@@ -106,7 +110,12 @@ bool SetupActivity::validate_step(size_t step) {
 
 void SetupActivity::on_finish() { start_setup(); }
 
+std::vector<WsAction> SetupActivity::extra_hint_actions() const {
+    return setup_extra_actions(current_step_);
+}
+
 void SetupActivity::register_extra_actions() {
+    register_update_check(&update_, "setup", [this] { return setup_step_offers_updates(current_step_) && !busy_; });
     register_recovery_toggle(&join_recovery_, FIELD_PASSPHRASE, [this] {
         return current_step_ == STEP_VAULT && mode_ == SetupVaultMode::Join && !busy_;
     });

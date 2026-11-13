@@ -3,13 +3,17 @@
 #include "keymap_switch.h"
 #include "session.h"
 #include "swkbd_util.h"
+#include "borealis_focus.h"
+#include "update_flow.h"
 #include <cstdio>
 
-static std::string build_hint_text(const std::string& next_label, bool show_back) {
+static std::string build_hint_text(const std::string& next_label, bool show_back,
+                                   const std::vector<WsAction>& extras) {
     const std::string sep = ws_hint_style().item_sep;
     std::string s = ws_hint(WsAction::WizardEdit) + sep
                   + ws_hint(WsAction::WizardNext, next_label.c_str());
     if (show_back) s += sep + ws_hint(WsAction::WizardPrev);
+    for (WsAction a : extras) s += sep + ws_hint(a);
     s += sep + ws_hint(WsAction::Quit);
     return s;
 }
@@ -40,7 +44,8 @@ brls::View* WizardActivity::createContentView() {
 
     // AppletFrame children after setContentView: [header(0), content(1), footer(2)].
     // Clear the debug-placeholder rectangles from the footer and add the full hint bar.
-    hint_label_ = set_footer_hint(frame, build_hint_text(ws_label(WsAction::WizardNext), false));
+    hint_label_ = set_footer_hint(frame, build_hint_text(ws_label(WsAction::WizardNext), false,
+                                                         extra_hint_actions()));
 
     return frame;
 }
@@ -69,6 +74,51 @@ void WizardActivity::onContentAvailable() {
 
 void WizardActivity::schedule_refresh() {
     pump_.schedule();
+}
+
+void WizardActivity::add_ticker(std::function<void()> fn) {
+    tickers_.push_back(std::move(fn));
+}
+
+std::function<void(const std::string&)> WizardActivity::status_sink() {
+    return [this](const std::string& s) {
+        status_ = s;
+        schedule_refresh();
+    };
+}
+
+void WizardActivity::register_update_check(UpdateFlow* flow, const char* origin,
+                                           std::function<bool()> allowed) {
+    add_ticker([flow] { flow->tick(); });
+    registerAction(ws_label(WsAction::CheckUpdates), ws_brls(WsAction::CheckUpdates),
+                   [this, flow, origin, allowed](brls::View*) {
+        if (!allowed()) {
+            printf("[ui] %s: updates ignored (step %zu)\n", origin, current_step_);
+            return true;
+        }
+        printf("[ui] %s: check for updates pressed\n", origin);
+        flow->start_check();
+        return true;
+    });
+}
+
+// A rebuild deletes the focused field view; while an overlay (or a pushed activity) owns the
+// focus, borealis keeps our old focus on its focusStack and restores it on pop -> UAF. Wait.
+void WizardActivity::pump_refresh() {
+    brls::View* cv = getContentView();
+    if (brls::Application::getCurrentFocus() && cv && !borealis_focus_within(cv)) {
+        pump_.schedule();
+        return;
+    }
+    refresh();
+}
+
+void WizardActivity::pump_tick() {
+    if (poll_fn_) { auto fn = poll_fn_; fn(); }
+    for (size_t i = 0; i < tickers_.size(); i++) {
+        auto fn = tickers_[i];
+        fn();
+    }
 }
 
 void WizardActivity::reload_steps() {
@@ -142,7 +192,7 @@ void WizardActivity::refresh() {
                        flabel, fcb, trans);
 
     if (hint_label_)
-        hint_label_->setText(build_hint_text(action, current_step_ > 0));
+        hint_label_->setText(build_hint_text(action, current_step_ > 0, extra_hint_actions()));
 
     if (auto* cv = getContentView()) {
         cv->updateActionHint(ws_brls(WsAction::WizardNext), action);

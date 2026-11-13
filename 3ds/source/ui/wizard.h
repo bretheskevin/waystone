@@ -2,6 +2,7 @@
 #include "screen.h"
 #include "widgets.h"
 #include "swkbd_util.h"
+#include "keymap.h"
 #include <string>
 #include <vector>
 
@@ -33,7 +34,11 @@ public:
     void go_back();
     void zeroize_secrets();
     void reload_steps(std::vector<WizardStepDef> new_steps);
+    // Footer actions appended to the hint bar; also makes step 0 draw a footer.
+    void set_extra_hint_actions(const std::vector<WsAction>& acts) { extra_acts_ = acts; }
 private:
+    std::vector<WsAction> extra_acts_;
+    std::string footer_hint(const WsAction* base, size_t n) const;
     std::vector<WizardStepDef> steps_;
     std::vector<std::string> values_;
     std::string error_; std::string status_;

@@ -43,6 +43,10 @@ typedef Vault WsVault;
 // vault stores a zero MDK placeholder + the password). false on failure.
 bool persist_session(WsVault* vault, const std::string& webdav_pass);
 
+// Log out / Forget server: deletes session.bin, frees the vault (nulls it) and wipes the WebDAV
+// user + password in place. Logs its own outcome.
+void session_drop_login(WsVault*& vault, std::string& dav_user, std::string& dav_pass);
+
 // Settings "WebDAV password" value: masked, never the secret itself.
 inline std::string webdav_pass_mask(const std::string& pass) {
     return pass.empty() ? "not set" : "\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2\xe2\x80\xa2";

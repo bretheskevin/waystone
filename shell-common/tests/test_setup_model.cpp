@@ -126,6 +126,36 @@ static void test_mode_after_probe_and_join() {
     printf("test_mode_after_probe_and_join PASSED\n");
 }
 
+static void test_forget_server_text() {
+    assert(strcmp(forget_server_title(), "Forget this server?") == 0);
+    assert(strcmp(forget_server_detail(),
+                  "Deletes the local login (keys, session, recovery file). "
+                  "Saves on the server are not touched.") == 0);
+    assert(strcmp(forget_server_confirm_label(), "Forget") == 0);
+    printf("test_forget_server_text PASSED\n");
+}
+
+static void test_setup_welcome_text() {
+    assert(strcmp(setup_welcome_title(), "Welcome to Waystone") == 0);
+    assert(setup_welcome_hint("(R)") == "Press (R) to begin setup");
+    assert(setup_welcome_hint("R:") == "Press R: to begin setup");
+    setup_log_prefill("https://user:pw@dav.example", "alice");
+    setup_log_prefill("", "");
+    printf("test_setup_welcome_text PASSED\n");
+}
+
+static void test_prelogin_extra_actions() {
+    std::vector<WsAction> unlock = unlock_extra_actions();
+    assert(unlock.size() == 2);
+    assert(unlock[0] == WsAction::ForgetServer && unlock[1] == WsAction::CheckUpdates);
+    assert(setup_step_offers_updates(0));
+    assert(!setup_step_offers_updates(1));
+    std::vector<WsAction> welcome = setup_extra_actions(0);
+    assert(welcome.size() == 1 && welcome[0] == WsAction::CheckUpdates);
+    assert(setup_extra_actions(3).empty());
+    printf("test_prelogin_extra_actions PASSED\n");
+}
+
 int main() {
     test_probe_error_without_status();
     test_probe_error_with_status();
@@ -138,6 +168,9 @@ int main() {
     test_shared_passphrase_text();
     test_unlock_text();
     test_mode_after_probe_and_join();
+    test_forget_server_text();
+    test_setup_welcome_text();
+    test_prelogin_extra_actions();
     printf("ALL setup_model TESTS PASSED\n");
     return 0;
 }

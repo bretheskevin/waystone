@@ -1,6 +1,7 @@
 package dev.waystone.app.vm
 
 import dev.waystone.app.log.Log
+import dev.waystone.data.config.Settings
 import dev.waystone.data.sync.runCatchingCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -21,6 +22,15 @@ sealed interface SetupResult {
     data object VaultExists : SetupResult
 
     data class Failed(val message: String) : SetupResult
+}
+
+/** Setup form values carried over from Settings (e.g. after "Forget this server"). */
+data class SetupPrefill(val serverUrl: String, val username: String) {
+    companion object {
+        val EMPTY = SetupPrefill("", "")
+
+        fun of(settings: Settings) = SetupPrefill(settings.serverUrl, settings.username.orEmpty())
+    }
 }
 
 /** Pure setup flow; a null passphrase creates (or joins) an unencrypted server. */

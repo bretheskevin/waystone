@@ -4,6 +4,7 @@
 //   g++ -std=c++11 -fno-exceptions -fno-rtti -Wall -Wextra \
 //     -I shell-common -I ffi/include \
 //     shell-common/tests/test_vault_remote.cpp shell-common/vault_remote.cpp \
+//     shell-common/session_store.cpp \
 //     shell-common/net.cpp shell-common/snapshot.cpp shell-common/file_tree.cpp \
 //     shell-common/keys_file.cpp shell-common/wsconfig.cpp shell-common/json.cpp \
 //     target/debug/libwaystone_ffi.a -liconv -lSystem -lc -lm -lcurl \
@@ -15,6 +16,7 @@
 #include <cstring>
 #include <map>
 #include <string>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace {
@@ -415,6 +417,60 @@ void test_setup_log_lines_take_both_outcomes() {
     printf("test_setup_log_lines_take_both_outcomes PASSED\n");
 }
 
+void write_text(const std::string& path, const char* text) {
+    FILE* f = fopen(path.c_str(), "wb");
+    assert(f);
+    fputs(text, f);
+    fclose(f);
+}
+
+void test_forget_local_removes_keys_and_recovery() {
+    char tmpl[] = "/private/tmp/ws_vault_forget_XXXXXX";
+    assert(mkdtemp(tmpl));
+    std::string root(tmpl);
+    std::string keys_path = root + "/keys.json";
+    std::string rec_path = root + "/recovery-dev.txt";
+    std::string cfg_path = root + "/config.json";
+    write_text(keys_path, "{\"k\":1}");
+    write_text(rec_path, "abcd");
+    write_text(cfg_path, "{}");
+
+    WsVault* vault = ws_vault_plain();
+    std::string user = "alice", pass = "pw";
+    assert(vault_forget_local(keys_path.c_str(), rec_path, vault, user, pass));
+    assert(!file_exists(keys_path));
+    assert(!file_exists(rec_path));
+    assert(file_exists(cfg_path));
+    assert(vault == nullptr);
+    assert(user.empty() && pass.empty());
+
+    assert(vault_forget_local(keys_path.c_str(), rec_path, vault, user, pass));
+    assert(vault_forget_local(keys_path.c_str(), "", vault, user, pass));
+
+    std::string cmd = "rm -rf '" + root + "'";
+    assert(system(cmd.c_str()) == 0);
+    printf("test_forget_local_removes_keys_and_recovery PASSED\n");
+}
+
+void test_forget_local_reports_remove_failure() {
+    char tmpl[] = "/private/tmp/ws_vault_forget_XXXXXX";
+    assert(mkdtemp(tmpl));
+    std::string root(tmpl);
+    std::string keys_dir = root + "/keys.json";
+    assert(mkdir(keys_dir.c_str(), 0700) == 0);
+    write_text(keys_dir + "/child", "x");
+
+    WsVault* vault = ws_vault_plain();
+    std::string user = "alice", pass = "pw";
+    assert(!vault_forget_local(keys_dir.c_str(), root + "/absent.txt", vault, user, pass));
+    assert(vault == nullptr);
+    assert(user.empty() && pass.empty());
+
+    std::string cmd = "rm -rf '" + root + "'";
+    assert(system(cmd.c_str()) == 0);
+    printf("test_forget_local_reports_remove_failure PASSED\n");
+}
+
 } // namespace
 
 int main() {
@@ -437,6 +493,8 @@ int main() {
     test_publish_local_plain_marker_matches();
     test_setup_log_lines_take_both_outcomes();
     test_open_local_by_mode();
+    test_forget_local_removes_keys_and_recovery();
+    test_forget_local_reports_remove_failure();
     printf("ALL vault_remote TESTS PASSED\n");
     return 0;
 }
